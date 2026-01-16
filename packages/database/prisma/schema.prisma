@@ -212,10 +212,12 @@ model Booking {
   pro     ProProfile  @relation(fields: [proId], references: [userId])
 
   // Relations
-  slotLock  SlotLock?
-  events    BookingEvent[]
-  reports   Report[]
-  review    Review?
+  slotLock               SlotLock?
+  events                 BookingEvent[]
+  reports                Report[]
+  review                 Review?
+  availabilityExceptions AvailabilityException[]
+  penaltyLogs            PenaltyLog[]
 
   @@index([clientId, cityId, categoryId, timeSlot])
   @@index([proId, timeSlot])
