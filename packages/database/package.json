@@ -8,12 +8,23 @@
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "studio": "prisma studio",
-    "validate": "prisma validate"
+    "validate": "prisma validate",
+    "seed": "tsx prisma/seed.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^5.0.0"
+    "@prisma/client": "^5.0.0",
+    "bcryptjs": "^2.4.3",
+    "pg": "^8.17.1"
   },
   "devDependencies": {
-    "prisma": "^5.0.0"
+    "@types/bcryptjs": "^3.0.0",
+    "@types/node": "^20.19.30",
+    "@types/pg": "^8.16.0",
+    "bcryptjs": "^3.0.3",
+    "prisma": "^5.0.0",
+    "tsx": "^4.21.0"
   }
 }
