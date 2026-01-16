@@ -90,6 +90,28 @@ enum Platform {
   WEB
 }
 
+model City {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  slug      String   @unique
+  createdAt DateTime @default(now())
+
+  proProfiles ProProfile[]
+  bookings    Booking[]
+  boosts      ProBoost[]
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  slug      String   @unique
+  createdAt DateTime @default(now())
+
+  proServices ProService[]
+  bookings    Booking[]
+  boosts      ProBoost[]
+}
+
 model User {
   id        String      @id @default(cuid())
   role      Role
@@ -128,6 +150,7 @@ model ProProfile {
 
   // MVP: PRO choisit UNE ville
   cityId  String
+  city    City    @relation(fields: [cityId], references: [id])
 
   // WhatsApp-first
   whatsapp String
@@ -166,6 +189,7 @@ model ProService {
   id          String   @id @default(cuid())
   proUserId   String
   categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
   isActive    Boolean  @default(true)
 
   // Affichage prix (fourchette ou fixe) — info profil, le prix final est négocié sur WhatsApp
@@ -189,7 +213,9 @@ model Booking {
   timeSlot    DateTime
 
   cityId      String
+  city        City     @relation(fields: [cityId], references: [id])
   categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
 
   clientId    String
   proId       String
@@ -410,7 +436,9 @@ model ProBoost {
 
   // ciblage
   cityId      String
+  city        City     @relation(fields: [cityId], references: [id])
   categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
 
   status  BoostStatus  @default(ACTIVE)
 
