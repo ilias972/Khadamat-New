@@ -1,0 +1,23 @@
+{
+  "name": "@khadamat/mobile",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "dev": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "build": "expo export",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "expo": "^50.0.0",
+    "react": "^18.0.0",
+    "react-native": "^0.73.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}
