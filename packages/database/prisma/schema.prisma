@@ -217,6 +217,9 @@ model Booking {
   reports   Report[]
   review    Review?
 
+  availabilityExceptions AvailabilityException[]
+  penaltyLogs            PenaltyLog[]
+
   @@index([clientId, cityId, categoryId, timeSlot])
   @@index([proId, timeSlot])
 }
