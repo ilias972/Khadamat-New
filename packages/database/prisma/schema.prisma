@@ -216,11 +216,10 @@ model Booking {
   events                 BookingEvent[]
   reports                Report[]
   review                 Review?
-  availabilityExceptions AvailabilityException[]
-  penaltyLogs            PenaltyLog[]
 
   availabilityExceptions AvailabilityException[]
   penaltyLogs            PenaltyLog[]
+
 
   @@index([clientId, cityId, categoryId, timeSlot])
   @@index([proId, timeSlot])
