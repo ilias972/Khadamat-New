@@ -9,16 +9,25 @@
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\""
   },
   "dependencies": {
+    "@khadamat/contracts": "workspace:*",
+    "@khadamat/database": "workspace:*",
     "@nestjs/common": "^10.0.0",
+    "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
+    "@nestjs/swagger": "^7.4.2",
+    "@prisma/client": "5.22.0",
+    "nestjs-zod": "^5.1.1",
+    "pg": "^8.17.1",
     "reflect-metadata": "^0.1.13",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
     "@nestjs/schematics": "^10.0.0",
     "@types/node": "^20.0.0",
+    "@types/pg": "^8.16.0",
     "typescript": "^5.0.0"
   }
 }
