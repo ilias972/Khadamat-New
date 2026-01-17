@@ -25,30 +25,37 @@ export class CatalogService {
     const { cityId, categoryId } = filters;
     this.logger.log(`🔍 Recherche Pro avec filtres: City=${cityId}, Cat=${categoryId}`);
 
-    const whereClause: any = {
-      role: 'PRO',
-      status: 'ACTIVE',
-      proProfile: { isNot: null },
+    // Construction dynamique des critères de filtrage
+    const proProfileFilter: any = {
+      isNot: null, // Le profil doit exister
     };
 
-    if (cityId) whereClause.proProfile.cityId = cityId;
+    if (cityId) {
+      proProfileFilter.cityId = cityId;
+    }
 
     if (categoryId) {
-      // TENTATIVE DE FIX : J'utilise 'proServices' ici car c'est souvent le nom par défaut dans Prisma
-      // Si ça recrashe, remplace 'proServices' par 'services' ci-dessous
-      whereClause.proProfile.services = {
+      // NOTE IMPORTANTE: Vérifie si ta relation s'appelle 'services' ou 'proServices' dans schema.prisma
+      // D'après tes logs, 'services' semble passer, sinon mets 'proServices'
+      proProfileFilter.services = {
         some: { categoryId: categoryId },
       };
     }
 
     try {
       const pros = await this.prisma.user.findMany({
-        where: whereClause,
+        where: {
+          role: 'PRO',
+          status: 'ACTIVE',
+          proProfile: {
+            // CORRECTION PRISMA : On utilise 'is' pour filtrer à l'intérieur de la relation 1-1
+            is: proProfileFilter
+          },
+        },
         include: {
           proProfile: {
             include: {
               city: true,
-              // Ici aussi, vérifie ton schema.prisma : est-ce 'services' ou 'proServices' ?
               services: { include: { category: true } },
             },
           },
@@ -89,24 +96,18 @@ export class CatalogService {
     const lastNameInitial = user.lastName ? `${user.lastName.charAt(0)}.` : '';
     const displayName = `${user.firstName} ${lastNameInitial}`.trim();
 
-    // LOG POUR DEBUGGER LE PRIX
-    // Regarde ce qui s'affiche dans ton terminal API !
-    if (profile.services && profile.services.length > 0) {
-      this.logger.debug(`💰 Service data pour ${displayName}: ${JSON.stringify(profile.services[0])}`);
-    }
-
     const servicesFormatted = profile.services.map((s: any) => {
       let priceText = 'Prix sur devis';
       
-      // On teste les valeurs en étant souple
-      if (s.pricingType === 'FIXED' && s.price) {
-        priceText = `${s.price} MAD`;
+      // CORRECTION PRIX : On utilise les bons noms de colonnes (minPriceMad, fixedPriceMad)
+      if (s.pricingType === 'FIXED' && s.fixedPriceMad) {
+        priceText = `${s.fixedPriceMad} MAD`;
       } 
       else if (s.pricingType === 'RANGE') {
-        if (s.minPrice && s.maxPrice) {
-          priceText = `De ${s.minPrice} à ${s.maxPrice} MAD`;
-        } else if (s.minPrice) {
-          priceText = `À partir de ${s.minPrice} MAD`;
+        if (s.minPriceMad && s.maxPriceMad) {
+          priceText = `De ${s.minPriceMad} à ${s.maxPriceMad} MAD`;
+        } else if (s.minPriceMad) {
+          priceText = `À partir de ${s.minPriceMad} MAD`;
         }
       }
 
