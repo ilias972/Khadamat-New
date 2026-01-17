@@ -25,33 +25,42 @@ export class CatalogService {
     const { cityId, categoryId } = filters;
     this.logger.log(`🔍 Recherche Pro avec filtres: City=${cityId}, Cat=${categoryId}`);
 
-    // Construction dynamique des critères de filtrage
-    const proProfileFilter: any = {
-      isNot: null, // Le profil doit exister
-    };
+    // 1. On prépare les conditions de filtrage sur le profil
+    const profileConditions: any = {};
 
     if (cityId) {
-      proProfileFilter.cityId = cityId;
+      profileConditions.cityId = cityId;
     }
 
     if (categoryId) {
-      // NOTE IMPORTANTE: Vérifie si ta relation s'appelle 'services' ou 'proServices' dans schema.prisma
-      // D'après tes logs, 'services' semble passer, sinon mets 'proServices'
-      proProfileFilter.services = {
+      // NOTE: D'après tes logs, la relation s'appelle bien 'services'
+      profileConditions.services = {
         some: { categoryId: categoryId },
+      };
+    }
+
+    // 2. On construit la requête principale
+    const whereClause: any = {
+      role: 'PRO',
+      status: 'ACTIVE',
+    };
+
+    // LOGIQUE DE FILTRAGE ROBUSTE :
+    // - Si on a des critères (Ville/Cat), on utilise 'is' pour filtrer le profil.
+    // - Sinon, on utilise 'isNot: null' juste pour s'assurer que le pro a un profil.
+    if (Object.keys(profileConditions).length > 0) {
+      whereClause.proProfile = {
+        is: profileConditions
+      };
+    } else {
+      whereClause.proProfile = {
+        isNot: null
       };
     }
 
     try {
       const pros = await this.prisma.user.findMany({
-        where: {
-          role: 'PRO',
-          status: 'ACTIVE',
-          proProfile: {
-            // CORRECTION PRISMA : On utilise 'is' pour filtrer à l'intérieur de la relation 1-1
-            is: proProfileFilter
-          },
-        },
+        where: whereClause,
         include: {
           proProfile: {
             include: {
@@ -96,10 +105,14 @@ export class CatalogService {
     const lastNameInitial = user.lastName ? `${user.lastName.charAt(0)}.` : '';
     const displayName = `${user.firstName} ${lastNameInitial}`.trim();
 
+    // Debug des prix si besoin
+    if (profile.services && profile.services.length > 0) {
+       // this.logger.debug(`Price data: ${JSON.stringify(profile.services[0])}`);
+    }
+
     const servicesFormatted = profile.services.map((s: any) => {
       let priceText = 'Prix sur devis';
       
-      // CORRECTION PRIX : On utilise les bons noms de colonnes (minPriceMad, fixedPriceMad)
       if (s.pricingType === 'FIXED' && s.fixedPriceMad) {
         priceText = `${s.fixedPriceMad} MAD`;
       } 
