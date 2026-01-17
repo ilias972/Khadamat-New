@@ -7,244 +7,150 @@ import type {
   PublicProProfile,
 } from '@khadamat/contracts';
 
-/**
- * CatalogService
- *
- * Service PUBLIC pour la découverte du marketplace.
- *
- * ⚠️ PRIVACY SHIELD ACTIF ⚠️
- * Ce service ne doit JAMAIS exposer :
- * - email, phone, whatsapp, password
- */
 @Injectable()
 export class CatalogService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) {}
 
-  /**
-   * GET /api/public/cities
-   * Renvoie toutes les villes disponibles
-   */
+  // 1. Récupérer les villes
   async getCities(): Promise<PublicCity[]> {
-    const cities = await this.prisma.query(
-      'SELECT id, name, slug FROM "City" ORDER BY name ASC',
-    );
-    return cities.rows;
+    const cities = await this.prisma.city.findMany({
+      orderBy: { name: 'asc' },
+    });
+    // On retourne directement car l'objet City de la DB est public (id, name, slug)
+    return cities;
   }
 
-  /**
-   * GET /api/public/categories
-   * Renvoie toutes les catégories de services
-   */
+  // 2. Récupérer les catégories
   async getCategories(): Promise<PublicCategory[]> {
-    const categories = await this.prisma.query(
-      'SELECT id, name, slug FROM "Category" ORDER BY name ASC',
-    );
-    return categories.rows;
+    const categories = await this.prisma.category.findMany({
+      orderBy: { name: 'asc' },
+    });
+    return categories;
   }
 
-  /**
-   * GET /api/public/pros
-   * Liste des Pros actifs avec filtres optionnels
-   *
-   * @param cityId - Filtrer par ville (optionnel)
-   * @param categoryId - Filtrer par catégorie de service (optionnel)
-   */
-  async getPros(
-    cityId?: string,
-    categoryId?: string,
-  ): Promise<PublicProCard[]> {
-    // Construction de la requête SQL avec filtres dynamiques
-    let query = `
-      SELECT DISTINCT
-        u.id,
-        u."firstName",
-        u."lastName",
-        u."createdAt",
-        c.name as city_name,
-        pp."kycStatus",
-        pp."cityId"
-      FROM "User" u
-      INNER JOIN "ProProfile" pp ON pp."userId" = u.id
-      INNER JOIN "City" c ON c.id = pp."cityId"
-      WHERE u.role = 'PRO' AND u.status = 'ACTIVE'
-    `;
+  // 3. Récupérer la liste des Pros (avec Filtres & Privacy)
+  async getPros(filters: { cityId?: string; categoryId?: string }): Promise<PublicProCard[]> {
+    const { cityId, categoryId } = filters;
 
-    const params: string[] = [];
-    let paramIndex = 1;
+    // Construction de la requête dynamique
+    const whereClause: any = {
+      role: 'PRO',
+      status: 'ACTIVE', // Filtre de sécurité
+      proProfile: {
+        isNot: null, // Le profil doit exister
+      },
+    };
 
-    // Filtre par ville
     if (cityId) {
-      query += ` AND pp."cityId" = $${paramIndex}`;
-      params.push(cityId);
-      paramIndex++;
+      whereClause.proProfile.cityId = cityId;
     }
 
-    // Filtre par catégorie (via ProService)
     if (categoryId) {
-      query += `
-        AND EXISTS (
-          SELECT 1 FROM "ProService" ps
-          WHERE ps."proUserId" = u.id
-          AND ps."categoryId" = $${paramIndex}
-          AND ps."isActive" = true
-        )
-      `;
-      params.push(categoryId);
-      paramIndex++;
+      // On vérifie si le pro a au moins un service dans cette catégorie
+      whereClause.proProfile.services = {
+        some: {
+          categoryId: categoryId,
+        },
+      };
     }
 
-    query += ' ORDER BY u."createdAt" DESC';
+    // Exécution de la requête Prisma
+    const pros = await this.prisma.user.findMany({
+      where: whereClause,
+      include: {
+        proProfile: {
+          include: {
+            city: true,
+            services: {
+              include: {
+                category: true, // Pour avoir le nom du service (Plomberie)
+              },
+            },
+          },
+        },
+      },
+    });
 
-    const result = await this.prisma.query(query, params);
-
-    // Pour chaque Pro, récupérer ses services
-    const prosWithServices = await Promise.all(
-      result.rows.map(async (row) => {
-        const servicesQuery = `
-          SELECT
-            cat.name as category_name,
-            ps."pricingType",
-            ps."minPriceMad",
-            ps."maxPriceMad",
-            ps."fixedPriceMad"
-          FROM "ProService" ps
-          INNER JOIN "Category" cat ON cat.id = ps."categoryId"
-          WHERE ps."proUserId" = $1 AND ps."isActive" = true
-        `;
-
-        const servicesResult = await this.prisma.query(servicesQuery, [
-          row.id,
-        ]);
-
-        const services = servicesResult.rows.map((service) => ({
-          name: service.category_name,
-          priceFormatted: this.formatPrice(
-            service.pricingType,
-            service.fixedPriceMad,
-            service.minPriceMad,
-            service.maxPriceMad,
-          ),
-        }));
-
-        // ⚠️ PRIVACY SHIELD: Masquer le nom de famille
-        const maskedLastName = this.maskLastName(row.lastName);
-
-        return {
-          id: row.id,
-          firstName: row.firstName,
-          lastName: maskedLastName,
-          city: row.city_name,
-          isVerified: row.kycStatus === 'APPROVED',
-          services,
-        };
-      }),
-    );
-
-    return prosWithServices;
+    // MAPPING & PRIVACY SHIELD 🛡️
+    // On transforme les données brutes en DTO public sécurisé
+    return pros.map((pro) => this.mapToPublicProCard(pro));
   }
 
-  /**
-   * GET /api/public/pros/:id
-   * Détail d'un Pro spécifique
-   */
-  async getProProfile(proId: string): Promise<PublicProProfile> {
-    // Vérifier que le Pro existe et est actif
-    const userQuery = `
-      SELECT
-        u.id,
-        u."firstName",
-        u."lastName",
-        u.role,
-        u.status,
-        c.name as city_name,
-        pp."kycStatus"
-      FROM "User" u
-      INNER JOIN "ProProfile" pp ON pp."userId" = u.id
-      INNER JOIN "City" c ON c.id = pp."cityId"
-      WHERE u.id = $1 AND u.role = 'PRO' AND u.status = 'ACTIVE'
-    `;
+  // 4. Récupérer le détail d'un Pro
+  async getProDetail(id: string): Promise<PublicProProfile> {
+    const pro = await this.prisma.user.findUnique({
+      where: {
+        id,
+        role: 'PRO',
+        status: 'ACTIVE',
+      },
+      include: {
+        proProfile: {
+          include: {
+            city: true,
+            services: {
+              include: {
+                category: true,
+              },
+            },
+          },
+        },
+      },
+    });
 
-    const userResult = await this.prisma.query(userQuery, [proId]);
-
-    if (userResult.rows.length === 0) {
-      throw new NotFoundException('Pro not found');
+    if (!pro || !pro.proProfile) {
+      throw new NotFoundException(`Pro introuvable ou inactif`);
     }
 
-    const user = userResult.rows[0];
-
-    // Récupérer tous les services du Pro
-    const servicesQuery = `
-      SELECT
-        cat.name as category_name,
-        ps."pricingType",
-        ps."minPriceMad",
-        ps."maxPriceMad",
-        ps."fixedPriceMad"
-      FROM "ProService" ps
-      INNER JOIN "Category" cat ON cat.id = ps."categoryId"
-      WHERE ps."proUserId" = $1 AND ps."isActive" = true
-    `;
-
-    const servicesResult = await this.prisma.query(servicesQuery, [
-      proId,
-    ]);
-
-    const services = servicesResult.rows.map((service) => ({
-      name: service.category_name,
-      priceFormatted: this.formatPrice(
-        service.pricingType,
-        service.fixedPriceMad,
-        service.minPriceMad,
-        service.maxPriceMad,
-      ),
-    }));
-
-    // ⚠️ PRIVACY SHIELD: Masquer le nom de famille
-    const maskedLastName = this.maskLastName(user.lastName);
-
+    // MAPPING & PRIVACY SHIELD 🛡️
+    const card = this.mapToPublicProCard(pro);
+    
     return {
-      id: user.id,
-      firstName: user.firstName,
-      lastName: maskedLastName,
-      city: user.city_name,
-      isVerified: user.kycStatus === 'APPROVED',
-      services,
-      bio: undefined, // Pas encore implémenté dans le schéma
+      ...card,
+      bio: pro.proProfile.bio || '',
+      // Ici on pourrait ajouter d'autres détails spécifiques au profil complet
     };
   }
 
-  /**
-   * PRIVACY HELPER: Masquer le nom de famille
-   * "Benjelloun" → "B."
-   * null/undefined → ""
-   */
-  private maskLastName(lastName: string | null | undefined): string {
-    if (!lastName || lastName.length === 0) {
-      return '';
-    }
-    return `${lastName.charAt(0).toUpperCase()}.`;
-  }
+  // ===========================================================================
+  // PRIVATE HELPERS (PRIVACY CORE)
+  // ===========================================================================
 
-  /**
-   * BUSINESS HELPER: Formater le prix selon le type
-   * FIXED: "200 MAD"
-   * RANGE: "De 200 à 500 MAD"
-   * null: "Prix sur demande"
-   */
-  private formatPrice(
-    pricingType: string | null,
-    fixedPrice: number | null,
-    minPrice: number | null,
-    maxPrice: number | null,
-  ): string {
-    if (pricingType === 'FIXED' && fixedPrice) {
-      return `${fixedPrice} MAD`;
-    }
+  private mapToPublicProCard(user: any): PublicProCard {
+    const profile = user.proProfile;
 
-    if (pricingType === 'RANGE' && minPrice && maxPrice) {
-      return `De ${minPrice} à ${maxPrice} MAD`;
-    }
+    // 1. Masquage du nom (Ahmed Benani -> Ahmed B.)
+    const lastNameInitial = user.lastName ? `${user.lastName.charAt(0)}.` : '';
+    const displayName = `${user.firstName} ${lastNameInitial}`.trim();
 
-    return 'Prix sur demande';
+    // 2. Formatage des services
+    const servicesFormatted = profile.services.map((s: any) => {
+      let priceText = 'Prix sur devis';
+      
+      if (s.pricingType === 'FIXED' && s.price) {
+        priceText = `${s.price} MAD`;
+      } else if (s.pricingType === 'RANGE' && s.minPrice && s.maxPrice) {
+        priceText = `De ${s.minPrice} à ${s.maxPrice} MAD`;
+      } else if (s.pricingType === 'RANGE' && s.minPrice) {
+        priceText = `À partir de ${s.minPrice} MAD`;
+      }
+
+      // On utilise le nom de la catégorie comme nom de service
+      return {
+        name: s.category?.name || 'Service', 
+        priceFormatted: priceText,
+      };
+    });
+
+    // 3. Construction de l'objet final (SANS email, SANS phone, SANS whatsapp)
+    return {
+      id: user.id,
+      firstName: user.firstName, // On garde le prénom complet si besoin, ou on utilise displayName
+      lastName: lastNameInitial,
+      city: profile.city?.name || 'Maroc',
+      isVerified: profile.kycStatus === 'APPROVED',
+      services: servicesFormatted,
+      rating: 0, // Mock pour l'instant
+    };
   }
 }
