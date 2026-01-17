@@ -19,7 +19,6 @@
     "noFallthroughCasesInSwitch": false,
     "esModuleInterop": true,
     "moduleResolution": "node",
-    "resolveJsonModule": true,
-    "types": ["node", "jest", "bcryptjs", "passport-jwt"]
+    "resolveJsonModule": true
   }
 }
