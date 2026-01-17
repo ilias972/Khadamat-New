@@ -9,16 +9,6 @@ import { PrismaService } from '../database/prisma.service';
 import * as bcrypt from 'bcryptjs';
 import type { RegisterInput, LoginInput, PublicUser } from '@khadamat/contracts';
 
-/**
- * AuthService
- *
- * Gère l'authentification : inscription, login, validation JWT
- *
- * RÈGLES MÉTIER PHASE 7A :
- * - Un seul `phone` à l'inscription
- * - Si PRO : phone copié automatiquement vers ProProfile.whatsapp
- * - Login hybride : email OU phone
- */
 @Injectable()
 export class AuthService {
   constructor(
@@ -28,177 +18,165 @@ export class AuthService {
 
   /**
    * REGISTER
-   * Inscription d'un nouveau Client ou Pro
-   *
-   * RÈGLE MÉTIER :
-   * - Si role === 'PRO', créer ProProfile avec whatsapp = phone (copie auto)
+   * Inscription d'un nouvel utilisateur
    */
   async register(dto: RegisterInput) {
-    // 1. Vérifier unicité email
+    // 1. Vérifier si l'email existe déjà
     if (dto.email) {
-      const existingEmail = await this.prisma.query(
-        'SELECT id FROM "User" WHERE email = $1',
-        [dto.email],
-      );
-      if (existingEmail.rows.length > 0) {
-        throw new ConflictException('Cet email est déjà utilisé');
+      const existingEmail = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+      });
+      if (existingEmail) {
+        throw new ConflictException('Cet email est déjà utilisé.');
       }
     }
 
-    // 2. Vérifier unicité phone
-    const existingPhone = await this.prisma.query(
-      'SELECT id FROM "User" WHERE phone = $1',
-      [dto.phone],
-    );
-    if (existingPhone.rows.length > 0) {
-      throw new ConflictException('Ce numéro de téléphone est déjà utilisé');
+    // 2. Vérifier si le téléphone existe déjà
+    const existingPhone = await this.prisma.user.findUnique({
+      where: { phone: dto.phone },
+    });
+    if (existingPhone) {
+      throw new ConflictException('Ce numéro de téléphone est déjà utilisé.');
     }
 
-    // 3. Vérifier que cityId existe (si PRO)
+    // 3. Vérifier la ville si c'est un PRO
     if (dto.role === 'PRO') {
       if (!dto.cityId) {
-        throw new BadRequestException('La ville est obligatoire pour les Professionnels');
+        throw new BadRequestException('La ville est obligatoire pour un professionnel.');
       }
-
-      const cityExists = await this.prisma.query(
-        'SELECT id FROM "City" WHERE id = $1',
-        [dto.cityId],
-      );
-      if (cityExists.rows.length === 0) {
-        throw new BadRequestException('Ville invalide');
+      const cityExists = await this.prisma.city.findUnique({
+        where: { id: dto.cityId },
+      });
+      if (!cityExists) {
+        throw new BadRequestException('Ville invalide.');
       }
     }
 
-    // 4. Hash password
+    // 4. Hasher le mot de passe
     const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-    // 5. Transaction : Créer User + ProProfile si PRO
-    try {
-      // Créer le User
-      const userResult = await this.prisma.query(
-        `INSERT INTO "User" (id, role, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, NOW(), NOW())
-         RETURNING id, role, phone, email, "firstName", "lastName", status, "createdAt"`,
-        [dto.role, dto.phone, dto.email || null, hashedPassword, dto.firstName, dto.lastName],
-      );
-
-      const user = userResult.rows[0];
-
-      // Si PRO : créer ProProfile avec whatsapp = phone (COPIE AUTO)
-      if (dto.role === 'PRO' && dto.cityId) {
-        await this.prisma.query(
-          `INSERT INTO "ProProfile" ("userId", "cityId", whatsapp, "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, NOW(), NOW())`,
-          [user.id, dto.cityId, dto.phone], // ⚠️ phone copié vers whatsapp
-        );
-      }
-
-      // 6. Générer JWT
-      const accessToken = this.jwtService.sign({
-        sub: user.id,
-        email: user.email,
-        role: user.role,
+    // 5. Transaction : Créer User + (Optionnel) ProProfile
+    const user = await this.prisma.$transaction(async (tx) => {
+      // A. Créer le User
+      const newUser = await tx.user.create({
+        data: {
+          email: dto.email,
+          phone: dto.phone,
+          password: hashedPassword,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          role: dto.role,
+          status: 'ACTIVE',
+        },
       });
 
-      // 7. Retourner réponse
-      return {
-        accessToken,
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-          status: user.status,
-          createdAt: user.createdAt,
-        },
-      };
-    } catch (error) {
-      console.error('Registration error:', error);
-      throw new BadRequestException('Erreur lors de l\'inscription');
-    }
+      // B. Si PRO, créer le profil et COPIER le phone vers whatsapp
+      if (dto.role === 'PRO' && dto.cityId) {
+        await tx.proProfile.create({
+          data: {
+            userId: newUser.id,
+            cityId: dto.cityId,
+            whatsapp: dto.phone, // 👈 Copie automatique !
+            bio: '',
+            experienceYears: 0,
+            radiusKm: 10,
+            kycStatus: 'PENDING',
+          },
+        });
+      }
+
+      return newUser;
+    });
+
+    // 6. Générer le token directement (Auto-login)
+    return this.loginAfterRegister(user);
   }
 
   /**
    * LOGIN
-   * Connexion avec email OU phone + password
-   *
-   * RÈGLE MÉTIER : Login hybride
+   * Connexion avec Email OU Téléphone
    */
   async login(dto: LoginInput) {
-    // 1. Chercher user par email OU phone
-    const userResult = await this.prisma.query(
-      `SELECT id, role, phone, email, password, "firstName", "lastName", status, "createdAt"
-       FROM "User"
-       WHERE email = $1 OR phone = $1`,
-      [dto.login],
-    );
-
-    if (userResult.rows.length === 0) {
-      throw new UnauthorizedException('Identifiants invalides');
-    }
-
-    const user = userResult.rows[0];
-
-    // 2. Vérifier password
-    const isPasswordValid = await bcrypt.compare(dto.password, user.password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Identifiants invalides');
-    }
-
-    // 3. Vérifier statut utilisateur
-    if (user.status !== 'ACTIVE') {
-      throw new UnauthorizedException('Compte suspendu ou banni');
-    }
-
-    // 4. Générer JWT
-    const accessToken = this.jwtService.sign({
-      sub: user.id,
-      email: user.email,
-      role: user.role,
+    // 1. Chercher par Email OU Phone
+    // Prisma ne supporte pas nativement "OR" sur findUnique directement,
+    // on utilise findFirst avec OR.
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: dto.login },
+          { phone: dto.login },
+        ],
+      },
     });
 
-    // 5. Retourner réponse
+    // 2. Vérifier User et Password
+    if (!user || !user.password) {
+      throw new UnauthorizedException('Identifiants incorrects.');
+    }
+
+    const isPasswordValid = await bcrypt.compare(dto.password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Identifiants incorrects.');
+    }
+
+    // 3. Générer le Token
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    
+    // 4. Préparer l'objet User public
+    const publicUser: PublicUser = {
+      id: user.id,
+      email: user.email || '',
+      phone: user.phone,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role as 'CLIENT' | 'PRO' | 'ADMIN',
+    };
+
     return {
-      accessToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        status: user.status,
-        createdAt: user.createdAt,
-      },
+      accessToken: this.jwtService.sign(payload),
+      user: publicUser,
+    };
+  }
+
+  /**
+   * Helper interne pour connecter après inscription
+   */
+  private async loginAfterRegister(user: any) {
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    
+    const publicUser: PublicUser = {
+      id: user.id,
+      email: user.email || '',
+      phone: user.phone,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role as 'CLIENT' | 'PRO' | 'ADMIN',
+    };
+
+    return {
+      accessToken: this.jwtService.sign(payload),
+      user: publicUser,
     };
   }
 
   /**
    * VALIDATE USER
-   * Utilisé par JwtStrategy pour valider le token
+   * Utilisé par la stratégie JWT
    */
   async validateUser(userId: string): Promise<PublicUser | null> {
-    const userResult = await this.prisma.query(
-      `SELECT id, email, "firstName", "lastName", role, status, "createdAt"
-       FROM "User"
-       WHERE id = $1 AND status = 'ACTIVE'`,
-      [userId],
-    );
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
 
-    if (userResult.rows.length === 0) {
-      return null;
-    }
-
-    const user = userResult.rows[0];
+    if (!user) return null;
 
     return {
       id: user.id,
-      email: user.email,
+      email: user.email || '',
+      phone: user.phone,
       firstName: user.firstName,
       lastName: user.lastName,
-      role: user.role,
-      status: user.status,
-      createdAt: user.createdAt,
+      role: user.role as 'CLIENT' | 'PRO' | 'ADMIN',
     };
   }
 }
