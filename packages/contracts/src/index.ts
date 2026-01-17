@@ -5,3 +5,4 @@ export * from './enums';
 export * from './schemas/auth';
 export * from './schemas/booking';
 export * from './schemas/availability';
+export * from './schemas/public';
