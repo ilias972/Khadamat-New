@@ -98,6 +98,10 @@ export class AuthService {
    * Connexion avec Email OU Téléphone
    */
   async login(dto: LoginInput) {
+    if (!dto.login || typeof dto.login !== 'string') {
+      throw new UnauthorizedException('Identifiants invalides');
+    }
+
     const loginValue = dto.login.trim();
 
     // 1. Chercher par Email OU Phone
