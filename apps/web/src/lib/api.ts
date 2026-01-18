@@ -64,6 +64,88 @@ export async function postJSON<T = any>(
 }
 
 /**
+ * PATCH JSON
+ * Envoie une requête PATCH avec un body JSON
+ *
+ * @param endpoint - Endpoint relatif (ex: '/pro/profile')
+ * @param body - Corps de la requête
+ * @param token - Token JWT optionnel (pour routes protégées)
+ */
+export async function patchJSON<T = any>(
+  endpoint: string,
+  body: any,
+  token?: string,
+): Promise<T> {
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${baseUrl}${endpoint}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const message = data.message || `Erreur ${response.status}`;
+    throw new APIError(
+      Array.isArray(message) ? message.join(', ') : message,
+      response.status,
+      data,
+    );
+  }
+
+  return data;
+}
+
+/**
+ * PUT JSON
+ * Envoie une requête PUT avec un body JSON
+ *
+ * @param endpoint - Endpoint relatif (ex: '/pro/services')
+ * @param body - Corps de la requête
+ * @param token - Token JWT optionnel (pour routes protégées)
+ */
+export async function putJSON<T = any>(
+  endpoint: string,
+  body: any,
+  token?: string,
+): Promise<T> {
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${baseUrl}${endpoint}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const message = data.message || `Erreur ${response.status}`;
+    throw new APIError(
+      Array.isArray(message) ? message.join(', ') : message,
+      response.status,
+      data,
+    );
+  }
+
+  return data;
+}
+
+/**
  * GET JSON
  * Envoie une requête GET
  *
