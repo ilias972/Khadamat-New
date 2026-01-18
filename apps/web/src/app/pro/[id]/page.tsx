@@ -109,7 +109,7 @@ export default async function ProDetailPage({ params }: ProDetailPageProps) {
           </div>
 
           {/* Call to Action */}
-          <ProBookingCTA />
+          <ProBookingCTA proId={pro.id} services={pro.services} />
         </div>
       </main>
     </div>

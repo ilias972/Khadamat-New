@@ -112,10 +112,10 @@ export class CatalogService {
 
     const servicesFormatted = profile.services.map((s: any) => {
       let priceText = 'Prix sur devis';
-      
+
       if (s.pricingType === 'FIXED' && s.fixedPriceMad) {
         priceText = `${s.fixedPriceMad} MAD`;
-      } 
+      }
       else if (s.pricingType === 'RANGE') {
         if (s.minPriceMad && s.maxPriceMad) {
           priceText = `De ${s.minPriceMad} à ${s.maxPriceMad} MAD`;
@@ -127,6 +127,7 @@ export class CatalogService {
       return {
         name: s.category?.name || 'Service',
         priceFormatted: priceText,
+        categoryId: s.categoryId, // Ajout du categoryId pour le booking
       };
     });
 
