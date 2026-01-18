@@ -142,18 +142,7 @@ export class BookingService {
       throw new ForbiddenException('Seuls les clients peuvent créer des réservations');
     }
 
-    // 2. DOUBLE CHECK DISPONIBILITÉ
-    const availableSlots = await this.getAvailableSlots({
-      proId: dto.proId,
-      date: dto.date,
-      categoryId: dto.categoryId,
-    });
-
-    if (!availableSlots.includes(dto.time)) {
-      throw new ConflictException('Ce créneau n\'est plus disponible');
-    }
-
-    // 3. RÉCUPÉRATION CITYID
+    // 2. RÉCUPÉRATION CITYID
     // Le cityId vient du profil du Pro (source de vérité)
     const proProfile = await this.prisma.proProfile.findUnique({
       where: { userId: dto.proId },
@@ -164,17 +153,25 @@ export class BookingService {
       throw new NotFoundException('Professionnel non trouvé');
     }
 
-    // 4. CONSTRUCTION TIMESLOT
-    // Combine date (YYYY-MM-DD) + time (HH:MM) -> DateTime
-    const [hours, minutes] = dto.time.split(':').map(Number);
-    const timeSlot = new Date(dto.date);
-    timeSlot.setHours(hours, minutes, 0, 0);
+    // 3. CONSTRUCTION TIMEZONE-SAFE
+    // On crée une date locale explicite sans passer par UTC direct
+    const [year, month, day] = dto.date.split('-').map(Number);
+    const [hour, minute] = dto.time.split(':').map(Number);
+    const timeSlot = new Date(year, month - 1, day, hour, minute);
+
+    // 4. DOUBLE CHECK DISPONIBILITÉ
+    const availableSlots = await this.getAvailableSlots({
+      proId: dto.proId,
+      date: dto.date,
+      categoryId: dto.categoryId,
+    });
+
+    if (!availableSlots.includes(dto.time)) {
+      throw new ConflictException('Ce créneau n\'est plus disponible');
+    }
 
     // 5. CRÉATION BOOKING
     // expiresAt = timeSlot + 24 heures (PRD: expiration si pas de confirmation)
-    const expiresAt = new Date(timeSlot);
-    expiresAt.setHours(expiresAt.getHours() + 24);
-
     const booking = await this.prisma.booking.create({
       data: {
         clientId: clientUserId,
@@ -184,36 +181,17 @@ export class BookingService {
         timeSlot: timeSlot,
         status: 'PENDING',
         estimatedDuration: 'H1', // MVP: fixé à 1 heure
-        expiresAt: expiresAt,
+        expiresAt: new Date(timeSlot.getTime() + 24 * 60 * 60 * 1000), // Expire dans 24h
       },
-      include: {
-        category: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
+      select: {
+        id: true,
+        status: true,
+        timeSlot: true,
+        category: { select: { id: true, name: true } },
         pro: {
           select: {
-            userId: true,
-            city: {
-              select: {
-                id: true,
-                name: true,
-                slug: true,
-              },
-            },
-          },
-          include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                phone: true,
-              },
-            },
+            user: { select: { firstName: true, lastName: true } },
+            city: { select: { name: true } },
           },
         },
       },
