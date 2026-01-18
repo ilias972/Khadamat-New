@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/authStore';
-import { getJSON, APIError } from '@/lib/api';
+import { getJSON, patchJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
+import BookingStatusBadge from '@/components/BookingStatusBadge';
+import type { BookingDashboardItem } from '@khadamat/contracts';
 
 /**
  * Dashboard Overview Page
@@ -45,6 +47,9 @@ export default function DashboardOverviewPage() {
   const [dashboard, setDashboard] = useState<ProDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [bookings, setBookings] = useState<BookingDashboardItem[]>([]);
+  const [loadingBookings, setLoadingBookings] = useState(true);
+  const [updatingBooking, setUpdatingBooking] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -66,6 +71,47 @@ export default function DashboardOverviewPage() {
 
     fetchDashboard();
   }, [accessToken]);
+
+  // Fetch Bookings
+  useEffect(() => {
+    const fetchBookings = async () => {
+      if (!accessToken) return;
+
+      try {
+        setLoadingBookings(true);
+        const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+        setBookings(data);
+      } catch (err) {
+        console.error('Error fetching bookings:', err);
+      } finally {
+        setLoadingBookings(false);
+      }
+    };
+
+    fetchBookings();
+  }, [accessToken]);
+
+  // Update booking status
+  const handleUpdateStatus = async (bookingId: string, status: 'CONFIRMED' | 'DECLINED') => {
+    if (!accessToken) return;
+
+    try {
+      setUpdatingBooking(bookingId);
+      await patchJSON(`/bookings/${bookingId}/status`, { status }, accessToken);
+
+      // Refresh bookings list
+      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+      setBookings(data);
+    } catch (err) {
+      if (err instanceof APIError) {
+        alert(err.message);
+      } else {
+        alert('Erreur lors de la mise à jour');
+      }
+    } finally {
+      setUpdatingBooking(null);
+    }
+  };
 
   const kycStatusLabels: Record<string, { label: string; color: string }> = {
     NOT_SUBMITTED: { label: 'Non soumis', color: 'bg-gray-100 text-gray-800' },
@@ -211,6 +257,86 @@ export default function DashboardOverviewPage() {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Demandes de Rendez-vous */}
+          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6 mt-6">
+            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-6">
+              📅 Demandes de Rendez-vous
+            </h2>
+
+            {loadingBookings && (
+              <div className="text-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-2"></div>
+                <p className="text-zinc-600 dark:text-zinc-400 text-sm">
+                  Chargement...
+                </p>
+              </div>
+            )}
+
+            {!loadingBookings && bookings.length === 0 && (
+              <div className="text-center py-12">
+                <p className="text-zinc-600 dark:text-zinc-400">
+                  Aucune demande de rendez-vous.
+                </p>
+              </div>
+            )}
+
+            {!loadingBookings && bookings.length > 0 && (
+              <div className="space-y-4">
+                {bookings.map((booking) => (
+                  <div
+                    key={booking.id}
+                    className="flex items-center justify-between py-4 border-b border-zinc-200 dark:border-zinc-700 last:border-0"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <h3 className="font-semibold text-zinc-900 dark:text-zinc-50">
+                          {booking.category.name}
+                        </h3>
+                        <BookingStatusBadge status={booking.status} />
+                      </div>
+                      <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-1">
+                        📅 {new Date(booking.timeSlot).toLocaleDateString('fr-FR', {
+                          weekday: 'long',
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric',
+                        })} à {new Date(booking.timeSlot).toLocaleTimeString('fr-FR', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </p>
+                      {booking.client && (
+                        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                          👤 {booking.client.firstName} {booking.client.lastName} - {booking.client.phone}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Actions (visible uniquement si PENDING) */}
+                    {booking.status === 'PENDING' && (
+                      <div className="flex gap-2 ml-4">
+                        <button
+                          onClick={() => handleUpdateStatus(booking.id, 'CONFIRMED')}
+                          disabled={updatingBooking === booking.id}
+                          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        >
+                          ✅ Accepter
+                        </button>
+                        <button
+                          onClick={() => handleUpdateStatus(booking.id, 'DECLINED')}
+                          disabled={updatingBooking === booking.id}
+                          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        >
+                          ❌ Refuser
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

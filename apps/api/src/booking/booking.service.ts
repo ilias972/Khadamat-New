@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
-import type { GetSlotsInput, CreateBookingInput } from '@khadamat/contracts';
+import type { GetSlotsInput, CreateBookingInput, UpdateBookingStatusInput } from '@khadamat/contracts';
 
 /**
  * BookingService
@@ -198,5 +198,143 @@ export class BookingService {
     });
 
     return booking;
+  }
+
+  /**
+   * getMyBookings
+   *
+   * Récupère les réservations de l'utilisateur connecté.
+   * - CLIENT : bookings où clientId = userId
+   * - PRO : bookings où proId = userId
+   *
+   * @param userId - ID de l'utilisateur connecté
+   * @param userRole - Rôle de l'utilisateur (CLIENT ou PRO)
+   * @returns Array de bookings avec relations
+   */
+  async getMyBookings(userId: string, userRole: string) {
+    // Filtrage selon le rôle
+    const where = userRole === 'CLIENT'
+      ? { clientId: userId }
+      : { proId: userId };
+
+    const bookings = await this.prisma.booking.findMany({
+      where,
+      orderBy: { timeSlot: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        timeSlot: true,
+        estimatedDuration: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+        city: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+        // Pour le CLIENT: inclure infos du PRO
+        ...(userRole === 'CLIENT' && {
+          pro: {
+            select: {
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                  phone: true,
+                },
+              },
+              city: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        }),
+        // Pour le PRO: inclure infos du CLIENT
+        ...(userRole === 'PRO' && {
+          client: {
+            select: {
+              firstName: true,
+              lastName: true,
+              phone: true,
+            },
+          },
+        }),
+      },
+    });
+
+    return bookings;
+  }
+
+  /**
+   * updateBookingStatus
+   *
+   * Met à jour le statut d'une réservation (PRO uniquement).
+   *
+   * SÉCURITÉ :
+   * - Seul le PRO propriétaire peut modifier le statut
+   * - Seulement si status === PENDING
+   *
+   * @param bookingId - ID du booking à modifier
+   * @param userId - ID du PRO connecté
+   * @param userRole - Rôle (doit être PRO)
+   * @param dto - { status: 'CONFIRMED' | 'DECLINED' }
+   * @returns Booking mis à jour
+   */
+  async updateBookingStatus(
+    bookingId: string,
+    userId: string,
+    userRole: string,
+    dto: UpdateBookingStatusInput,
+  ) {
+    // 1. VALIDATION ROLE
+    if (userRole !== 'PRO') {
+      throw new ForbiddenException('Seuls les professionnels peuvent modifier le statut des réservations');
+    }
+
+    // 2. RÉCUPÉRATION BOOKING
+    const booking = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        proId: true,
+        status: true,
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException('Réservation introuvable');
+    }
+
+    // 3. VÉRIFICATION OWNERSHIP
+    if (booking.proId !== userId) {
+      throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
+    }
+
+    // 4. VÉRIFICATION STATUT
+    if (booking.status !== 'PENDING') {
+      throw new BadRequestException('Seules les réservations en attente peuvent être modifiées');
+    }
+
+    // 5. UPDATE
+    const updatedBooking = await this.prisma.booking.update({
+      where: { id: bookingId },
+      data: { status: dto.status },
+      select: {
+        id: true,
+        status: true,
+        timeSlot: true,
+      },
+    });
+
+    return updatedBooking;
   }
 }

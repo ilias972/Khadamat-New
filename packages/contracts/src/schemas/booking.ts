@@ -33,3 +33,54 @@ export const CreateBookingSchema = z.object({
 });
 
 export type CreateBookingInput = z.infer<typeof CreateBookingSchema>;
+
+/**
+ * UpdateBookingStatusSchema
+ * Mise à jour du statut d'une réservation (PRO uniquement)
+ * - status : Nouveau statut (CONFIRMED ou DECLINED)
+ */
+export const UpdateBookingStatusSchema = z.object({
+  status: z.enum(['CONFIRMED', 'DECLINED']),
+});
+
+export type UpdateBookingStatusInput = z.infer<typeof UpdateBookingStatusSchema>;
+
+/**
+ * BookingDashboardItem
+ * Représente un booking dans le dashboard (Client ou Pro)
+ */
+export const BookingDashboardItemSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  timeSlot: z.string(), // ISO string
+  estimatedDuration: z.string().nullable(),
+  category: z.object({
+    id: z.string(),
+    name: z.string(),
+    slug: z.string(),
+  }),
+  city: z.object({
+    id: z.string(),
+    name: z.string(),
+    slug: z.string(),
+  }).optional(),
+  // Pour le CLIENT: infos du PRO
+  pro: z.object({
+    user: z.object({
+      firstName: z.string(),
+      lastName: z.string(),
+      phone: z.string(),
+    }),
+    city: z.object({
+      name: z.string(),
+    }),
+  }).optional(),
+  // Pour le PRO: infos du CLIENT
+  client: z.object({
+    firstName: z.string(),
+    lastName: z.string(),
+    phone: z.string(),
+  }).optional(),
+});
+
+export type BookingDashboardItem = z.infer<typeof BookingDashboardItemSchema>;
