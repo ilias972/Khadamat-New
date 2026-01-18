@@ -21,10 +21,14 @@ export class AuthService {
    * Inscription d'un nouvel utilisateur
    */
   async register(dto: RegisterInput) {
-    // 1. Vérifier si l'email existe déjà
-    if (dto.email) {
-      const existingEmail = await this.prisma.user.findUnique({
-        where: { email: dto.email },
+    // 0. Normalisation des entrées
+    const email = dto.email?.toLowerCase().trim();
+    const phone = dto.phone.trim();
+
+    // 1. Vérifier si l'email existe déjà (si fourni)
+    if (email) {
+      const existingEmail = await this.prisma.user.findFirst({
+        where: { email: email },
       });
       if (existingEmail) {
         throw new ConflictException('Cet email est déjà utilisé.');
@@ -33,7 +37,7 @@ export class AuthService {
 
     // 2. Vérifier si le téléphone existe déjà
     const existingPhone = await this.prisma.user.findUnique({
-      where: { phone: dto.phone },
+      where: { phone: phone },
     });
     if (existingPhone) {
       throw new ConflictException('Ce numéro de téléphone est déjà utilisé.');
@@ -60,11 +64,11 @@ export class AuthService {
       // A. Créer le User
       const newUser = await tx.user.create({
         data: {
-          email: dto.email,
-          phone: dto.phone,
+          email: email, // Peut être null
+          phone: phone,
           password: hashedPassword,
-          firstName: dto.firstName,
-          lastName: dto.lastName,
+          firstName: dto.firstName.trim(),
+          lastName: dto.lastName.trim(),
           role: dto.role,
           status: 'ACTIVE',
         },
@@ -76,11 +80,8 @@ export class AuthService {
           data: {
             userId: newUser.id,
             cityId: dto.cityId,
-            whatsapp: dto.phone, // 👈 Copie automatique !
-            bio: '',
-            experienceYears: 0,
-            radiusKm: 10,
-            kycStatus: 'PENDING',
+            whatsapp: phone, // 👈 Copie automatique !
+            kycStatus: 'NOT_SUBMITTED', // Valeur initiale correcte selon PRD
           },
         });
       }
@@ -97,14 +98,16 @@ export class AuthService {
    * Connexion avec Email OU Téléphone
    */
   async login(dto: LoginInput) {
+    const loginValue = dto.login.trim();
+
     // 1. Chercher par Email OU Phone
-    // Prisma ne supporte pas nativement "OR" sur findUnique directement,
-    // on utilise findFirst avec OR.
+    // On cherche si le login correspond à l'email OU au téléphone
+    // On optimise en normalisant l'email en minuscule pour la recherche
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [
-          { email: dto.login },
-          { phone: dto.login },
+          { email: loginValue.toLowerCase() },
+          { phone: loginValue },
         ],
       },
     });
@@ -119,34 +122,27 @@ export class AuthService {
       throw new UnauthorizedException('Identifiants incorrects.');
     }
 
-    // 3. Générer le Token
-    const payload = { sub: user.id, email: user.email, role: user.role };
-    
-    // 4. Préparer l'objet User public
-    const publicUser: PublicUser = {
-      id: user.id,
-      email: user.email || '',
-      phone: user.phone,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role as 'CLIENT' | 'PRO' | 'ADMIN',
-    };
-
-    return {
-      accessToken: this.jwtService.sign(payload),
-      user: publicUser,
-    };
+    // 3. Générer le Token et retourner le user public
+    return this.createAuthPayload(user);
   }
 
   /**
    * Helper interne pour connecter après inscription
    */
   private async loginAfterRegister(user: any) {
+    return this.createAuthPayload(user);
+  }
+
+  /**
+   * Helper pour construire la réponse Auth (Token + Public User)
+   */
+  private createAuthPayload(user: any) {
     const payload = { sub: user.id, email: user.email, role: user.role };
     
+    // Construction sécurisée du PublicUser (sans password)
     const publicUser: PublicUser = {
       id: user.id,
-      email: user.email || '',
+      email: user.email ?? null, // Gère proprement le null
       phone: user.phone,
       firstName: user.firstName,
       lastName: user.lastName,
@@ -172,7 +168,7 @@ export class AuthService {
 
     return {
       id: user.id,
-      email: user.email || '',
+      email: user.email ?? null,
       phone: user.phone,
       firstName: user.firstName,
       lastName: user.lastName,
