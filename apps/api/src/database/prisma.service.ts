@@ -1,37 +1,23 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { Client } from 'pg';
-import { ConfigService } from '@nestjs/config';
+import { PrismaClient } from '@khadamat/database';
 
 @Injectable()
-export class PrismaService implements OnModuleInit, OnModuleDestroy {
-  private client: Client;
-
-  constructor(private configService: ConfigService) {
-    const databaseUrl = this.configService.get<string>('DATABASE_URL');
-    this.client = new Client({ connectionString: databaseUrl });
-  }
-
+export class PrismaService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
   async onModuleInit() {
-    await this.client.connect();
-    console.log('✅ Database connected');
+    await this.$connect();
+    console.log('✅ Database connected (Prisma)');
   }
 
   async onModuleDestroy() {
-    await this.client.end();
-    console.log('🔌 Database disconnected');
+    await this.$disconnect();
+    console.log('🔌 Database disconnected (Prisma)');
   }
 
-  // Helper methods for health check
+  // Compatibility layer for raw queries (used by health check)
   async query(sql: string, params?: any[]) {
-    return this.client.query(sql, params);
-  }
-
-  get city() {
-    return {
-      count: async () => {
-        const result = await this.client.query('SELECT COUNT(*) FROM "City"');
-        return parseInt(result.rows[0].count, 10);
-      },
-    };
+    return this.$queryRawUnsafe(sql, ...(params || []));
   }
 }
