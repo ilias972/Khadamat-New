@@ -2,6 +2,8 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Param,
   Query,
   Body,
   Request,
@@ -13,8 +15,10 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
   GetSlotsSchema,
   CreateBookingSchema,
+  UpdateBookingStatusSchema,
   type GetSlotsInput,
   type CreateBookingInput,
+  type UpdateBookingStatusInput,
 } from '@khadamat/contracts';
 
 /**
@@ -72,5 +76,50 @@ export class BookingController {
     @Body(new ZodValidationPipe(CreateBookingSchema)) dto: CreateBookingInput,
   ) {
     return this.bookingService.createBooking(req.user.id, req.user.role, dto);
+  }
+
+  /**
+   * GET /api/bookings
+   *
+   * Récupère les réservations de l'utilisateur connecté.
+   * Route protégée (authentification requise).
+   *
+   * Comportement selon le rôle :
+   * - CLIENT : Renvoie les bookings où clientId = user.id
+   * - PRO : Renvoie les bookings où proId = user.id
+   *
+   * @returns Array de bookings avec relations (category, city, pro/client)
+   */
+  @Get('bookings')
+  @UseGuards(JwtAuthGuard)
+  async getMyBookings(@Request() req) {
+    return this.bookingService.getMyBookings(req.user.id, req.user.role);
+  }
+
+  /**
+   * PATCH /api/bookings/:id/status
+   *
+   * Met à jour le statut d'une réservation.
+   * Route protégée (authentification requise).
+   * Réservé aux PRO pour leurs propres réservations.
+   *
+   * Contraintes :
+   * - Seul le PRO propriétaire (booking.proId === user.id) peut modifier
+   * - Seulement si booking.status === 'PENDING'
+   * - Statuts autorisés : CONFIRMED, DECLINED
+   *
+   * Body :
+   * - status : 'CONFIRMED' | 'DECLINED'
+   *
+   * @returns Booking mis à jour
+   */
+  @Patch('bookings/:id/status')
+  @UseGuards(JwtAuthGuard)
+  async updateBookingStatus(
+    @Param('id') id: string,
+    @Request() req,
+    @Body(new ZodValidationPipe(UpdateBookingStatusSchema)) dto: UpdateBookingStatusInput,
+  ) {
+    return this.bookingService.updateBookingStatus(id, req.user.id, req.user.role, dto);
   }
 }
