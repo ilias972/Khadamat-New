@@ -152,7 +152,8 @@ export default function DashboardOverviewPage() {
 
         {/* Dashboard Data */}
         {dashboard && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {/* Informations personnelles */}
             <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
@@ -338,6 +339,7 @@ export default function DashboardOverviewPage() {
               </div>
             )}
           </div>
+          </>
         )}
       </div>
     </DashboardLayout>
