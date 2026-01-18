@@ -3,6 +3,15 @@
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 
+interface ProBookingCTAProps {
+  proId: string;
+  services?: Array<{
+    name: string;
+    priceFormatted: string;
+    categoryId: string;
+  }>;
+}
+
 /**
  * ProBookingCTA
  *
@@ -10,13 +19,16 @@ import { useAuthStore } from '@/store/authStore';
  * Logique conditionnelle selon l'état d'authentification :
  *
  * - Cas A (Non connecté) : "Se connecter pour réserver" → /auth/login
- * - Cas B (Connecté CLIENT) : "Contacter / Réserver" → Action vide pour l'instant
+ * - Cas B (Connecté CLIENT) : "Réserver" → /book/[proId]?categoryId=xxx
  * - Cas C (Connecté PRO) : Message "Connectez-vous avec un compte Client pour réserver"
  *
  * ⚠️ "use client" OBLIGATOIRE (hooks)
  */
-export default function ProBookingCTA() {
+export default function ProBookingCTA({ proId, services }: ProBookingCTAProps) {
   const { user, isAuthenticated } = useAuthStore();
+
+  // Récupérer le categoryId du premier service
+  const categoryId = services?.[0]?.categoryId;
 
   // Cas A : Non connecté
   if (!isAuthenticated) {
@@ -56,23 +68,34 @@ export default function ProBookingCTA() {
   }
 
   // Cas B : Connecté en tant que CLIENT
+  // Si pas de categoryId disponible, désactiver le bouton
+  if (!categoryId) {
+    return (
+      <div className="bg-gradient-to-r from-zinc-600 to-zinc-500 dark:from-zinc-700 dark:to-zinc-600 rounded-lg p-8 text-center">
+        <h2 className="text-2xl font-bold text-white mb-4">
+          Réservation indisponible
+        </h2>
+        <p className="text-zinc-100 mb-2">
+          Aucun service actif pour ce professionnel.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-gradient-to-r from-green-600 to-teal-600 dark:from-green-700 dark:to-teal-700 rounded-lg p-8 text-center">
       <h2 className="text-2xl font-bold text-white mb-4">
         Prêt à réserver ce professionnel ?
       </h2>
       <p className="text-green-100 mb-6">
-        Bonjour {user?.firstName}, contactez ce professionnel pour réserver
+        Bonjour {user?.firstName}, choisissez un créneau pour réserver
       </p>
-      <button
+      <Link
+        href={`/book/${proId}?categoryId=${categoryId}`}
         className="inline-block px-8 py-3 bg-white text-zinc-900 rounded-lg hover:bg-zinc-100 transition font-medium"
-        onClick={() => {
-          // TODO: Implémenter la logique de réservation
-          alert('Fonctionnalité de réservation à venir !');
-        }}
       >
-        Contacter / Réserver
-      </button>
+        Réserver maintenant
+      </Link>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams, useParams } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import Header from '@/components/Header';
 import { getJSON, postJSON, APIError } from '@/lib/api';
@@ -23,9 +23,15 @@ interface ProData {
   city: { name: string };
 }
 
-export default function BookingPage({ params }: { params: { proId: string } }) {
+export default function BookingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const params = useParams();
+
+  // Cast safe pour proId (gère string | string[])
+  const proIdRaw = params?.proId;
+  const proId = Array.isArray(proIdRaw) ? proIdRaw[0] : proIdRaw;
+
   const categoryId = searchParams.get('categoryId');
   const { user, isAuthenticated, accessToken, logout } = useAuthStore();
 
@@ -72,12 +78,12 @@ export default function BookingPage({ params }: { params: { proId: string } }) {
 
   // Fetch Pro data
   useEffect(() => {
-    if (!mounted || !params.proId) return;
+    if (!mounted || !proId) return;
 
     const fetchPro = async () => {
       try {
         setLoadingPro(true);
-        const data = await getJSON<ProData>(`/public/pros/${params.proId}`);
+        const data = await getJSON<ProData>(`/public/pros/${proId}`);
         setPro(data);
         setErrorPro(null);
       } catch (error) {
@@ -89,18 +95,18 @@ export default function BookingPage({ params }: { params: { proId: string } }) {
     };
 
     fetchPro();
-  }, [mounted, params.proId]);
+  }, [mounted, proId]);
 
   // Fetch Slots when date or categoryId changes
   useEffect(() => {
-    if (!mounted || !params.proId || !categoryId || !selectedDate) return;
+    if (!mounted || !proId || !categoryId || !selectedDate) return;
 
     const fetchSlots = async () => {
       try {
         setLoadingSlots(true);
         setSelectedSlot(null);
         const queryParams = new URLSearchParams({
-          proId: params.proId,
+          proId: proId,
           date: selectedDate,
           categoryId: categoryId,
         });
@@ -117,7 +123,7 @@ export default function BookingPage({ params }: { params: { proId: string } }) {
     };
 
     fetchSlots();
-  }, [mounted, params.proId, categoryId, selectedDate]);
+  }, [mounted, proId, categoryId, selectedDate]);
 
   // Handle booking submission
   const handleBooking = async () => {
@@ -130,7 +136,7 @@ export default function BookingPage({ params }: { params: { proId: string } }) {
       await postJSON(
         '/bookings',
         {
-          proId: params.proId,
+          proId: proId,
           categoryId: categoryId,
           date: selectedDate,
           time: selectedSlot,

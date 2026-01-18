@@ -38,6 +38,7 @@ export type PublicCategory = z.infer<typeof PublicCategorySchema>;
 export const PublicServiceSchema = z.object({
   name: z.string(),
   priceFormatted: z.string(), // "200 MAD" ou "De 200 à 500 MAD"
+  categoryId: z.string(), // ID de la catégorie pour le booking
 });
 
 export type PublicService = z.infer<typeof PublicServiceSchema>;
