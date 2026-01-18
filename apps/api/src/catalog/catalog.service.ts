@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import type {
   PublicCity,
@@ -7,244 +7,136 @@ import type {
   PublicProProfile,
 } from '@khadamat/contracts';
 
-/**
- * CatalogService
- *
- * Service PUBLIC pour la découverte du marketplace.
- *
- * ⚠️ PRIVACY SHIELD ACTIF ⚠️
- * Ce service ne doit JAMAIS exposer :
- * - email, phone, whatsapp, password
- */
 @Injectable()
 export class CatalogService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(CatalogService.name);
 
-  /**
-   * GET /api/public/cities
-   * Renvoie toutes les villes disponibles
-   */
+  constructor(private prisma: PrismaService) {}
+
   async getCities(): Promise<PublicCity[]> {
-    const cities = await this.prisma.query(
-      'SELECT id, name, slug FROM "City" ORDER BY name ASC',
-    );
-    return cities.rows;
+    return this.prisma.city.findMany({ orderBy: { name: 'asc' } });
   }
 
-  /**
-   * GET /api/public/categories
-   * Renvoie toutes les catégories de services
-   */
   async getCategories(): Promise<PublicCategory[]> {
-    const categories = await this.prisma.query(
-      'SELECT id, name, slug FROM "Category" ORDER BY name ASC',
-    );
-    return categories.rows;
+    return this.prisma.category.findMany({ orderBy: { name: 'asc' } });
   }
 
-  /**
-   * GET /api/public/pros
-   * Liste des Pros actifs avec filtres optionnels
-   *
-   * @param cityId - Filtrer par ville (optionnel)
-   * @param categoryId - Filtrer par catégorie de service (optionnel)
-   */
-  async getPros(
-    cityId?: string,
-    categoryId?: string,
-  ): Promise<PublicProCard[]> {
-    // Construction de la requête SQL avec filtres dynamiques
-    let query = `
-      SELECT DISTINCT
-        u.id,
-        u."firstName",
-        u."lastName",
-        u."createdAt",
-        c.name as city_name,
-        pp."kycStatus",
-        pp."cityId"
-      FROM "User" u
-      INNER JOIN "ProProfile" pp ON pp."userId" = u.id
-      INNER JOIN "City" c ON c.id = pp."cityId"
-      WHERE u.role = 'PRO' AND u.status = 'ACTIVE'
-    `;
+  async getPros(filters: { cityId?: string; categoryId?: string }): Promise<PublicProCard[]> {
+    const { cityId, categoryId } = filters;
+    this.logger.log(`🔍 Recherche Pro avec filtres: City=${cityId}, Cat=${categoryId}`);
 
-    const params: string[] = [];
-    let paramIndex = 1;
+    // 1. On prépare les conditions de filtrage sur le profil
+    const profileConditions: any = {};
 
-    // Filtre par ville
     if (cityId) {
-      query += ` AND pp."cityId" = $${paramIndex}`;
-      params.push(cityId);
-      paramIndex++;
+      profileConditions.cityId = cityId;
     }
 
-    // Filtre par catégorie (via ProService)
     if (categoryId) {
-      query += `
-        AND EXISTS (
-          SELECT 1 FROM "ProService" ps
-          WHERE ps."proUserId" = u.id
-          AND ps."categoryId" = $${paramIndex}
-          AND ps."isActive" = true
-        )
-      `;
-      params.push(categoryId);
-      paramIndex++;
+      // NOTE: D'après tes logs, la relation s'appelle bien 'services'
+      profileConditions.services = {
+        some: { categoryId: categoryId },
+      };
     }
 
-    query += ' ORDER BY u."createdAt" DESC';
+    // 2. On construit la requête principale
+    const whereClause: any = {
+      role: 'PRO',
+      status: 'ACTIVE',
+    };
 
-    const result = await this.prisma.query(query, params);
+    // LOGIQUE DE FILTRAGE ROBUSTE :
+    // - Si on a des critères (Ville/Cat), on utilise 'is' pour filtrer le profil.
+    // - Sinon, on utilise 'isNot: null' juste pour s'assurer que le pro a un profil.
+    if (Object.keys(profileConditions).length > 0) {
+      whereClause.proProfile = {
+        is: profileConditions
+      };
+    } else {
+      whereClause.proProfile = {
+        isNot: null
+      };
+    }
 
-    // Pour chaque Pro, récupérer ses services
-    const prosWithServices = await Promise.all(
-      result.rows.map(async (row) => {
-        const servicesQuery = `
-          SELECT
-            cat.name as category_name,
-            ps."pricingType",
-            ps."minPriceMad",
-            ps."maxPriceMad",
-            ps."fixedPriceMad"
-          FROM "ProService" ps
-          INNER JOIN "Category" cat ON cat.id = ps."categoryId"
-          WHERE ps."proUserId" = $1 AND ps."isActive" = true
-        `;
+    try {
+      const pros = await this.prisma.user.findMany({
+        where: whereClause,
+        include: {
+          proProfile: {
+            include: {
+              city: true,
+              services: { include: { category: true } },
+            },
+          },
+        },
+      });
 
-        const servicesResult = await this.prisma.query(servicesQuery, [
-          row.id,
-        ]);
+      this.logger.log(`✅ ${pros.length} pros trouvés`);
+      return pros.map((pro) => this.mapToPublicProCard(pro));
 
-        const services = servicesResult.rows.map((service) => ({
-          name: service.category_name,
-          priceFormatted: this.formatPrice(
-            service.pricingType,
-            service.fixedPriceMad,
-            service.minPriceMad,
-            service.maxPriceMad,
-          ),
-        }));
-
-        // ⚠️ PRIVACY SHIELD: Masquer le nom de famille
-        const maskedLastName = this.maskLastName(row.lastName);
-
-        return {
-          id: row.id,
-          firstName: row.firstName,
-          lastName: maskedLastName,
-          city: row.city_name,
-          isVerified: row.kycStatus === 'APPROVED',
-          services,
-        };
-      }),
-    );
-
-    return prosWithServices;
+    } catch (error) {
+      this.logger.error(`❌ ERREUR PRISMA: ${error.message}`);
+      throw error;
+    }
   }
 
-  /**
-   * GET /api/public/pros/:id
-   * Détail d'un Pro spécifique
-   */
-  async getProProfile(proId: string): Promise<PublicProProfile> {
-    // Vérifier que le Pro existe et est actif
-    const userQuery = `
-      SELECT
-        u.id,
-        u."firstName",
-        u."lastName",
-        u.role,
-        u.status,
-        c.name as city_name,
-        pp."kycStatus"
-      FROM "User" u
-      INNER JOIN "ProProfile" pp ON pp."userId" = u.id
-      INNER JOIN "City" c ON c.id = pp."cityId"
-      WHERE u.id = $1 AND u.role = 'PRO' AND u.status = 'ACTIVE'
-    `;
+  async getProDetail(id: string): Promise<PublicProProfile> {
+    const pro = await this.prisma.user.findUnique({
+      where: { id, role: 'PRO', status: 'ACTIVE' },
+      include: {
+        proProfile: {
+          include: {
+            city: true,
+            services: { include: { category: true } },
+          },
+        },
+      },
+    });
 
-    const userResult = await this.prisma.query(userQuery, [proId]);
-
-    if (userResult.rows.length === 0) {
-      throw new NotFoundException('Pro not found');
+    if (!pro || !pro.proProfile) {
+      throw new NotFoundException(`Pro introuvable`);
     }
 
-    const user = userResult.rows[0];
+    return this.mapToPublicProCard(pro) as PublicProProfile;
+  }
 
-    // Récupérer tous les services du Pro
-    const servicesQuery = `
-      SELECT
-        cat.name as category_name,
-        ps."pricingType",
-        ps."minPriceMad",
-        ps."maxPriceMad",
-        ps."fixedPriceMad"
-      FROM "ProService" ps
-      INNER JOIN "Category" cat ON cat.id = ps."categoryId"
-      WHERE ps."proUserId" = $1 AND ps."isActive" = true
-    `;
+  private mapToPublicProCard(user: any): PublicProCard {
+    const profile = user.proProfile;
+    const lastNameInitial = user.lastName ? `${user.lastName.charAt(0)}.` : '';
+    const displayName = `${user.firstName} ${lastNameInitial}`.trim();
 
-    const servicesResult = await this.prisma.query(servicesQuery, [
-      proId,
-    ]);
+    // Debug des prix si besoin
+    if (profile.services && profile.services.length > 0) {
+       // this.logger.debug(`Price data: ${JSON.stringify(profile.services[0])}`);
+    }
 
-    const services = servicesResult.rows.map((service) => ({
-      name: service.category_name,
-      priceFormatted: this.formatPrice(
-        service.pricingType,
-        service.fixedPriceMad,
-        service.minPriceMad,
-        service.maxPriceMad,
-      ),
-    }));
+    const servicesFormatted = profile.services.map((s: any) => {
+      let priceText = 'Prix sur devis';
+      
+      if (s.pricingType === 'FIXED' && s.fixedPriceMad) {
+        priceText = `${s.fixedPriceMad} MAD`;
+      } 
+      else if (s.pricingType === 'RANGE') {
+        if (s.minPriceMad && s.maxPriceMad) {
+          priceText = `De ${s.minPriceMad} à ${s.maxPriceMad} MAD`;
+        } else if (s.minPriceMad) {
+          priceText = `À partir de ${s.minPriceMad} MAD`;
+        }
+      }
 
-    // ⚠️ PRIVACY SHIELD: Masquer le nom de famille
-    const maskedLastName = this.maskLastName(user.lastName);
+      return {
+        name: s.category?.name || 'Service',
+        priceFormatted: priceText,
+      };
+    });
 
     return {
       id: user.id,
       firstName: user.firstName,
-      lastName: maskedLastName,
-      city: user.city_name,
-      isVerified: user.kycStatus === 'APPROVED',
-      services,
-      bio: undefined, // Pas encore implémenté dans le schéma
+      lastName: lastNameInitial,
+      city: profile.city?.name || 'Maroc',
+      isVerified: profile.kycStatus === 'APPROVED',
+      services: servicesFormatted,
     };
-  }
-
-  /**
-   * PRIVACY HELPER: Masquer le nom de famille
-   * "Benjelloun" → "B."
-   * null/undefined → ""
-   */
-  private maskLastName(lastName: string | null | undefined): string {
-    if (!lastName || lastName.length === 0) {
-      return '';
-    }
-    return `${lastName.charAt(0).toUpperCase()}.`;
-  }
-
-  /**
-   * BUSINESS HELPER: Formater le prix selon le type
-   * FIXED: "200 MAD"
-   * RANGE: "De 200 à 500 MAD"
-   * null: "Prix sur demande"
-   */
-  private formatPrice(
-    pricingType: string | null,
-    fixedPrice: number | null,
-    minPrice: number | null,
-    maxPrice: number | null,
-  ): string {
-    if (pricingType === 'FIXED' && fixedPrice) {
-      return `${fixedPrice} MAD`;
-    }
-
-    if (pricingType === 'RANGE' && minPrice && maxPrice) {
-      return `De ${minPrice} à ${maxPrice} MAD`;
-    }
-
-    return 'Prix sur demande';
   }
 }

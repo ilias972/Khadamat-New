@@ -10,11 +10,12 @@ export class HealthController {
   @Get()
   @ApiOperation({ summary: 'Health check endpoint with database proof' })
   async check() {
-    const cities = await this.prisma.city.count();
+    // Utilisation de la syntaxe standard Prisma
+    const citiesCount = await this.prisma.city.count();
 
     return {
       ok: true,
-      cities,
+      cities: citiesCount,
       timestamp: new Date().toISOString(),
     };
   }
