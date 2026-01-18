@@ -50,7 +50,7 @@ export class ProController {
    */
   @Get('me')
   async getMyDashboard(@Request() req) {
-    return this.proService.getMyDashboard(req.user.userId);
+    return this.proService.getMyDashboard(req.user.id);
   }
 
   /**
@@ -66,7 +66,7 @@ export class ProController {
     @Body(new ZodValidationPipe(UpdateProProfileSchema))
     dto: UpdateProProfileInput,
   ) {
-    return this.proService.updateProfile(req.user.userId, dto);
+    return this.proService.updateProfile(req.user.id, dto);
   }
 
   /**
@@ -90,7 +90,7 @@ export class ProController {
     @Body(new ZodValidationPipe(UpdateServicesSchema))
     dto: UpdateServicesInput,
   ) {
-    return this.proService.updateServices(req.user.userId, dto);
+    return this.proService.updateServices(req.user.id, dto);
   }
 
   /**
@@ -112,6 +112,6 @@ export class ProController {
     @Body(new ZodValidationPipe(UpdateAvailabilitySchema))
     dto: UpdateAvailabilityInput,
   ) {
-    return this.proService.updateAvailability(req.user.userId, dto);
+    return this.proService.updateAvailability(req.user.id, dto);
   }
 }
