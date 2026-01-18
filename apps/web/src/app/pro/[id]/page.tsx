@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import Header from '../../../components/Header';
+import ProBookingCTA from '../../../components/ProBookingCTA';
 import type { PublicProProfile } from '@khadamat/contracts';
 
 interface ProDetailPageProps {
@@ -108,20 +109,7 @@ export default async function ProDetailPage({ params }: ProDetailPageProps) {
           </div>
 
           {/* Call to Action */}
-          <div className="bg-gradient-to-r from-zinc-900 to-zinc-700 dark:from-zinc-800 dark:to-zinc-900 rounded-lg p-8 text-center">
-            <h2 className="text-2xl font-bold text-white mb-4">
-              Prêt à réserver ce professionnel ?
-            </h2>
-            <p className="text-zinc-300 mb-6">
-              Connectez-vous pour prendre rendez-vous
-            </p>
-            <a
-              href="/connexion"
-              className="inline-block px-8 py-3 bg-white text-zinc-900 rounded-lg hover:bg-zinc-100 transition font-medium"
-            >
-              Se connecter
-            </a>
-          </div>
+          <ProBookingCTA />
         </div>
       </main>
     </div>
