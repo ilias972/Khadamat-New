@@ -1,5 +1,5 @@
 // Enums
-export * from './enums.js';
+export * from './enums';
 
 // Schemas
 export * from './schemas/auth';
