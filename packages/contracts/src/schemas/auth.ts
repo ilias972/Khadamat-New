@@ -53,25 +53,21 @@ export type RegisterInput = z.infer<typeof RegisterSchema>;
 
 /**
  * PublicUserSchema
- * Informations utilisateur publiques (sans données sensibles)
- * Utilisé dans les réponses Auth
+ * Représente l'utilisateur connecté (retourné par /me et /login)
  */
 export const PublicUserSchema = z.object({
   id: z.string(),
-  email: z.string().nullable(),
+  email: z.string().nullable().optional(), // Peut être null (si inscrit par tel)
+  phone: z.string(),                       // ✅ AJOUTÉ : Le téléphone est visible pour soi-même
   firstName: z.string(),
   lastName: z.string(),
   role: RoleSchema,
-  status: z.string(),
-  createdAt: z.string(),
+  status: z.string().optional(),
+  createdAt: z.string().optional(),
 });
 
 export type PublicUser = z.infer<typeof PublicUserSchema>;
 
-/**
- * AuthResponseSchema
- * Réponse après login ou register réussi
- */
 export const AuthResponseSchema = z.object({
   accessToken: z.string(),
   user: PublicUserSchema,
