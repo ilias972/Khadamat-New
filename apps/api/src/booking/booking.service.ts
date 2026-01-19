@@ -147,20 +147,21 @@ export class BookingService {
     // 2. RÉCUPÉRATION USER (CLIENT) + VALIDATION LOCALISATION
     const user = await this.prisma.user.findUnique({
       where: { id: clientUserId },
-      select: { id: true, cityId: true, address: true },
+      select: { id: true, cityId: true, addressLine: true },
     });
 
     if (!user) {
       throw new NotFoundException('Utilisateur introuvable');
     }
 
-    // Vérifier que le client a renseigné sa ville
+    // VALIDATION ORDRE STRICT :
+    // 1) Vérifier que le client a renseigné sa ville
     if (!user.cityId) {
       throw new BadRequestException('CITY_REQUIRED');
     }
 
-    // Vérifier que le client a renseigné son adresse
-    if (!user.address || user.address.trim() === '') {
+    // 2) Vérifier que le client a renseigné son adresse
+    if (!user.addressLine || user.addressLine.trim() === '') {
       throw new BadRequestException('ADDRESS_REQUIRED');
     }
 
@@ -175,7 +176,7 @@ export class BookingService {
     }
 
     // 4. VALIDATION GÉOGRAPHIQUE
-    // Vérifier que le client et le pro sont dans la même ville
+    // 3) Vérifier que le client et le pro sont dans la même ville
     if (user.cityId !== proProfile.cityId) {
       throw new BadRequestException('CITY_MISMATCH');
     }
