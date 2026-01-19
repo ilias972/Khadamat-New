@@ -86,6 +86,7 @@ export class ProService {
         city: proProfile.city,
         whatsapp: proProfile.whatsapp,
         kycStatus: proProfile.kycStatus,
+        isPremium: proProfile.isPremium,
         premiumActiveUntil: proProfile.premiumActiveUntil,
         boostActiveUntil: proProfile.boostActiveUntil,
         createdAt: proProfile.createdAt,
