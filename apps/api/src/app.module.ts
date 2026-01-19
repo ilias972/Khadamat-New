@@ -6,6 +6,8 @@ import { CatalogModule } from './catalog/catalog.module';
 import { AuthModule } from './auth/auth.module';
 import { ProModule } from './pro/pro.module';
 import { BookingModule } from './booking/booking.module';
+import { UsersModule } from './users/users.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -18,6 +20,8 @@ import { BookingModule } from './booking/booking.module';
     AuthModule,
     ProModule,
     BookingModule,
+    UsersModule,
+    DashboardModule,
   ],
   controllers: [HealthController],
 })

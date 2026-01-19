@@ -5,24 +5,28 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import Header from '@/components/Header';
-import BookingStatusBadge from '@/components/BookingStatusBadge';
-import { getJSON } from '@/lib/api';
-import type { BookingDashboardItem } from '@khadamat/contracts';
+import { patchJSON } from '@/lib/api';
 
 /**
  * Profile Page
  *
  * Page "Mon Compte" accessible à tous les utilisateurs connectés (CLIENT et PRO).
- * Affiche les informations personnelles de l'utilisateur.
+ * Permet de modifier les informations personnelles (Nom, Prénom, Adresse).
  *
  * ⚠️ "use client" OBLIGATOIRE (hooks)
  */
 export default function ProfilePage() {
   const router = useRouter();
-  const { user, isAuthenticated, accessToken, logout } = useAuthStore();
+  const { user, isAuthenticated, accessToken, logout, setUser } = useAuthStore();
   const [mounted, setMounted] = useState(false);
-  const [bookings, setBookings] = useState<BookingDashboardItem[]>([]);
-  const [loadingBookings, setLoadingBookings] = useState(true);
+
+  // Formulaire de modification
+  const [isEditing, setIsEditing] = useState(false);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [address, setAddress] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   // Anti-glitch Hydratation
   useEffect(() => {
@@ -36,25 +40,55 @@ export default function ProfilePage() {
     }
   }, [mounted, isAuthenticated, router]);
 
-  // Fetch Bookings
+  // Initialiser le formulaire avec les données de l'utilisateur
   useEffect(() => {
-    if (!mounted || !isAuthenticated || !accessToken) return;
+    if (user) {
+      setFirstName(user.firstName || '');
+      setLastName(user.lastName || '');
+      setAddress(user.address || '');
+    }
+  }, [user]);
 
-    const fetchBookings = async () => {
-      try {
-        setLoadingBookings(true);
-        const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
-        setBookings(data);
-      } catch (error) {
-        console.error('Error fetching bookings:', error);
-        setBookings([]);
-      } finally {
-        setLoadingBookings(false);
-      }
-    };
+  // Sauvegarder les modifications
+  const handleSave = async () => {
+    if (!accessToken) return;
 
-    fetchBookings();
-  }, [mounted, isAuthenticated, accessToken]);
+    try {
+      setIsSaving(true);
+      setSuccessMessage('');
+
+      const data = {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        address: address.trim(),
+      };
+
+      const updatedUser = await patchJSON('/users/me', data, accessToken);
+
+      // Mettre à jour les données utilisateur dans le store
+      setUser(updatedUser);
+
+      setSuccessMessage('Profil mis à jour avec succès');
+      setIsEditing(false);
+
+      // Effacer le message après 3 secondes
+      setTimeout(() => setSuccessMessage(''), 3000);
+    } catch (error: any) {
+      alert(error.message || 'Erreur lors de la mise à jour du profil');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Annuler la modification
+  const handleCancel = () => {
+    if (user) {
+      setFirstName(user.firstName || '');
+      setLastName(user.lastName || '');
+      setAddress(user.address || '');
+    }
+    setIsEditing(false);
+  };
 
   const handleLogout = () => {
     logout();
@@ -131,159 +165,184 @@ export default function ProfilePage() {
             </div>
           )}
 
-          {/* Carte Mes Réservations */}
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 mb-6 flex items-center gap-2">
-              <span className="text-2xl">📅</span>
-              Mes Réservations
-            </h2>
-
-            {loadingBookings && (
-              <div className="text-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-2"></div>
-                <p className="text-zinc-600 dark:text-zinc-400 text-sm">
-                  Chargement...
-                </p>
+          {/* Lien Mes Réservations (CLIENT) */}
+          {user?.role === 'CLIENT' && (
+            <div className="bg-gradient-to-r from-green-600 to-teal-600 dark:from-green-700 dark:to-teal-700 rounded-lg p-6 text-center">
+              <div className="flex items-center justify-center gap-3 mb-4">
+                <span className="text-3xl">📅</span>
+                <h2 className="text-xl font-bold text-white">
+                  Mes Réservations
+                </h2>
               </div>
-            )}
-
-            {!loadingBookings && bookings.length === 0 && (
-              <div className="text-center py-12">
-                <p className="text-zinc-600 dark:text-zinc-400">
-                  Vous n&apos;avez aucune réservation.
-                </p>
-              </div>
-            )}
-
-            {!loadingBookings && bookings.length > 0 && (
-              <div className="space-y-4">
-                {bookings.map((booking) => (
-                  <div
-                    key={booking.id}
-                    className="flex items-center justify-between py-4 border-b border-zinc-200 dark:border-zinc-700 last:border-0"
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-semibold text-zinc-900 dark:text-zinc-50">
-                          {booking.category.name}
-                        </h3>
-                        <BookingStatusBadge status={booking.status} />
-                      </div>
-                      <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-1">
-                        📅 {new Date(booking.timeSlot).toLocaleDateString('fr-FR', {
-                          weekday: 'long',
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                        })} à {new Date(booking.timeSlot).toLocaleTimeString('fr-FR', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </p>
-                      {booking.pro && (
-                        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                          👤 {booking.pro.user.firstName} {booking.pro.user.lastName} - {booking.pro.city.name}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+              <p className="text-green-100 mb-4">
+                Consultez et gérez toutes vos réservations
+              </p>
+              <Link
+                href="/client/bookings"
+                className="inline-block px-6 py-3 bg-white text-green-600 rounded-lg hover:bg-green-50 transition font-medium"
+              >
+                Voir mes réservations →
+              </Link>
+            </div>
+          )}
 
           {/* Carte Informations Personnelles */}
           <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 mb-6 flex items-center gap-2">
-              <span className="text-2xl">👤</span>
-              Informations personnelles
-            </h2>
-
-            <div className="space-y-4">
-              {/* Prénom */}
-              <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                  Prénom
-                </span>
-                <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                  {user?.firstName}
-                </span>
-              </div>
-
-              {/* Nom */}
-              <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                  Nom
-                </span>
-                <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                  {user?.lastName}
-                </span>
-              </div>
-
-              {/* Email */}
-              <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                  Email
-                </span>
-                <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                  {user?.email || (
-                    <span className="text-zinc-500 dark:text-zinc-400 italic">
-                      Non renseigné
-                    </span>
-                  )}
-                </span>
-              </div>
-
-              {/* Téléphone */}
-              <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                  Téléphone
-                </span>
-                <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                  {user?.phone}
-                </span>
-              </div>
-
-              {/* Rôle */}
-              <div className="flex items-center justify-between py-3">
-                <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                  Rôle
-                </span>
-                <span
-                  className={`px-3 py-1 rounded-full text-sm font-medium ${getRoleBadge(user?.role || '')}`}
-                >
-                  {user?.role === 'PRO' ? 'Professionnel' : 'Client'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Carte Sécurité */}
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 mb-6 flex items-center gap-2">
-              <span className="text-2xl">🔒</span>
-              Sécurité
-            </h2>
-
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                    Mot de passe
-                  </p>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Dernière modification : Inconnue
-                  </p>
-                </div>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
+                <span className="text-2xl">👤</span>
+                Informations personnelles
+              </h2>
+              {!isEditing && (
                 <button
-                  disabled
-                  className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => setIsEditing(true)}
+                  className="px-4 py-2 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium"
                 >
-                  Changer le mot de passe
+                  Modifier
                 </button>
-              </div>
+              )}
             </div>
+
+            {/* Message de succès */}
+            {successMessage && (
+              <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                <p className="text-green-800 dark:text-green-200 text-sm font-medium">
+                  ✅ {successMessage}
+                </p>
+              </div>
+            )}
+
+            {!isEditing ? (
+              <div className="space-y-4">
+                {/* Prénom */}
+                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Prénom
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                    {user?.firstName}
+                  </span>
+                </div>
+
+                {/* Nom */}
+                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Nom
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                    {user?.lastName}
+                  </span>
+                </div>
+
+                {/* Adresse */}
+                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Adresse
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                    {user?.address || (
+                      <span className="text-zinc-500 dark:text-zinc-400 italic">
+                        Non renseigné
+                      </span>
+                    )}
+                  </span>
+                </div>
+
+                {/* Téléphone */}
+                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Téléphone
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                    {user?.phone}
+                  </span>
+                </div>
+
+                {/* Rôle */}
+                <div className="flex items-center justify-between py-3">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Rôle
+                  </span>
+                  <span
+                    className={`px-3 py-1 rounded-full text-sm font-medium ${getRoleBadge(user?.role || '')}`}
+                  >
+                    {user?.role === 'PRO' ? 'Professionnel' : 'Client'}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSave();
+                }}
+                className="space-y-4"
+              >
+                {/* Prénom */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                    Prénom
+                  </label>
+                  <input
+                    type="text"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    required
+                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+                  />
+                </div>
+
+                {/* Nom */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                    Nom
+                  </label>
+                  <input
+                    type="text"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    required
+                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+                  />
+                </div>
+
+                {/* Adresse */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                    Adresse
+                  </label>
+                  <input
+                    type="text"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    required
+                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+                    placeholder="Votre adresse complète"
+                  />
+                </div>
+
+                {/* Boutons */}
+                <div className="flex gap-3 pt-4">
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="flex-1 px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSaving ? 'Enregistrement...' : 'Enregistrer'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={isSaving}
+                    className="flex-1 px-6 py-3 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
+
 
           {/* Zone Danger */}
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
