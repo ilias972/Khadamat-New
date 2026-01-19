@@ -25,7 +25,7 @@ export default function ProfilePage() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [cityId, setCityId] = useState('');
-  const [address, setAddress] = useState('');
+  const [addressLine, setAddressLine] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
 
@@ -69,7 +69,7 @@ export default function ProfilePage() {
       setFirstName(user.firstName || '');
       setLastName(user.lastName || '');
       setCityId(user.cityId || '');
-      setAddress(user.address || '');
+      setAddressLine(user.addressLine || '');
     }
   }, [user]);
 
@@ -85,7 +85,7 @@ export default function ProfilePage() {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         cityId: cityId || undefined,
-        address: address.trim(),
+        addressLine: addressLine.trim(),
       };
 
       const updatedUser = await patchJSON('/users/me', data, accessToken);
@@ -111,7 +111,7 @@ export default function ProfilePage() {
       setFirstName(user.firstName || '');
       setLastName(user.lastName || '');
       setCityId(user.cityId || '');
-      setAddress(user.address || '');
+      setAddressLine(user.addressLine || '');
     }
     setIsEditing(false);
   };
@@ -282,7 +282,7 @@ export default function ProfilePage() {
                     Adresse précise
                   </span>
                   <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                    {user?.address || (
+                    {user?.addressLine || (
                       <span className="text-zinc-500 dark:text-zinc-400 italic">
                         Non renseigné
                       </span>
@@ -376,8 +376,8 @@ export default function ProfilePage() {
                   </label>
                   <input
                     type="text"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
+                    value={addressLine}
+                    onChange={(e) => setAddressLine(e.target.value)}
                     required
                     className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
                     placeholder="Rue, Numéro..."

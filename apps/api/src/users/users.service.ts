@@ -4,11 +4,11 @@ import { PrismaService } from '../database/prisma.service';
 /**
  * UpdateProfileDto
  * Données modifiables pour le profil utilisateur
- * Champs autorisés : cityId, address, firstName, lastName
+ * Champs autorisés : cityId, addressLine, firstName, lastName
  */
 export interface UpdateProfileDto {
   cityId?: string;
-  address?: string;
+  addressLine?: string;
   firstName?: string;
   lastName?: string;
 }
@@ -26,7 +26,7 @@ export class UsersService {
    * Met à jour le profil de l'utilisateur connecté
    *
    * @param userId - ID de l'utilisateur connecté
-   * @param dto - Données à mettre à jour (cityId, address, firstName, lastName)
+   * @param dto - Données à mettre à jour (cityId, addressLine, firstName, lastName)
    * @returns Profil mis à jour
    */
   async updateProfile(userId: string, dto: UpdateProfileDto) {
@@ -43,7 +43,7 @@ export class UsersService {
     // Construire l'objet de mise à jour (uniquement les champs fournis)
     const dataToUpdate: {
       cityId?: string;
-      address?: string;
+      addressLine?: string;
       firstName?: string;
       lastName?: string;
     } = {};
@@ -51,8 +51,8 @@ export class UsersService {
     if (dto.cityId !== undefined) {
       dataToUpdate.cityId = dto.cityId;
     }
-    if (dto.address !== undefined) {
-      dataToUpdate.address = dto.address.trim();
+    if (dto.addressLine !== undefined) {
+      dataToUpdate.addressLine = dto.addressLine.trim();
     }
     if (dto.firstName !== undefined) {
       dataToUpdate.firstName = dto.firstName.trim();
@@ -72,7 +72,7 @@ export class UsersService {
         email: true,
         phone: true,
         cityId: true,
-        address: true,
+        addressLine: true,
         role: true,
         status: true,
       },

@@ -125,9 +125,9 @@ model User {
   lastName  String
 
   // Localisation CLIENT (pour validation géographique des bookings)
-  cityId    String?
-  city      City?       @relation("UserCity", fields: [cityId], references: [id])
-  address   String?     // Adresse précise (rue, numéro...)
+  cityId      String?
+  city        City?       @relation("UserCity", fields: [cityId], references: [id])
+  addressLine String?     // Adresse précise (rue, numéro...)
 
   // CLIENT penalty system (PRD)
   clientLateCancelCount30d  Int        @default(0)
