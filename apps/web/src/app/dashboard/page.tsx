@@ -1,17 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
-import { getJSON, patchJSON, APIError } from '@/lib/api';
+import { getJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
-import BookingStatusBadge from '@/components/BookingStatusBadge';
-import type { BookingDashboardItem } from '@khadamat/contracts';
+import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 /**
  * Dashboard Overview Page
  *
- * Page d'accueil du dashboard Pro.
- * Affiche un résumé : Nom, Statut KYC, Ville, Statistiques de base.
+ * Page d'accueil du dashboard Pro (PREMIUM UNIQUEMENT).
+ * Affiche des KPIs : Demandes par jour, Taux de conversion, Prochaine réservation.
  *
  * ⚠️ "use client" OBLIGATOIRE
  */
@@ -35,6 +35,7 @@ interface ProDashboard {
     };
     whatsapp: string;
     kycStatus: string;
+    isPremium: boolean;
     premiumActiveUntil: string | null;
     boostActiveUntil: string | null;
   };
@@ -42,15 +43,27 @@ interface ProDashboard {
   availability: any[];
 }
 
+interface DashboardStats {
+  requestsCount: Array<{ date: string; count: number }>;
+  conversionRate: { confirmed: number; declined: number };
+  pendingCount: number;
+  nextBooking: {
+    client: { firstName: string; lastName: string; phone: string };
+    timeSlot: string;
+    category: { name: string };
+  } | null;
+}
+
 export default function DashboardOverviewPage() {
+  const router = useRouter();
   const { accessToken } = useAuthStore();
   const [dashboard, setDashboard] = useState<ProDashboard | null>(null);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingStats, setLoadingStats] = useState(true);
   const [error, setError] = useState('');
-  const [bookings, setBookings] = useState<BookingDashboardItem[]>([]);
-  const [loadingBookings, setLoadingBookings] = useState(true);
-  const [updatingBooking, setUpdatingBooking] = useState<string | null>(null);
 
+  // Fetch Dashboard
   useEffect(() => {
     const fetchDashboard = async () => {
       if (!accessToken) return;
@@ -58,6 +71,11 @@ export default function DashboardOverviewPage() {
       try {
         const data = await getJSON<ProDashboard>('/pro/me', accessToken);
         setDashboard(data);
+
+        // Si non premium, rediriger vers /dashboard/bookings
+        if (!data.profile.isPremium) {
+          router.replace('/dashboard/bookings');
+        }
       } catch (err) {
         if (err instanceof APIError) {
           setError(err.message);
@@ -70,55 +88,38 @@ export default function DashboardOverviewPage() {
     };
 
     fetchDashboard();
-  }, [accessToken]);
+  }, [accessToken, router]);
 
-  // Fetch Bookings
+  // Fetch Stats (uniquement si Premium)
   useEffect(() => {
-    const fetchBookings = async () => {
-      if (!accessToken) return;
+    const fetchStats = async () => {
+      if (!accessToken || !dashboard || !dashboard.profile.isPremium) return;
 
       try {
-        setLoadingBookings(true);
-        const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
-        setBookings(data);
+        setLoadingStats(true);
+        const data = await getJSON<DashboardStats>('/dashboard/stats', accessToken);
+        setStats(data);
       } catch (err) {
-        console.error('Error fetching bookings:', err);
+        console.error('Error fetching stats:', err);
       } finally {
-        setLoadingBookings(false);
+        setLoadingStats(false);
       }
     };
 
-    fetchBookings();
-  }, [accessToken]);
+    fetchStats();
+  }, [accessToken, dashboard]);
 
-  // Update booking status
-  const handleUpdateStatus = async (bookingId: string, status: 'CONFIRMED' | 'DECLINED') => {
-    if (!accessToken) return;
+  // Préparer les données pour le graphique donut (Conversion Rate)
+  const conversionData = stats ? [
+    { name: 'Confirmé', value: stats.conversionRate.confirmed, color: '#10b981' },
+    { name: 'Refusé', value: stats.conversionRate.declined, color: '#ef4444' },
+  ] : [];
 
-    try {
-      setUpdatingBooking(bookingId);
-      await patchJSON(`/bookings/${bookingId}/status`, { status }, accessToken);
-
-      // Refresh bookings list
-      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
-      setBookings(data);
-    } catch (err) {
-      if (err instanceof APIError) {
-        alert(err.message);
-      } else {
-        alert('Erreur lors de la mise à jour');
-      }
-    } finally {
-      setUpdatingBooking(null);
-    }
-  };
-
-  const kycStatusLabels: Record<string, { label: string; color: string }> = {
-    NOT_SUBMITTED: { label: 'Non soumis', color: 'bg-gray-100 text-gray-800' },
-    PENDING: { label: 'En attente', color: 'bg-yellow-100 text-yellow-800' },
-    APPROVED: { label: 'Approuvé', color: 'bg-green-100 text-green-800' },
-    REJECTED: { label: 'Rejeté', color: 'bg-red-100 text-red-800' },
-  };
+  // Préparer les données pour le graphique ligne (Requests Count)
+  const requestsData = stats?.requestsCount.map((item) => ({
+    date: new Date(item.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }),
+    count: item.count,
+  })) || [];
 
   return (
     <DashboardLayout>
@@ -129,7 +130,7 @@ export default function DashboardOverviewPage() {
             Vue d&apos;ensemble
           </h1>
           <p className="text-zinc-600 dark:text-zinc-400 mt-2">
-            Bienvenue sur votre dashboard professionnel
+            Tableau de bord Premium - Statistiques et KPIs
           </p>
         </div>
 
@@ -150,195 +151,153 @@ export default function DashboardOverviewPage() {
           </div>
         )}
 
-        {/* Dashboard Data */}
-        {dashboard && (
+        {/* Dashboard Data (Premium uniquement) */}
+        {dashboard && dashboard.profile.isPremium && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {/* Informations personnelles */}
-            <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
-                👤 Informations
-              </h2>
-              <div className="space-y-3">
-                <div>
+            {/* Cartes KPIs */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Demandes en attente */}
+              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+                <div className="flex items-center justify-between mb-2">
                   <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Nom complet
+                    Demandes en attente
                   </p>
-                  <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                    {dashboard.user.firstName} {dashboard.user.lastName}
-                  </p>
+                  <span className="text-2xl">⏳</span>
                 </div>
-                <div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Email
-                  </p>
-                  <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                    {dashboard.user.email || 'Non renseigné'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Téléphone
-                  </p>
-                  <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                    {dashboard.user.phone}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Profil Pro */}
-            <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
-                🏢 Profil Pro
-              </h2>
-              <div className="space-y-3">
-                <div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Ville
-                  </p>
-                  <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                    {dashboard.profile.city.name}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    WhatsApp
-                  </p>
-                  <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                    {dashboard.profile.whatsapp}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Statut KYC
-                  </p>
-                  <span
-                    className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
-                      kycStatusLabels[dashboard.profile.kycStatus]?.color ||
-                      'bg-gray-100 text-gray-800'
-                    }`}
-                  >
-                    {kycStatusLabels[dashboard.profile.kycStatus]?.label ||
-                      dashboard.profile.kycStatus}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Statistiques */}
-            <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
-                📊 Statistiques
-              </h2>
-              <div className="space-y-3">
-                <div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Services actifs
-                  </p>
-                  <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
-                    {dashboard.services.filter((s) => s.isActive).length}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Services total
-                  </p>
-                  <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
-                    {dashboard.services.length}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Jours travaillés
-                  </p>
-                  <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
-                    {dashboard.availability.filter((a) => a.isActive).length}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Demandes de Rendez-vous */}
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6 mt-6">
-            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-6">
-              📅 Demandes de Rendez-vous
-            </h2>
-
-            {loadingBookings && (
-              <div className="text-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-2"></div>
-                <p className="text-zinc-600 dark:text-zinc-400 text-sm">
-                  Chargement...
+                <p className="text-4xl font-bold text-zinc-900 dark:text-zinc-50">
+                  {loadingStats ? '...' : stats?.pendingCount || 0}
                 </p>
               </div>
-            )}
 
-            {!loadingBookings && bookings.length === 0 && (
-              <div className="text-center py-12">
-                <p className="text-zinc-600 dark:text-zinc-400">
-                  Aucune demande de rendez-vous.
+              {/* Confirmés */}
+              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Réservations confirmées
+                  </p>
+                  <span className="text-2xl">✅</span>
+                </div>
+                <p className="text-4xl font-bold text-green-600 dark:text-green-400">
+                  {loadingStats ? '...' : stats?.conversionRate.confirmed || 0}
                 </p>
               </div>
-            )}
 
-            {!loadingBookings && bookings.length > 0 && (
-              <div className="space-y-4">
-                {bookings.map((booking) => (
-                  <div
-                    key={booking.id}
-                    className="flex items-center justify-between py-4 border-b border-zinc-200 dark:border-zinc-700 last:border-0"
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-semibold text-zinc-900 dark:text-zinc-50">
-                          {booking.category.name}
-                        </h3>
-                        <BookingStatusBadge status={booking.status} />
-                      </div>
-                      <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-1">
-                        📅 {new Date(booking.timeSlot).toLocaleDateString('fr-FR', {
-                          weekday: 'long',
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                        })} à {new Date(booking.timeSlot).toLocaleTimeString('fr-FR', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </p>
-                      {booking.client && (
-                        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                          👤 {booking.client.firstName} {booking.client.lastName} - {booking.client.phone}
-                        </p>
-                      )}
-                    </div>
+              {/* Refusés */}
+              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Réservations refusées
+                  </p>
+                  <span className="text-2xl">❌</span>
+                </div>
+                <p className="text-4xl font-bold text-red-600 dark:text-red-400">
+                  {loadingStats ? '...' : stats?.conversionRate.declined || 0}
+                </p>
+              </div>
+            </div>
 
-                    {/* Actions (visible uniquement si PENDING) */}
-                    {booking.status === 'PENDING' && (
-                      <div className="flex gap-2 ml-4">
-                        <button
-                          onClick={() => handleUpdateStatus(booking.id, 'CONFIRMED')}
-                          disabled={updatingBooking === booking.id}
-                          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                        >
-                          ✅ Accepter
-                        </button>
-                        <button
-                          onClick={() => handleUpdateStatus(booking.id, 'DECLINED')}
-                          disabled={updatingBooking === booking.id}
-                          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                        >
-                          ❌ Refuser
-                        </button>
-                      </div>
-                    )}
+            {/* Graphiques */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Ligne : Demandes par jour (7 derniers jours) */}
+              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
+                  📈 Demandes par jour (7 derniers jours)
+                </h2>
+                {loadingStats ? (
+                  <div className="flex items-center justify-center h-64">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50"></div>
                   </div>
-                ))}
+                ) : (
+                  <ResponsiveContainer width="100%" height={250}>
+                    <LineChart data={requestsData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="date" />
+                      <YAxis />
+                      <Tooltip />
+                      <Legend />
+                      <Line type="monotone" dataKey="count" stroke="#3b82f6" name="Demandes" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
               </div>
-            )}
-          </div>
+
+              {/* Donut : Taux de conversion */}
+              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
+                  🎯 Taux de conversion
+                </h2>
+                {loadingStats ? (
+                  <div className="flex items-center justify-center h-64">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50"></div>
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={250}>
+                    <PieChart>
+                      <Pie
+                        data={conversionData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        fill="#8884d8"
+                        dataKey="value"
+                        label
+                      >
+                        {conversionData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+
+            {/* Prochaine réservation */}
+            <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
+                📅 Prochaine réservation
+              </h2>
+              {loadingStats ? (
+                <div className="text-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto"></div>
+                </div>
+              ) : stats?.nextBooking ? (
+                <div className="flex items-center gap-4">
+                  <div className="bg-blue-100 dark:bg-blue-900/20 rounded-full p-4">
+                    <span className="text-3xl">👤</span>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-zinc-900 dark:text-zinc-50">
+                      {stats.nextBooking.client.firstName} {stats.nextBooking.client.lastName}
+                    </p>
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      {stats.nextBooking.category.name}
+                    </p>
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      📞 {stats.nextBooking.client.phone}
+                    </p>
+                    <p className="text-sm text-blue-600 dark:text-blue-400 mt-1">
+                      📅 {new Date(stats.nextBooking.timeSlot).toLocaleDateString('fr-FR', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                      })} à {new Date(stats.nextBooking.timeSlot).toLocaleTimeString('fr-FR', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-center text-zinc-600 dark:text-zinc-400 py-8">
+                  Aucune réservation confirmée à venir
+                </p>
+              )}
+            </div>
           </>
         )}
       </div>

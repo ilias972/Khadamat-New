@@ -122,6 +122,7 @@ model User {
   password  String
   firstName String
   lastName  String
+  address   String?     // Adresse complète du client (obligatoire pour réserver)
 
   // CLIENT penalty system (PRD)
   clientLateCancelCount30d  Int        @default(0)
@@ -161,6 +162,9 @@ model ProProfile {
   kycCinBackUrl        String?
   kycSelfieUrl         String?
   kycRejectionReason   String?
+
+  // Premium (MVP flag simplifié)
+  isPremium            Boolean    @default(false)
 
   // Subscription flags (source of truth via rows ci-dessous)
   premiumActiveUntil   DateTime?
