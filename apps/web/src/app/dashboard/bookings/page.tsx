@@ -86,6 +86,65 @@ export default function ProBookingsPage() {
     }
   };
 
+  // Update booking duration (PRO modifies PENDING booking)
+  const handleUpdateDuration = async (bookingId: string) => {
+    if (!accessToken) return;
+
+    const durationInput = prompt('Nouvelle durée en heures (1-8) :');
+    if (!durationInput) return;
+
+    const duration = parseInt(durationInput, 10);
+    if (isNaN(duration) || duration < 1 || duration > 8) {
+      alert('Veuillez entrer une durée valide entre 1 et 8 heures');
+      return;
+    }
+
+    try {
+      setUpdatingBooking(bookingId);
+      await patchJSON(`/bookings/${bookingId}/duration`, { duration }, accessToken);
+
+      // Refresh bookings list
+      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+      setBookings(data);
+      alert('Durée modifiée ! Le client doit maintenant valider.');
+    } catch (err) {
+      if (err instanceof APIError) {
+        alert(err.message);
+      } else {
+        alert('Erreur lors de la modification');
+      }
+    } finally {
+      setUpdatingBooking(null);
+    }
+  };
+
+  // Complete booking (PRO marks CONFIRMED as COMPLETED)
+  const handleCompleteBooking = async (bookingId: string) => {
+    if (!accessToken) return;
+
+    if (!confirm('Marquer cette mission comme terminée ?')) {
+      return;
+    }
+
+    try {
+      setUpdatingBooking(bookingId);
+      await patchJSON(`/bookings/${bookingId}/complete`, {}, accessToken);
+
+      // Refresh bookings list
+      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+      setBookings(data);
+      alert('Mission marquée comme terminée !');
+    } catch (err) {
+      if (err instanceof APIError) {
+        alert(err.message);
+      } else {
+        alert('Erreur lors de la mise à jour');
+      }
+    } finally {
+      setUpdatingBooking(null);
+    }
+  };
+
   // Ne rien afficher avant hydratation
   if (!mounted) {
     return null;
@@ -246,22 +305,47 @@ export default function ProBookingsPage() {
                     )}
                   </div>
 
-                  {/* Actions (visible uniquement si PENDING) */}
+                  {/* Actions PENDING */}
                   {booking.status === 'PENDING' && (
+                    <div className="flex flex-col gap-2 ml-4">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleUpdateStatus(booking.id, 'CONFIRMED')}
+                          disabled={updatingBooking === booking.id}
+                          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        >
+                          ✅ Accepter
+                        </button>
+                        <button
+                          onClick={() => handleUpdateStatus(booking.id, 'DECLINED')}
+                          disabled={updatingBooking === booking.id}
+                          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        >
+                          ❌ Refuser
+                        </button>
+                      </div>
+                      {/* Bouton Modifier Durée (si pas encore modifié) */}
+                      {!booking.isModifiedByPro && (
+                        <button
+                          onClick={() => handleUpdateDuration(booking.id)}
+                          disabled={updatingBooking === booking.id}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        >
+                          ⏱️ Modifier Durée
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actions CONFIRMED */}
+                  {booking.status === 'CONFIRMED' && new Date(booking.timeSlot) < new Date() && (
                     <div className="flex gap-2 ml-4">
                       <button
-                        onClick={() => handleUpdateStatus(booking.id, 'CONFIRMED')}
+                        onClick={() => handleCompleteBooking(booking.id)}
                         disabled={updatingBooking === booking.id}
                         className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                       >
-                        ✅ Accepter
-                      </button>
-                      <button
-                        onClick={() => handleUpdateStatus(booking.id, 'DECLINED')}
-                        disabled={updatingBooking === booking.id}
-                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                      >
-                        ❌ Refuser
+                        ✅ Terminer la mission
                       </button>
                     </div>
                   )}

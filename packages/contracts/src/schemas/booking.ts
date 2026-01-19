@@ -54,6 +54,8 @@ export const BookingDashboardItemSchema = z.object({
   status: z.string(),
   timeSlot: z.string(), // ISO string
   estimatedDuration: z.string().nullable(),
+  duration: z.number(), // Durée en heures (Phase 10 V4-A)
+  isModifiedByPro: z.boolean(), // Flag de modification par PRO (Phase 10 V4-A)
   category: z.object({
     id: z.string(),
     name: z.string(),

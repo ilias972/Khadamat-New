@@ -100,6 +100,9 @@ export class BookingService {
     // Génère des créneaux toutes les 60 minutes entre startMin et endMin
     const slots: string[] = [];
 
+    // Date/heure actuelle pour filtrer les créneaux passés
+    const now = new Date();
+
     // startMin et endMin sont en minutes depuis 00:00
     // Ex: 540 = 9h00, 1080 = 18h00
     for (let min = availability.startMin; min < availability.endMin; min += 60) {
@@ -107,8 +110,12 @@ export class BookingService {
       const minutes = min % 60;
       const timeSlot = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
 
-      // Vérifier si le slot n'est pas déjà occupé
-      if (!occupiedSlots.has(timeSlot)) {
+      // Construire la date complète du slot pour comparaison
+      const slotDateTime = new Date(dateObj);
+      slotDateTime.setHours(hours, minutes, 0, 0);
+
+      // Vérifier si le slot n'est pas déjà occupé ET n'est pas dans le passé
+      if (!occupiedSlots.has(timeSlot) && slotDateTime > now) {
         slots.push(timeSlot);
       }
     }
@@ -241,6 +248,8 @@ export class BookingService {
         status: true,
         timeSlot: true,
         estimatedDuration: true,
+        duration: true,
+        isModifiedByPro: true,
         category: {
           select: {
             id: true,
@@ -348,6 +357,265 @@ export class BookingService {
         id: true,
         status: true,
         timeSlot: true,
+      },
+    });
+
+    return updatedBooking;
+  }
+
+  /**
+   * updateBooking
+   *
+   * Permet au PRO de modifier la durée d'une réservation PENDING (une seule fois).
+   *
+   * RÈGLES :
+   * - Booking doit être en statut PENDING
+   * - isModifiedByPro doit être false (une seule modification autorisée)
+   * - Si duration > 1h, vérifie que les créneaux consécutifs sont libres
+   * - Passe le booking en statut WAITING_FOR_CLIENT
+   * - Marque isModifiedByPro = true
+   *
+   * @param bookingId - ID du booking à modifier
+   * @param userId - ID du PRO connecté
+   * @param userRole - Rôle (doit être PRO)
+   * @param duration - Nouvelle durée en heures (1-8)
+   * @returns Booking mis à jour
+   */
+  async updateBooking(
+    bookingId: string,
+    userId: string,
+    userRole: string,
+    duration: number,
+  ) {
+    // 1. VALIDATION ROLE
+    if (userRole !== 'PRO') {
+      throw new ForbiddenException('Seuls les professionnels peuvent modifier les réservations');
+    }
+
+    // 2. RÉCUPÉRATION BOOKING
+    const booking = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        proId: true,
+        status: true,
+        isModifiedByPro: true,
+        timeSlot: true,
+        categoryId: true,
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException('Réservation introuvable');
+    }
+
+    // 3. VÉRIFICATION OWNERSHIP
+    if (booking.proId !== userId) {
+      throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
+    }
+
+    // 4. VÉRIFICATION STATUT
+    if (booking.status !== 'PENDING') {
+      throw new BadRequestException('Seules les réservations en attente peuvent être modifiées');
+    }
+
+    // 5. VÉRIFICATION FLAG
+    if (booking.isModifiedByPro) {
+      throw new BadRequestException('Cette réservation a déjà été modifiée');
+    }
+
+    // 6. VALIDATION DURÉE
+    if (duration < 1 || duration > 8) {
+      throw new BadRequestException('La durée doit être entre 1 et 8 heures');
+    }
+
+    // 7. VÉRIFICATION DISPONIBILITÉ CRÉNEAUX CONSÉCUTIFS
+    if (duration > 1) {
+      // Récupérer les bookings existants pour vérifier les créneaux consécutifs
+      const startTime = new Date(booking.timeSlot);
+      const endTime = new Date(startTime.getTime() + duration * 60 * 60 * 1000);
+
+      const conflictingBookings = await this.prisma.booking.findMany({
+        where: {
+          proId: userId,
+          id: { not: bookingId }, // Exclure le booking actuel
+          timeSlot: {
+            gte: startTime,
+            lt: endTime,
+          },
+          status: {
+            in: ['PENDING', 'CONFIRMED', 'WAITING_FOR_CLIENT'],
+          },
+        },
+      });
+
+      if (conflictingBookings.length > 0) {
+        throw new ConflictException('Les créneaux consécutifs ne sont pas tous disponibles');
+      }
+    }
+
+    // 8. UPDATE
+    const updatedBooking = await this.prisma.booking.update({
+      where: { id: bookingId },
+      data: {
+        duration: duration,
+        isModifiedByPro: true,
+        status: 'WAITING_FOR_CLIENT',
+      },
+      select: {
+        id: true,
+        status: true,
+        timeSlot: true,
+        duration: true,
+        isModifiedByPro: true,
+      },
+    });
+
+    return updatedBooking;
+  }
+
+  /**
+   * respondToModification
+   *
+   * Permet au CLIENT de répondre à une modification de durée proposée par le PRO.
+   *
+   * RÈGLES :
+   * - Booking doit être en statut WAITING_FOR_CLIENT
+   * - Si accept: passe en CONFIRMED
+   * - Si refuse: passe en DECLINED
+   *
+   * @param bookingId - ID du booking
+   * @param userId - ID du CLIENT connecté
+   * @param userRole - Rôle (doit être CLIENT)
+   * @param accept - true = accepter, false = refuser
+   * @returns Booking mis à jour
+   */
+  async respondToModification(
+    bookingId: string,
+    userId: string,
+    userRole: string,
+    accept: boolean,
+  ) {
+    // 1. VALIDATION ROLE
+    if (userRole !== 'CLIENT') {
+      throw new ForbiddenException('Seuls les clients peuvent répondre aux modifications');
+    }
+
+    // 2. RÉCUPÉRATION BOOKING
+    const booking = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        clientId: true,
+        status: true,
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException('Réservation introuvable');
+    }
+
+    // 3. VÉRIFICATION OWNERSHIP
+    if (booking.clientId !== userId) {
+      throw new ForbiddenException('Vous ne pouvez répondre qu\'à vos propres réservations');
+    }
+
+    // 4. VÉRIFICATION STATUT
+    if (booking.status !== 'WAITING_FOR_CLIENT') {
+      throw new BadRequestException('Cette réservation n\'attend pas de réponse');
+    }
+
+    // 5. UPDATE
+    const newStatus = accept ? 'CONFIRMED' : 'DECLINED';
+    const updateData: any = { status: newStatus };
+
+    if (accept) {
+      updateData.confirmedAt = new Date();
+    }
+
+    const updatedBooking = await this.prisma.booking.update({
+      where: { id: bookingId },
+      data: updateData,
+      select: {
+        id: true,
+        status: true,
+        timeSlot: true,
+        duration: true,
+      },
+    });
+
+    return updatedBooking;
+  }
+
+  /**
+   * completeBooking
+   *
+   * Permet au PRO de marquer une réservation CONFIRMED comme COMPLETED.
+   *
+   * RÈGLES :
+   * - Booking doit être en statut CONFIRMED
+   * - Le créneau doit être dans le passé
+   * - Passe en statut COMPLETED
+   * - Enregistre completedAt
+   *
+   * @param bookingId - ID du booking
+   * @param userId - ID du PRO connecté
+   * @param userRole - Rôle (doit être PRO)
+   * @returns Booking mis à jour
+   */
+  async completeBooking(
+    bookingId: string,
+    userId: string,
+    userRole: string,
+  ) {
+    // 1. VALIDATION ROLE
+    if (userRole !== 'PRO') {
+      throw new ForbiddenException('Seuls les professionnels peuvent marquer une mission comme terminée');
+    }
+
+    // 2. RÉCUPÉRATION BOOKING
+    const booking = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        proId: true,
+        status: true,
+        timeSlot: true,
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException('Réservation introuvable');
+    }
+
+    // 3. VÉRIFICATION OWNERSHIP
+    if (booking.proId !== userId) {
+      throw new ForbiddenException('Vous ne pouvez marquer que vos propres réservations comme terminées');
+    }
+
+    // 4. VÉRIFICATION STATUT
+    if (booking.status !== 'CONFIRMED') {
+      throw new BadRequestException('Seules les réservations confirmées peuvent être marquées comme terminées');
+    }
+
+    // 5. VÉRIFICATION QUE LE CRÉNEAU EST PASSÉ
+    const now = new Date();
+    if (booking.timeSlot > now) {
+      throw new BadRequestException('Vous ne pouvez marquer comme terminée qu\'une mission passée');
+    }
+
+    // 6. UPDATE
+    const updatedBooking = await this.prisma.booking.update({
+      where: { id: bookingId },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+      },
+      select: {
+        id: true,
+        status: true,
+        timeSlot: true,
+        completedAt: true,
       },
     });
 

@@ -25,6 +25,11 @@ export default function BookingStatusBadge({ status }: BookingStatusBadgeProps) 
           label: 'Confirmé',
           className: 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-200 border-green-200 dark:border-green-800',
         };
+      case 'WAITING_FOR_CLIENT':
+        return {
+          label: 'En attente client',
+          className: 'bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-200 border-orange-200 dark:border-orange-800',
+        };
       case 'DECLINED':
         return {
           label: 'Refusé',

@@ -27,6 +27,7 @@ export const BookingStatusSchema = z.enum([
   'CANCELLED_BY_PRO',
   'CANCELLED_AUTO_FIRST_CONFIRMED',
   'EXPIRED',
+  'WAITING_FOR_CLIENT',
   'COMPLETED',
 ]);
 export type BookingStatus = z.infer<typeof BookingStatusSchema>;
