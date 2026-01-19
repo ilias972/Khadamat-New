@@ -144,39 +144,27 @@ export class BookingService {
       throw new ForbiddenException('Seuls les clients peuvent créer des réservations');
     }
 
-    // 2. RÉCUPÉRATION USER (CLIENT) + VALIDATION LOCALISATION
+    // 1. Récupération User
     const user = await this.prisma.user.findUnique({
       where: { id: clientUserId },
       select: { id: true, cityId: true, addressLine: true },
     });
+    if (!user) throw new NotFoundException('Utilisateur introuvable');
 
-    if (!user) {
-      throw new NotFoundException('Utilisateur introuvable');
-    }
-
-    // VALIDATION ORDRE STRICT :
-    // 1) Vérifier que le client a renseigné sa ville
-    if (!user.cityId) {
-      throw new BadRequestException('CITY_REQUIRED');
-    }
-
-    // 2) Vérifier que le client a renseigné son adresse
+    // 2. Validations strictes
+    if (!user.cityId) throw new BadRequestException('CITY_REQUIRED');
     if (!user.addressLine || user.addressLine.trim() === '') {
       throw new BadRequestException('ADDRESS_REQUIRED');
     }
 
-    // 3. RÉCUPÉRATION PRO PROFILE
+    // 3. Récupération Pro (ville)
     const proProfile = await this.prisma.proProfile.findUnique({
       where: { userId: dto.proId },
       select: { cityId: true },
     });
+    if (!proProfile) throw new NotFoundException('Professionnel non trouvé');
 
-    if (!proProfile) {
-      throw new NotFoundException('Professionnel non trouvé');
-    }
-
-    // 4. VALIDATION GÉOGRAPHIQUE
-    // 3) Vérifier que le client et le pro sont dans la même ville
+    // 4. City match
     if (user.cityId !== proProfile.cityId) {
       throw new BadRequestException('CITY_MISMATCH');
     }
