@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
+import { getJSON } from '@/lib/api';
 
 /**
  * DashboardLayout
@@ -25,10 +26,11 @@ interface DashboardLayoutProps {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, isAuthenticated, logout } = useAuthStore();
+  const { user, isAuthenticated, accessToken, logout } = useAuthStore();
   const [isLoading, setIsLoading] = useState(true);
+  const [isPremium, setIsPremium] = useState(false);
 
-  // Auth Guard
+  // Auth Guard + Fetch isPremium
   useEffect(() => {
     if (!isAuthenticated) {
       router.push('/');
@@ -40,20 +42,36 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       return;
     }
 
-    setIsLoading(false);
-  }, [isAuthenticated, user, router]);
+    // Fetch profile to get isPremium
+    const fetchProfile = async () => {
+      if (!accessToken) return;
+
+      try {
+        const data = await getJSON<{ profile: { isPremium: boolean } }>('/pro/me', accessToken);
+        setIsPremium(data.profile.isPremium);
+      } catch (error) {
+        console.error('Error fetching profile:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchProfile();
+  }, [isAuthenticated, user, router, accessToken]);
 
   const handleLogout = () => {
     logout();
     router.push('/');
   };
 
-  // Menu items
+  // Menu items (conditionnel selon isPremium)
   const menuItems = [
-    { href: '/dashboard', label: "Vue d'ensemble", icon: '📊' },
+    // Vue d'ensemble uniquement si Premium
+    ...(isPremium ? [{ href: '/dashboard', label: "Vue d'ensemble", icon: '📊' }] : []),
+    { href: '/dashboard/bookings', label: 'Réservations', icon: '📅' },
     { href: '/dashboard/profile', label: 'Profil', icon: '👤' },
     { href: '/dashboard/services', label: 'Services', icon: '🔧' },
-    { href: '/dashboard/availability', label: 'Disponibilités', icon: '📅' },
+    { href: '/dashboard/availability', label: 'Disponibilités', icon: '⏰' },
   ];
 
   // Loader pendant la vérification auth

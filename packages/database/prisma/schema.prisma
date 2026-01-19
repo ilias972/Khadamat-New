@@ -96,6 +96,7 @@ model City {
   slug      String   @unique
   createdAt DateTime @default(now())
 
+  users       User[]       @relation("UserCity")
   proProfiles ProProfile[]
   bookings    Booking[]
   boosts      ProBoost[]
@@ -122,7 +123,11 @@ model User {
   password  String
   firstName String
   lastName  String
-  address   String?     // Adresse complète du client (obligatoire pour réserver)
+
+  // Localisation CLIENT (pour validation géographique des bookings)
+  cityId    String?
+  city      City?       @relation("UserCity", fields: [cityId], references: [id])
+  address   String?     // Adresse précise (rue, numéro...)
 
   // CLIENT penalty system (PRD)
   clientLateCancelCount30d  Int        @default(0)
