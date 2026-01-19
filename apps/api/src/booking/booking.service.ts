@@ -123,10 +123,11 @@ export class BookingService {
    *
    * VALIDATION :
    * 1. Vérifie que l'utilisateur est un CLIENT
-   * 2. Vérifie que le client a renseigné son adresse (obligatoire)
-   * 3. Récupère le cityId depuis le profil du Pro
-   * 4. Vérifie que le slot est disponible (double check)
-   * 5. Crée le booking
+   * 2. Vérifie que le client a renseigné sa ville (cityId)
+   * 3. Vérifie que le client a renseigné son adresse
+   * 4. Validation géographique : cityId client === cityId pro
+   * 5. Vérifie que le slot est disponible (double check)
+   * 6. Crée le booking
    *
    * @param clientUserId - ID de l'utilisateur client
    * @param userRole - Rôle de l'utilisateur (pour validation)
@@ -143,19 +144,27 @@ export class BookingService {
       throw new ForbiddenException('Seuls les clients peuvent créer des réservations');
     }
 
-    // 2. VALIDATION ADRESSE
-    // Vérifie que le client a renseigné son adresse (obligatoire pour réserver)
+    // 2. RÉCUPÉRATION USER (CLIENT) + VALIDATION LOCALISATION
     const user = await this.prisma.user.findUnique({
       where: { id: clientUserId },
-      select: { id: true, address: true },
+      select: { id: true, cityId: true, address: true },
     });
 
-    if (!user || !user.address || user.address.trim() === '') {
+    if (!user) {
+      throw new NotFoundException('Utilisateur introuvable');
+    }
+
+    // Vérifier que le client a renseigné sa ville
+    if (!user.cityId) {
+      throw new BadRequestException('CITY_REQUIRED');
+    }
+
+    // Vérifier que le client a renseigné son adresse
+    if (!user.address || user.address.trim() === '') {
       throw new BadRequestException('ADDRESS_REQUIRED');
     }
 
-    // 3. RÉCUPÉRATION CITYID
-    // Le cityId vient du profil du Pro (source de vérité)
+    // 3. RÉCUPÉRATION PRO PROFILE
     const proProfile = await this.prisma.proProfile.findUnique({
       where: { userId: dto.proId },
       select: { cityId: true },
@@ -165,13 +174,19 @@ export class BookingService {
       throw new NotFoundException('Professionnel non trouvé');
     }
 
-    // 4. CONSTRUCTION TIMEZONE-SAFE
+    // 4. VALIDATION GÉOGRAPHIQUE
+    // Vérifier que le client et le pro sont dans la même ville
+    if (user.cityId !== proProfile.cityId) {
+      throw new BadRequestException('CITY_MISMATCH');
+    }
+
+    // 5. CONSTRUCTION TIMEZONE-SAFE
     // On crée une date locale explicite sans passer par UTC direct
     const [year, month, day] = dto.date.split('-').map(Number);
     const [hour, minute] = dto.time.split(':').map(Number);
     const timeSlot = new Date(year, month - 1, day, hour, minute);
 
-    // 5. DOUBLE CHECK DISPONIBILITÉ
+    // 6. DOUBLE CHECK DISPONIBILITÉ
     const availableSlots = await this.getAvailableSlots({
       proId: dto.proId,
       date: dto.date,
@@ -182,7 +197,7 @@ export class BookingService {
       throw new ConflictException('Ce créneau n\'est plus disponible');
     }
 
-    // 6. CRÉATION BOOKING
+    // 7. CRÉATION BOOKING
     // expiresAt = timeSlot + 24 heures (PRD: expiration si pas de confirmation)
     const booking = await this.prisma.booking.create({
       data: {

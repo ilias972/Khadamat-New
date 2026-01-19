@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import Header from '@/components/Header';
-import { patchJSON } from '@/lib/api';
+import { getJSON, patchJSON } from '@/lib/api';
 
 /**
  * Profile Page
@@ -24,9 +24,14 @@ export default function ProfilePage() {
   const [isEditing, setIsEditing] = useState(false);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [cityId, setCityId] = useState('');
   const [address, setAddress] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+
+  // Liste des villes
+  const [cities, setCities] = useState<Array<{ id: string; name: string }>>([]);
+  const [loadingCities, setLoadingCities] = useState(true);
 
   // Anti-glitch Hydratation
   useEffect(() => {
@@ -40,11 +45,30 @@ export default function ProfilePage() {
     }
   }, [mounted, isAuthenticated, router]);
 
+  // Fetch cities
+  useEffect(() => {
+    const fetchCities = async () => {
+      try {
+        setLoadingCities(true);
+        const data = await getJSON<Array<{ id: string; name: string; slug: string }>>('/public/cities');
+        setCities(data);
+      } catch (error) {
+        console.error('Error fetching cities:', error);
+        setCities([]);
+      } finally {
+        setLoadingCities(false);
+      }
+    };
+
+    fetchCities();
+  }, []);
+
   // Initialiser le formulaire avec les données de l'utilisateur
   useEffect(() => {
     if (user) {
       setFirstName(user.firstName || '');
       setLastName(user.lastName || '');
+      setCityId(user.cityId || '');
       setAddress(user.address || '');
     }
   }, [user]);
@@ -60,6 +84,7 @@ export default function ProfilePage() {
       const data = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
+        cityId: cityId || undefined,
         address: address.trim(),
       };
 
@@ -85,6 +110,7 @@ export default function ProfilePage() {
     if (user) {
       setFirstName(user.firstName || '');
       setLastName(user.lastName || '');
+      setCityId(user.cityId || '');
       setAddress(user.address || '');
     }
     setIsEditing(false);
@@ -234,10 +260,26 @@ export default function ProfilePage() {
                   </span>
                 </div>
 
+                {/* Ville */}
+                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Ville
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                    {user?.cityId ? (
+                      cities.find((c) => c.id === user.cityId)?.name || 'Chargement...'
+                    ) : (
+                      <span className="text-zinc-500 dark:text-zinc-400 italic">
+                        Non renseigné
+                      </span>
+                    )}
+                  </span>
+                </div>
+
                 {/* Adresse */}
                 <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
                   <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Adresse
+                    Adresse précise
                   </span>
                   <span className="font-medium text-zinc-900 dark:text-zinc-50">
                     {user?.address || (
@@ -306,10 +348,31 @@ export default function ProfilePage() {
                   />
                 </div>
 
-                {/* Adresse */}
+                {/* Ville */}
                 <div>
                   <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
-                    Adresse
+                    Ville
+                  </label>
+                  <select
+                    value={cityId}
+                    onChange={(e) => setCityId(e.target.value)}
+                    required
+                    disabled={loadingCities}
+                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent disabled:opacity-50"
+                  >
+                    <option value="">Sélectionnez votre ville</option>
+                    {cities.map((city) => (
+                      <option key={city.id} value={city.id}>
+                        {city.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Adresse précise */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                    Adresse précise
                   </label>
                   <input
                     type="text"
@@ -317,7 +380,7 @@ export default function ProfilePage() {
                     onChange={(e) => setAddress(e.target.value)}
                     required
                     className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
-                    placeholder="Votre adresse complète"
+                    placeholder="Rue, Numéro..."
                   />
                 </div>
 

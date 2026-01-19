@@ -152,6 +152,20 @@ export default function BookingPage() {
       if (error instanceof APIError) {
         if (error.statusCode === 409) {
           setBookingError('Créneau déjà pris, merci d\'en choisir un autre');
+        } else if (error.statusCode === 400 && error.message === 'CITY_REQUIRED') {
+          alert('Veuillez sélectionner votre ville dans votre profil');
+          router.push('/profile');
+          return;
+        } else if (error.statusCode === 400 && error.message === 'CITY_MISMATCH') {
+          setBookingError('Ce professionnel n\'intervient pas dans votre ville. Vérifiez votre profil.');
+          setTimeout(() => {
+            router.push('/profile');
+          }, 3000);
+          return;
+        } else if (error.statusCode === 400 && error.message === 'ADDRESS_REQUIRED') {
+          alert('Veuillez renseigner votre adresse dans votre profil');
+          router.push('/profile');
+          return;
         } else {
           setBookingError(error.message || 'Erreur lors de la réservation');
         }

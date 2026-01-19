@@ -121,6 +121,18 @@ export default function Header() {
                         </Link>
                       )}
 
+                      {/* Mes Réservations (CLIENT uniquement) */}
+                      {user?.role === 'CLIENT' && (
+                        <Link
+                          href="/client/bookings"
+                          onClick={() => setIsDropdownOpen(false)}
+                          className="flex items-center gap-3 px-4 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition"
+                        >
+                          <span className="text-lg">📅</span>
+                          <span>Mes Réservations</span>
+                        </Link>
+                      )}
+
                       {/* Mon Compte */}
                       <Link
                         href="/profile"
