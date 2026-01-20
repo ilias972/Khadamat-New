@@ -122,4 +122,81 @@ export class BookingController {
   ) {
     return this.bookingService.updateBookingStatus(id, req.user.id, req.user.role, dto);
   }
+
+  /**
+   * PATCH /api/bookings/:id/duration
+   *
+   * Permet au PRO de modifier la durée d'une réservation PENDING.
+   * Route protégée (authentification requise).
+   * Réservé aux PRO pour leurs propres réservations.
+   *
+   * Contraintes :
+   * - Seul le PRO propriétaire peut modifier
+   * - Seulement si booking.status === 'PENDING'
+   * - Une seule modification autorisée (isModifiedByPro === false)
+   * - Vérifie la disponibilité des créneaux consécutifs si duration > 1h
+   *
+   * Body :
+   * - duration : number (1-8)
+   *
+   * @returns Booking mis à jour avec status WAITING_FOR_CLIENT
+   */
+  @Patch('bookings/:id/duration')
+  @UseGuards(JwtAuthGuard)
+  async updateBookingDuration(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: { duration: number },
+  ) {
+    return this.bookingService.updateBooking(id, req.user.id, req.user.role, body.duration);
+  }
+
+  /**
+   * PATCH /api/bookings/:id/respond
+   *
+   * Permet au CLIENT de répondre à une modification de durée proposée par le PRO.
+   * Route protégée (authentification requise).
+   * Réservé aux CLIENT pour leurs propres réservations.
+   *
+   * Contraintes :
+   * - Seul le CLIENT propriétaire peut répondre
+   * - Seulement si booking.status === 'WAITING_FOR_CLIENT'
+   *
+   * Body :
+   * - accept : boolean (true = accepter, false = refuser)
+   *
+   * @returns Booking mis à jour avec status CONFIRMED ou DECLINED
+   */
+  @Patch('bookings/:id/respond')
+  @UseGuards(JwtAuthGuard)
+  async respondToModification(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: { accept: boolean },
+  ) {
+    return this.bookingService.respondToModification(id, req.user.id, req.user.role, body.accept);
+  }
+
+  /**
+   * PATCH /api/bookings/:id/complete
+   *
+   * Permet au PRO de marquer une réservation CONFIRMED comme COMPLETED.
+   * Route protégée (authentification requise).
+   * Réservé aux PRO pour leurs propres réservations.
+   *
+   * Contraintes :
+   * - Seul le PRO propriétaire peut marquer comme terminé
+   * - Seulement si booking.status === 'CONFIRMED'
+   * - Le créneau doit être dans le passé
+   *
+   * @returns Booking mis à jour avec status COMPLETED
+   */
+  @Patch('bookings/:id/complete')
+  @UseGuards(JwtAuthGuard)
+  async completeBooking(
+    @Param('id') id: string,
+    @Request() req,
+  ) {
+    return this.bookingService.completeBooking(id, req.user.id, req.user.role);
+  }
 }

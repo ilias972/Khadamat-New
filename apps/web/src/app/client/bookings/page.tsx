@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import Header from '@/components/Header';
 import BookingStatusBadge from '@/components/BookingStatusBadge';
-import { getJSON } from '@/lib/api';
+import { getJSON, patchJSON, APIError } from '@/lib/api';
 import type { BookingDashboardItem } from '@khadamat/contracts';
 
-type TabType = 'pending' | 'confirmed' | 'history';
+type TabType = 'pending' | 'waiting' | 'confirmed' | 'history';
 
 /**
  * Client Bookings Page
@@ -26,6 +26,7 @@ export default function ClientBookingsPage() {
   const [mounted, setMounted] = useState(false);
   const [bookings, setBookings] = useState<BookingDashboardItem[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
+  const [updatingBooking, setUpdatingBooking] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('pending');
 
   // Anti-glitch Hydratation
@@ -63,6 +64,34 @@ export default function ClientBookingsPage() {
     fetchBookings();
   }, [mounted, isAuthenticated, accessToken]);
 
+  // Respond to modification (CLIENT accepts/refuses duration change)
+  const handleRespondToModification = async (bookingId: string, accept: boolean) => {
+    if (!accessToken) return;
+
+    try {
+      setUpdatingBooking(bookingId);
+      await patchJSON(`/bookings/${bookingId}/respond`, { accept }, accessToken);
+
+      // Refresh bookings list
+      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+      setBookings(data);
+
+      if (accept) {
+        alert('Modification acceptée ! Votre réservation est confirmée.');
+      } else {
+        alert('Modification refusée. La réservation a été annulée.');
+      }
+    } catch (err) {
+      if (err instanceof APIError) {
+        alert(err.message);
+      } else {
+        alert('Erreur lors de la réponse');
+      }
+    } finally {
+      setUpdatingBooking(null);
+    }
+  };
+
   // Ne rien afficher avant hydratation
   if (!mounted) {
     return null;
@@ -84,6 +113,9 @@ export default function ClientBookingsPage() {
   const filteredBookings = bookings.filter((booking) => {
     if (activeTab === 'pending') {
       return booking.status === 'PENDING';
+    }
+    if (activeTab === 'waiting') {
+      return booking.status === 'WAITING_FOR_CLIENT';
     }
     if (activeTab === 'confirmed') {
       return booking.status === 'CONFIRMED';
@@ -129,6 +161,19 @@ export default function ClientBookingsPage() {
               En attente
               <span className="ml-2 px-2 py-0.5 bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200 rounded-full text-xs">
                 {bookings.filter((b) => b.status === 'PENDING').length}
+              </span>
+            </button>
+            <button
+              onClick={() => setActiveTab('waiting')}
+              className={`flex-1 px-6 py-4 text-center font-medium transition ${
+                activeTab === 'waiting'
+                  ? 'bg-zinc-100 dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 border-b-2 border-zinc-900 dark:border-zinc-50'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700/50'
+              }`}
+            >
+              À valider
+              <span className="ml-2 px-2 py-0.5 bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-200 rounded-full text-xs">
+                {bookings.filter((b) => b.status === 'WAITING_FOR_CLIENT').length}
               </span>
             </button>
             <button
@@ -225,7 +270,35 @@ export default function ClientBookingsPage() {
                         {booking.pro.city.name}
                       </p>
                     )}
+                    {/* Afficher la durée pour WAITING_FOR_CLIENT */}
+                    {booking.status === 'WAITING_FOR_CLIENT' && (
+                      <div className="mt-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg p-3">
+                        <p className="text-sm text-orange-900 dark:text-orange-100 font-medium">
+                          ⏱️ Le professionnel propose une durée de {booking.duration} heure{booking.duration > 1 ? 's' : ''}
+                        </p>
+                      </div>
+                    )}
                   </div>
+
+                  {/* Actions WAITING_FOR_CLIENT */}
+                  {booking.status === 'WAITING_FOR_CLIENT' && (
+                    <div className="flex gap-2 ml-4">
+                      <button
+                        onClick={() => handleRespondToModification(booking.id, true)}
+                        disabled={updatingBooking === booking.id}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        ✅ Accepter
+                      </button>
+                      <button
+                        onClick={() => handleRespondToModification(booking.id, false)}
+                        disabled={updatingBooking === booking.id}
+                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        ❌ Refuser
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

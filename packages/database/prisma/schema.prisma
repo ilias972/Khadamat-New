@@ -35,6 +35,7 @@ enum BookingStatus {
   CANCELLED_BY_PRO
   CANCELLED_AUTO_FIRST_CONFIRMED
   EXPIRED
+  WAITING_FOR_CLIENT
   COMPLETED
 }
 
@@ -236,6 +237,12 @@ model Booking {
 
   // durée choisie à la confirmation (H1/H2/H3/H4/H8)
   estimatedDuration  EstimatedDuration?  @default(H1)
+
+  // Durée en heures (pour modification PRO)
+  duration  Int  @default(1)
+
+  // Flag: Le PRO a-t-il modifié la demande ? (une seule fois max)
+  isModifiedByPro  Boolean  @default(false)
 
   // raison annulation (obligatoire quand actor=PRO sur CONFIRMED)
   cancelReason  String?
