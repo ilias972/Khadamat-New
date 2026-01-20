@@ -52,6 +52,7 @@ export const PublicProCardSchema = z.object({
   id: z.string(),
   firstName: z.string(),
   lastName: z.string(), // Format masqué : "B." ou "" si pas de lastName
+  phone: z.string().optional(), // Nécessaire pour le lien WhatsApp (exposé uniquement sur page détail)
   city: z.string(), // Nom de la ville (pas l'ID)
   isVerified: z.boolean(), // true si kycStatus === 'APPROVED'
   services: z.array(PublicServiceSchema), // Liste des services principaux
@@ -68,6 +69,7 @@ export const PublicProProfileSchema = z.object({
   id: z.string(),
   firstName: z.string(),
   lastName: z.string(), // Format masqué : "B." ou "" si pas de lastName
+  phone: z.string().optional(), // Nécessaire pour le lien WhatsApp après booking
   city: z.string(), // Nom de la ville
   isVerified: z.boolean(), // true si kycStatus === 'APPROVED'
   services: z.array(PublicServiceSchema), // Liste complète des services
