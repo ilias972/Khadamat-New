@@ -83,7 +83,11 @@ export class CatalogService {
   async getProDetail(id: string): Promise<PublicProProfile> {
     const pro = await this.prisma.user.findUnique({
       where: { id, role: 'PRO', status: 'ACTIVE' },
-      include: {
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        phone: true, // Ajout pour le lien WhatsApp
         proProfile: {
           include: {
             city: true,
@@ -135,6 +139,7 @@ export class CatalogService {
       id: user.id,
       firstName: user.firstName,
       lastName: lastNameInitial,
+      phone: user.phone, // Ajout pour le lien WhatsApp
       city: profile.city?.name || 'Maroc',
       isVerified: profile.kycStatus === 'APPROVED',
       services: servicesFormatted,

@@ -322,22 +322,43 @@ export default function BookingPage() {
             </div>
 
             {/* Action principale - WhatsApp */}
-            <a
-              href={(() => {
-                // Nettoyer le numéro de téléphone (ne garder que les chiffres)
-                const cleanPhone = pro?.phone?.replace(/[^\d]/g, '') || '';
-                // Encoder le message pour l'URL
-                const message = `Bonjour, je viens de réserver un créneau le ${selectedDate} à ${selectedSlot}. Je souhaite discuter des détails.`;
-                const encodedMessage = encodeURIComponent(message);
-                return `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
-              })()}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium mb-3"
-            >
-              <span className="text-xl">💬</span>
-              Discuter sur WhatsApp
-            </a>
+            {(() => {
+              // Nettoyage : garde uniquement les chiffres
+              const cleanPhone = (pro?.phone ?? '').replace(/[^\d]/g, '');
+
+              // Encoder le message pour l'URL
+              const message = `Bonjour, je viens de réserver un créneau le ${selectedDate} à ${selectedSlot}. Je souhaite discuter des détails.`;
+              const encodedMessage = encodeURIComponent(message);
+
+              // Lien valide uniquement si > 6 chiffres
+              const whatsappUrl = cleanPhone.length > 6
+                ? `https://wa.me/${cleanPhone}?text=${encodedMessage}`
+                : null;
+
+              if (whatsappUrl) {
+                return (
+                  <a
+                    href={whatsappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium mb-3"
+                  >
+                    <span className="text-xl">💬</span>
+                    Discuter sur WhatsApp
+                  </a>
+                );
+              } else {
+                return (
+                  <button
+                    disabled
+                    className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-zinc-300 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 rounded-lg cursor-not-allowed font-medium mb-3"
+                  >
+                    <span className="text-xl">💬</span>
+                    Numéro indisponible
+                  </button>
+                );
+              }
+            })()}
 
             {/* Action secondaire */}
             <button
