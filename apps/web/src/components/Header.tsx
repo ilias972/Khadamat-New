@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 
 /**
@@ -17,6 +17,7 @@ import { useAuthStore } from '@/store/authStore';
  */
 export default function Header() {
   const router = useRouter();
+  const pathname = usePathname();
   const { user, isAuthenticated, logout } = useAuthStore();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -52,12 +53,15 @@ export default function Header() {
 
           {/* Navigation */}
           <nav className="flex items-center gap-6">
-            <Link
-              href="/"
-              className="text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-50 transition"
-            >
-              Accueil
-            </Link>
+            {/* Masquer "Accueil" si on est déjà sur la page d'accueil */}
+            {pathname !== '/' && (
+              <Link
+                href="/"
+                className="text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-50 transition"
+              >
+                Accueil
+              </Link>
+            )}
 
             {/* Affichage conditionnel selon l'état d'authentification */}
             {!isAuthenticated ? (

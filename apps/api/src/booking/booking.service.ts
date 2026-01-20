@@ -352,13 +352,25 @@ export class BookingService {
     // 5. UPDATE
     const updatedBooking = await this.prisma.booking.update({
       where: { id: bookingId },
-      data: { status: dto.status },
+      data: {
+        status: dto.status,
+        ...(dto.status === 'CONFIRMED' && { confirmedAt: new Date() }),
+      },
       select: {
         id: true,
         status: true,
         timeSlot: true,
+        proId: true,
       },
     });
+
+    // 6. AUTOMATION BACK-TO-BACK (si confirmé)
+    if (dto.status === 'CONFIRMED') {
+      await this.autoCompletePreviousBooking(
+        updatedBooking.proId,
+        updatedBooking.timeSlot,
+      );
+    }
 
     return updatedBooking;
   }
@@ -541,8 +553,17 @@ export class BookingService {
         status: true,
         timeSlot: true,
         duration: true,
+        proId: true,
       },
     });
+
+    // 6. AUTOMATION BACK-TO-BACK (si accepté)
+    if (accept) {
+      await this.autoCompletePreviousBooking(
+        updatedBooking.proId,
+        updatedBooking.timeSlot,
+      );
+    }
 
     return updatedBooking;
   }
@@ -620,5 +641,79 @@ export class BookingService {
     });
 
     return updatedBooking;
+  }
+
+  /**
+   * autoCompletePreviousBooking (Automation Back-to-Back)
+   *
+   * Logique "Domino" : Quand une réservation passe à CONFIRMED,
+   * vérifie s'il existe une réservation précédente back-to-back
+   * pour le même PRO et la marque automatiquement comme COMPLETED.
+   *
+   * Condition stricte : previousBooking.startTime + previousBooking.duration === currentStartTime
+   *
+   * @param proId - ID du PRO
+   * @param currentStartTime - Heure de début de la réservation actuelle
+   */
+  private async autoCompletePreviousBooking(
+    proId: string,
+    currentStartTime: Date,
+  ) {
+    try {
+      // Calculer le début de la journée pour filtrer par même jour
+      const startOfDay = new Date(currentStartTime);
+      startOfDay.setHours(0, 0, 0, 0);
+
+      const endOfDay = new Date(currentStartTime);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      // Chercher toutes les réservations CONFIRMED du PRO pour ce jour
+      const confirmedBookings = await this.prisma.booking.findMany({
+        where: {
+          proId: proId,
+          status: 'CONFIRMED',
+          timeSlot: {
+            gte: startOfDay,
+            lte: endOfDay,
+          },
+        },
+        select: {
+          id: true,
+          timeSlot: true,
+          duration: true,
+        },
+        orderBy: {
+          timeSlot: 'asc',
+        },
+      });
+
+      // Vérifier chaque booking pour trouver celui qui se termine exactement au début du current
+      for (const previousBooking of confirmedBookings) {
+        // Calculer l'heure de fin de previousBooking
+        const previousEndTime = new Date(
+          previousBooking.timeSlot.getTime() +
+            previousBooking.duration * 60 * 60 * 1000,
+        );
+
+        // Comparaison stricte : previousEndTime === currentStartTime
+        // On compare les timestamps pour éviter les problèmes de millisecondes
+        if (previousEndTime.getTime() === currentStartTime.getTime()) {
+          // Marquer automatiquement comme COMPLETED
+          await this.prisma.booking.update({
+            where: { id: previousBooking.id },
+            data: {
+              status: 'COMPLETED',
+              completedAt: new Date(),
+            },
+          });
+
+          // Une seule réservation peut être back-to-back, on arrête
+          break;
+        }
+      }
+    } catch (error) {
+      // Ne pas bloquer la confirmation en cas d'erreur automation
+      console.error('Erreur automation back-to-back:', error);
+    }
   }
 }

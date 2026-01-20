@@ -64,6 +64,14 @@ export const PublicUserSchema = z.object({
   role: RoleSchema,
   status: z.string().optional(),
   createdAt: z.string().optional(),
+  // Phase 10 V4-B: Hydratation complète
+  cityId: z.string().nullable().optional(),
+  addressLine: z.string().nullable().optional(),
+  city: z.object({
+    id: z.string(),
+    name: z.string(),
+  }).nullable().optional(),
+  isPremium: z.boolean().optional(), // Pour les PRO
 });
 
 export type PublicUser = z.infer<typeof PublicUserSchema>;

@@ -40,6 +40,18 @@ export class UsersService {
         role: true,
         cityId: true,
         addressLine: true,
+        city: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        proProfile: {
+          select: {
+            userId: true,
+            isPremium: true,
+          },
+        },
       },
     });
   }

@@ -29,6 +29,11 @@ export default function ProBookingsPage() {
   const [updatingBooking, setUpdatingBooking] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('pending');
 
+  // Modale de modification de durée
+  const [showDurationModal, setShowDurationModal] = useState(false);
+  const [selectedBookingForDuration, setSelectedBookingForDuration] = useState<string | null>(null);
+  const [selectedDuration, setSelectedDuration] = useState<number>(1);
+
   // Anti-glitch Hydratation
   useEffect(() => {
     setMounted(true);
@@ -86,27 +91,30 @@ export default function ProBookingsPage() {
     }
   };
 
+  // Open duration modal
+  const openDurationModal = (bookingId: string) => {
+    setSelectedBookingForDuration(bookingId);
+    setSelectedDuration(1);
+    setShowDurationModal(true);
+  };
+
   // Update booking duration (PRO modifies PENDING booking)
-  const handleUpdateDuration = async (bookingId: string) => {
-    if (!accessToken) return;
-
-    const durationInput = prompt('Nouvelle durée en heures (1-8) :');
-    if (!durationInput) return;
-
-    const duration = parseInt(durationInput, 10);
-    if (isNaN(duration) || duration < 1 || duration > 8) {
-      alert('Veuillez entrer une durée valide entre 1 et 8 heures');
-      return;
-    }
+  const handleUpdateDuration = async () => {
+    if (!accessToken || !selectedBookingForDuration) return;
 
     try {
-      setUpdatingBooking(bookingId);
-      await patchJSON(`/bookings/${bookingId}/duration`, { duration }, accessToken);
+      setUpdatingBooking(selectedBookingForDuration);
+      await patchJSON(
+        `/bookings/${selectedBookingForDuration}/duration`,
+        { duration: selectedDuration },
+        accessToken,
+      );
 
       // Refresh bookings list
       const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
       setBookings(data);
       alert('Durée modifiée ! Le client doit maintenant valider.');
+      setShowDurationModal(false);
     } catch (err) {
       if (err instanceof APIError) {
         alert(err.message);
@@ -327,7 +335,7 @@ export default function ProBookingsPage() {
                       {/* Bouton Modifier Durée (si pas encore modifié) */}
                       {!booking.isModifiedByPro && (
                         <button
-                          onClick={() => handleUpdateDuration(booking.id)}
+                          onClick={() => openDurationModal(booking.id)}
                           disabled={updatingBooking === booking.id}
                           className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                         >
@@ -355,6 +363,53 @@ export default function ProBookingsPage() {
           )}
         </div>
       </div>
+
+      {/* Modale Modifier Durée */}
+      {showDurationModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-zinc-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 mb-4">
+              Modifier la durée
+            </h2>
+
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                Durée (en heures)
+              </label>
+              <select
+                value={selectedDuration}
+                onChange={(e) => setSelectedDuration(parseInt(e.target.value, 10))}
+                className="w-full px-4 py-3 border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((hours) => (
+                  <option key={hours} value={hours}>
+                    {hours} heure{hours > 1 ? 's' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-2">
+                Le système vérifiera automatiquement la disponibilité des créneaux consécutifs.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDurationModal(false)}
+                className="flex-1 px-4 py-2 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 transition font-medium"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleUpdateDuration}
+                disabled={updatingBooking !== null}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {updatingBooking ? 'Envoi...' : 'Confirmer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }
