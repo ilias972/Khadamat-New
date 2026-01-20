@@ -40,6 +40,11 @@ export default function BookingStatusBadge({ status }: BookingStatusBadgeProps) 
           label: 'Terminé',
           className: 'bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200 border-blue-200 dark:border-blue-800',
         };
+      case 'CANCELLED_AUTO_OVERLAP':
+        return {
+          label: 'Annulé (conflit)',
+          className: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700',
+        };
       case 'CANCELLED':
         return {
           label: 'Annulé',

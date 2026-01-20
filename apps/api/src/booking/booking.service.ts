@@ -63,8 +63,8 @@ export class BookingService {
       return []; // Pas de dispo ou jour repos -> Pas de slots
     }
 
-    // 3. BOOKINGS EXISTANTS
-    // Récupère les bookings du Pro pour cette date (00:00 à 23:59)
+    // 3. BOOKINGS EXISTANTS - Logique d'intervalle
+    // Récupère UNIQUEMENT les bookings CONFIRMED (PENDING/WAITING ne bloquent pas)
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -78,23 +78,28 @@ export class BookingService {
           gte: startOfDay,
           lte: endOfDay,
         },
-        status: {
-          in: ['PENDING', 'CONFIRMED', 'COMPLETED'],
-        },
+        status: 'CONFIRMED', // SEULS les CONFIRMED bloquent
       },
       select: {
         timeSlot: true,
+        duration: true, // Nécessaire pour la logique d'intervalle
       },
     });
 
-    // Convertir les bookings en Set de "HH:MM" pour lookup rapide
-    const occupiedSlots = new Set(
-      existingBookings.map((b) => {
-        const hours = b.timeSlot.getHours().toString().padStart(2, '0');
-        const minutes = b.timeSlot.getMinutes().toString().padStart(2, '0');
-        return `${hours}:${minutes}`;
-      }),
-    );
+    // Convertir les bookings en Set de "HH:MM" avec logique d'intervalle
+    // Une réservation de 2h bloque 2 créneaux consécutifs
+    const occupiedSlots = new Set<string>();
+    for (const booking of existingBookings) {
+      const duration = booking.duration || 1; // Default 1h si non défini
+
+      // Marquer tous les créneaux couverts par cette réservation
+      for (let hour = 0; hour < duration; hour++) {
+        const slotTime = new Date(booking.timeSlot.getTime() + hour * 60 * 60 * 1000);
+        const hours = slotTime.getHours().toString().padStart(2, '0');
+        const minutes = slotTime.getMinutes().toString().padStart(2, '0');
+        occupiedSlots.add(`${hours}:${minutes}`);
+      }
+    }
 
     // 4. GÉNÉRATION DES SLOTS
     // Génère des créneaux toutes les 60 minutes entre startMin et endMin
@@ -325,54 +330,110 @@ export class BookingService {
       throw new ForbiddenException('Seuls les professionnels peuvent modifier le statut des réservations');
     }
 
-    // 2. RÉCUPÉRATION BOOKING
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      select: {
-        id: true,
-        proId: true,
-        status: true,
-      },
+    // Si DECLINED, pas besoin de transaction
+    if (dto.status === 'DECLINED') {
+      const booking = await this.prisma.booking.findUnique({
+        where: { id: bookingId },
+        select: { id: true, proId: true, status: true },
+      });
+
+      if (!booking) throw new NotFoundException('Réservation introuvable');
+      if (booking.proId !== userId) throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
+      if (booking.status !== 'PENDING') throw new BadRequestException('Seules les réservations en attente peuvent être modifiées');
+
+      return this.prisma.booking.update({
+        where: { id: bookingId },
+        data: { status: 'DECLINED' },
+        select: { id: true, status: true, timeSlot: true, proId: true },
+      });
+    }
+
+    // CONFIRMED → Transaction atomique avec Winner-Takes-All
+    return this.prisma.$transaction(async (tx) => {
+      // 2. RÉCUPÉRATION BOOKING
+      const booking = await tx.booking.findUnique({
+        where: { id: bookingId },
+        select: {
+          id: true,
+          proId: true,
+          status: true,
+          timeSlot: true,
+          duration: true,
+        },
+      });
+
+      if (!booking) throw new NotFoundException('Réservation introuvable');
+
+      // 3. VÉRIFICATION OWNERSHIP
+      if (booking.proId !== userId) {
+        throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
+      }
+
+      // 4. VÉRIFICATION STATUT
+      if (booking.status !== 'PENDING') {
+        throw new BadRequestException('Seules les réservations en attente peuvent être modifiées');
+      }
+
+      // 5. CALCUL INTERVALLE CIBLE
+      const targetStart = booking.timeSlot;
+      const targetEnd = this.computeEndTime(targetStart, booking.duration);
+
+      // 6. VÉRIFICATION CONFLITS AVEC CONFIRMED EXISTANTS
+      const startOfDay = new Date(targetStart);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetStart);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const confirmedBookings = await tx.booking.findMany({
+        where: {
+          proId: booking.proId,
+          status: 'CONFIRMED',
+          timeSlot: { gte: startOfDay, lte: endOfDay },
+        },
+        select: { id: true, timeSlot: true, duration: true },
+      });
+
+      for (const confirmed of confirmedBookings) {
+        const confirmedEnd = this.computeEndTime(confirmed.timeSlot, confirmed.duration);
+        if (this.overlaps(targetStart, targetEnd, confirmed.timeSlot, confirmedEnd)) {
+          throw new BadRequestException("Ce créneau n'est plus disponible.");
+        }
+      }
+
+      // 7. CONFIRMATION
+      const updatedBooking = await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'CONFIRMED', confirmedAt: new Date() },
+        select: { id: true, status: true, timeSlot: true, proId: true, duration: true },
+      });
+
+      // 8. NETTOYAGE - Annuler les réservations concurrentes
+      const competingBookings = await tx.booking.findMany({
+        where: {
+          proId: booking.proId,
+          id: { not: bookingId },
+          status: { in: ['PENDING', 'WAITING_FOR_CLIENT'] },
+          timeSlot: { gte: startOfDay, lte: endOfDay },
+        },
+        select: { id: true, timeSlot: true, duration: true },
+      });
+
+      for (const competing of competingBookings) {
+        const competingEnd = this.computeEndTime(competing.timeSlot, competing.duration);
+        if (this.overlaps(targetStart, targetEnd, competing.timeSlot, competingEnd)) {
+          await tx.booking.update({
+            where: { id: competing.id },
+            data: { status: 'CANCELLED_AUTO_OVERLAP' },
+          });
+        }
+      }
+
+      return updatedBooking;
+    }).then(async (booking) => {
+      // 9. AUTOMATION BACK-TO-BACK (hors transaction)
+      await this.autoCompletePreviousBooking(booking.proId, booking.timeSlot);
+      return booking;
     });
-
-    if (!booking) {
-      throw new NotFoundException('Réservation introuvable');
-    }
-
-    // 3. VÉRIFICATION OWNERSHIP
-    if (booking.proId !== userId) {
-      throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
-    }
-
-    // 4. VÉRIFICATION STATUT
-    if (booking.status !== 'PENDING') {
-      throw new BadRequestException('Seules les réservations en attente peuvent être modifiées');
-    }
-
-    // 5. UPDATE
-    const updatedBooking = await this.prisma.booking.update({
-      where: { id: bookingId },
-      data: {
-        status: dto.status,
-        ...(dto.status === 'CONFIRMED' && { confirmedAt: new Date() }),
-      },
-      select: {
-        id: true,
-        status: true,
-        timeSlot: true,
-        proId: true,
-      },
-    });
-
-    // 6. AUTOMATION BACK-TO-BACK (si confirmé)
-    if (dto.status === 'CONFIRMED') {
-      await this.autoCompletePreviousBooking(
-        updatedBooking.proId,
-        updatedBooking.timeSlot,
-      );
-    }
-
-    return updatedBooking;
   }
 
   /**
@@ -493,7 +554,7 @@ export class BookingService {
    *
    * RÈGLES :
    * - Booking doit être en statut WAITING_FOR_CLIENT
-   * - Si accept: passe en CONFIRMED
+   * - Si accept: passe en CONFIRMED avec vérification des conflits
    * - Si refuse: passe en DECLINED
    *
    * @param bookingId - ID du booking
@@ -513,59 +574,111 @@ export class BookingService {
       throw new ForbiddenException('Seuls les clients peuvent répondre aux modifications');
     }
 
-    // 2. RÉCUPÉRATION BOOKING
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      select: {
-        id: true,
-        clientId: true,
-        status: true,
-      },
+    // Si DECLINED, pas besoin de transaction
+    if (!accept) {
+      const booking = await this.prisma.booking.findUnique({
+        where: { id: bookingId },
+        select: { id: true, clientId: true, status: true },
+      });
+
+      if (!booking) throw new NotFoundException('Réservation introuvable');
+      if (booking.clientId !== userId) throw new ForbiddenException('Vous ne pouvez répondre qu\'à vos propres réservations');
+      if (booking.status !== 'WAITING_FOR_CLIENT') throw new BadRequestException('Cette réservation n\'attend pas de réponse');
+
+      return this.prisma.booking.update({
+        where: { id: bookingId },
+        data: { status: 'DECLINED' },
+        select: { id: true, status: true, timeSlot: true, proId: true },
+      });
+    }
+
+    // CONFIRMED → Transaction atomique avec Winner-Takes-All
+    return this.prisma.$transaction(async (tx) => {
+      // 2. RÉCUPÉRATION BOOKING
+      const booking = await tx.booking.findUnique({
+        where: { id: bookingId },
+        select: {
+          id: true,
+          clientId: true,
+          proId: true,
+          status: true,
+          timeSlot: true,
+          duration: true,
+        },
+      });
+
+      if (!booking) throw new NotFoundException('Réservation introuvable');
+
+      // 3. VÉRIFICATION OWNERSHIP
+      if (booking.clientId !== userId) {
+        throw new ForbiddenException('Vous ne pouvez répondre qu\'à vos propres réservations');
+      }
+
+      // 4. VÉRIFICATION STATUT
+      if (booking.status !== 'WAITING_FOR_CLIENT') {
+        throw new BadRequestException('Cette réservation n\'attend pas de réponse');
+      }
+
+      // 5. CALCUL INTERVALLE CIBLE
+      const targetStart = booking.timeSlot;
+      const targetEnd = this.computeEndTime(targetStart, booking.duration);
+
+      // 6. VÉRIFICATION CONFLITS AVEC CONFIRMED EXISTANTS
+      const startOfDay = new Date(targetStart);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetStart);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const confirmedBookings = await tx.booking.findMany({
+        where: {
+          proId: booking.proId,
+          status: 'CONFIRMED',
+          timeSlot: { gte: startOfDay, lte: endOfDay },
+        },
+        select: { id: true, timeSlot: true, duration: true },
+      });
+
+      for (const confirmed of confirmedBookings) {
+        const confirmedEnd = this.computeEndTime(confirmed.timeSlot, confirmed.duration);
+        if (this.overlaps(targetStart, targetEnd, confirmed.timeSlot, confirmedEnd)) {
+          throw new BadRequestException("Ce créneau n'est plus disponible.");
+        }
+      }
+
+      // 7. CONFIRMATION
+      const updatedBooking = await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'CONFIRMED', confirmedAt: new Date() },
+        select: { id: true, status: true, timeSlot: true, proId: true, duration: true },
+      });
+
+      // 8. NETTOYAGE - Annuler les réservations concurrentes
+      const competingBookings = await tx.booking.findMany({
+        where: {
+          proId: booking.proId,
+          id: { not: bookingId },
+          status: { in: ['PENDING', 'WAITING_FOR_CLIENT'] },
+          timeSlot: { gte: startOfDay, lte: endOfDay },
+        },
+        select: { id: true, timeSlot: true, duration: true },
+      });
+
+      for (const competing of competingBookings) {
+        const competingEnd = this.computeEndTime(competing.timeSlot, competing.duration);
+        if (this.overlaps(targetStart, targetEnd, competing.timeSlot, competingEnd)) {
+          await tx.booking.update({
+            where: { id: competing.id },
+            data: { status: 'CANCELLED_AUTO_OVERLAP' },
+          });
+        }
+      }
+
+      return updatedBooking;
+    }).then(async (booking) => {
+      // 9. AUTOMATION BACK-TO-BACK (hors transaction)
+      await this.autoCompletePreviousBooking(booking.proId, booking.timeSlot);
+      return booking;
     });
-
-    if (!booking) {
-      throw new NotFoundException('Réservation introuvable');
-    }
-
-    // 3. VÉRIFICATION OWNERSHIP
-    if (booking.clientId !== userId) {
-      throw new ForbiddenException('Vous ne pouvez répondre qu\'à vos propres réservations');
-    }
-
-    // 4. VÉRIFICATION STATUT
-    if (booking.status !== 'WAITING_FOR_CLIENT') {
-      throw new BadRequestException('Cette réservation n\'attend pas de réponse');
-    }
-
-    // 5. UPDATE
-    const newStatus = accept ? 'CONFIRMED' : 'DECLINED';
-    const updateData: any = { status: newStatus };
-
-    if (accept) {
-      updateData.confirmedAt = new Date();
-    }
-
-    const updatedBooking = await this.prisma.booking.update({
-      where: { id: bookingId },
-      data: updateData,
-      select: {
-        id: true,
-        status: true,
-        timeSlot: true,
-        duration: true,
-        proId: true,
-      },
-    });
-
-    // 6. AUTOMATION BACK-TO-BACK (si accepté)
-    if (accept) {
-      await this.autoCompletePreviousBooking(
-        updatedBooking.proId,
-        updatedBooking.timeSlot,
-      );
-    }
-
-    return updatedBooking;
   }
 
   /**
@@ -641,6 +754,32 @@ export class BookingService {
     });
 
     return updatedBooking;
+  }
+
+  /**
+   * computeEndTime
+   * Calcule l'heure de fin d'une réservation
+   * @param start - Heure de début
+   * @param duration - Durée en heures
+   * @returns Heure de fin
+   */
+  private computeEndTime(start: Date, duration: number): Date {
+    return new Date(start.getTime() + duration * 60 * 60 * 1000);
+  }
+
+  /**
+   * overlaps
+   * Vérifie si deux intervalles de temps se chevauchent
+   * @param startA - Début intervalle A
+   * @param endA - Fin intervalle A
+   * @param startB - Début intervalle B
+   * @param endB - Fin intervalle B
+   * @returns true si chevauchement
+   */
+  private overlaps(startA: Date, endA: Date, startB: Date, endB: Date): boolean {
+    // Deux intervalles se chevauchent si :
+    // startA < endB && startB < endA
+    return startA < endB && startB < endA;
   }
 
   /**

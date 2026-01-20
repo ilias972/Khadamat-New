@@ -323,7 +323,14 @@ export default function BookingPage() {
 
             {/* Action principale - WhatsApp */}
             <a
-              href={`https://wa.me/${pro?.phone}?text=Bonjour, je viens de réserver un créneau le ${selectedDate} à ${selectedSlot}. Je souhaite discuter des détails.`}
+              href={(() => {
+                // Nettoyer le numéro de téléphone (ne garder que les chiffres)
+                const cleanPhone = pro?.phone?.replace(/[^\d]/g, '') || '';
+                // Encoder le message pour l'URL
+                const message = `Bonjour, je viens de réserver un créneau le ${selectedDate} à ${selectedSlot}. Je souhaite discuter des détails.`;
+                const encodedMessage = encodeURIComponent(message);
+                return `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
+              })()}
               target="_blank"
               rel="noopener noreferrer"
               className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium mb-3"
