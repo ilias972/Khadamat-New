@@ -69,6 +69,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     // Vue d'ensemble uniquement si Premium
     ...(isPremium ? [{ href: '/dashboard', label: "Vue d'ensemble", icon: '📊' }] : []),
     { href: '/dashboard/bookings', label: 'Réservations', icon: '📅' },
+    { href: '/dashboard/history', label: 'Historique', icon: '📋' },
     { href: '/dashboard/profile', label: 'Profil', icon: '👤' },
     { href: '/dashboard/services', label: 'Services', icon: '🔧' },
     { href: '/dashboard/availability', label: 'Disponibilités', icon: '⏰' },

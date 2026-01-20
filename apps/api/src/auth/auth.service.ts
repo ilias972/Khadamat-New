@@ -104,15 +104,36 @@ export class AuthService {
 
     const loginValue = dto.login.trim();
 
-    // 1. Chercher par Email OU Phone
-    // On cherche si le login correspond à l'email OU au téléphone
-    // On optimise en normalisant l'email en minuscule pour la recherche
+    // 1. Chercher par Email OU Phone avec relations complètes
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [
           { email: loginValue.toLowerCase() },
           { phone: loginValue },
         ],
+      },
+      select: {
+        id: true,
+        email: true,
+        phone: true,
+        password: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        cityId: true,
+        addressLine: true,
+        city: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        proProfile: {
+          select: {
+            userId: true,
+            isPremium: true,
+          },
+        },
       },
     });
 
@@ -134,7 +155,34 @@ export class AuthService {
    * Helper interne pour connecter après inscription
    */
   private async loginAfterRegister(user: any) {
-    return this.createAuthPayload(user);
+    // Recharger le user avec toutes les relations
+    const fullUser = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: {
+        id: true,
+        email: true,
+        phone: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        cityId: true,
+        addressLine: true,
+        city: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        proProfile: {
+          select: {
+            userId: true,
+            isPremium: true,
+          },
+        },
+      },
+    });
+
+    return this.createAuthPayload(fullUser);
   }
 
   /**
@@ -142,15 +190,19 @@ export class AuthService {
    */
   private createAuthPayload(user: any) {
     const payload = { sub: user.id, email: user.email, role: user.role };
-    
+
     // Construction sécurisée du PublicUser (sans password)
     const publicUser: PublicUser = {
       id: user.id,
-      email: user.email ?? null, // Gère proprement le null
+      email: user.email ?? null,
       phone: user.phone,
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role as 'CLIENT' | 'PRO' | 'ADMIN',
+      cityId: user.cityId ?? null,
+      addressLine: user.addressLine ?? null,
+      city: user.city ? { id: user.city.id, name: user.city.name } : null,
+      isPremium: user.proProfile?.isPremium ?? false,
     };
 
     return {
@@ -166,6 +218,28 @@ export class AuthService {
   async validateUser(userId: string): Promise<PublicUser | null> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        phone: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        cityId: true,
+        addressLine: true,
+        city: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        proProfile: {
+          select: {
+            userId: true,
+            isPremium: true,
+          },
+        },
+      },
     });
 
     if (!user) return null;
@@ -177,6 +251,10 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role as 'CLIENT' | 'PRO' | 'ADMIN',
+      cityId: user.cityId ?? null,
+      addressLine: user.addressLine ?? null,
+      city: user.city ? { id: user.city.id, name: user.city.name } : null,
+      isPremium: user.proProfile?.isPremium ?? false,
     };
   }
 }

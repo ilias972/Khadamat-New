@@ -20,6 +20,7 @@ interface ProData {
   id: string;
   firstName: string;
   lastName: string;
+  phone: string;
   city: { name: string };
 }
 
@@ -145,9 +146,7 @@ export default function BookingPage() {
       );
 
       setSuccessMessage('Réservation envoyée !');
-      setTimeout(() => {
-        router.push('/profile');
-      }, 1500);
+      // NE PAS rediriger automatiquement - afficher l'écran de succès
     } catch (error) {
       if (error instanceof APIError) {
         if (error.statusCode === 409) {
@@ -297,24 +296,61 @@ export default function BookingPage() {
       <Header />
 
       <main className="container mx-auto px-6 py-16 max-w-3xl">
-        {/* Success Message */}
-        {successMessage && (
-          <div className="mb-6 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 text-center">
-            <p className="text-green-800 dark:text-green-200 font-medium">
-              ✅ {successMessage}
-            </p>
-          </div>
-        )}
+        {/* Success Screen - Flux WhatsApp */}
+        {successMessage ? (
+          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-8">
+            <div className="text-center mb-8">
+              <div className="w-20 h-20 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-4xl">✅</span>
+              </div>
+              <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+                Demande envoyée avec succès !
+              </h1>
+              <p className="text-zinc-600 dark:text-zinc-400">
+                Votre réservation a été envoyée à {pro?.firstName} {pro?.lastName}
+              </p>
+            </div>
 
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
-            Réserver avec {pro?.firstName} {pro?.lastName}
-          </h1>
-          <p className="text-zinc-600 dark:text-zinc-400">
-            {pro?.city?.name}
-          </p>
-        </div>
+            {/* Détails réservation */}
+            <div className="bg-zinc-50 dark:bg-zinc-900 rounded-lg p-4 mb-6">
+              <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-2">
+                📅 {selectedDate} à {selectedSlot}
+              </p>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                📍 {pro?.city?.name}
+              </p>
+            </div>
+
+            {/* Action principale - WhatsApp */}
+            <a
+              href={`https://wa.me/${pro?.phone}?text=Bonjour, je viens de réserver un créneau le ${selectedDate} à ${selectedSlot}. Je souhaite discuter des détails.`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium mb-3"
+            >
+              <span className="text-xl">💬</span>
+              Discuter sur WhatsApp
+            </a>
+
+            {/* Action secondaire */}
+            <button
+              onClick={() => router.push('/client/bookings')}
+              className="w-full px-6 py-3 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition font-medium"
+            >
+              Voir mes réservations
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Header */}
+            <div className="mb-8">
+              <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+                Réserver avec {pro?.firstName} {pro?.lastName}
+              </h1>
+              <p className="text-zinc-600 dark:text-zinc-400">
+                {pro?.city?.name}
+              </p>
+            </div>
 
         {/* Date Selection */}
         <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6 mb-6">
@@ -400,6 +436,8 @@ export default function BookingPage() {
               {submitting ? 'Envoi en cours...' : 'Valider la réservation'}
             </button>
           </div>
+        )}
+          </>
         )}
       </main>
     </div>
