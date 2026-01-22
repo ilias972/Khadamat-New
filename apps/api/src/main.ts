@@ -1,7 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { json } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -12,16 +11,6 @@ async function bootstrap() {
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
-
-  // Body Parser avec capture du raw body pour Stripe Webhook
-  // Stripe nécessite le raw body pour vérifier la signature du webhook
-  app.use(json({
-    verify: (req: any, res, buf) => {
-      if (req.originalUrl.includes('/payment/webhook')) {
-        req.rawBody = buf.toString('utf8');
-      }
-    },
-  }));
 
   // Global prefix
   app.setGlobalPrefix('api');

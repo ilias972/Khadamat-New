@@ -8,7 +8,6 @@ import { ProModule } from './pro/pro.module';
 import { BookingModule } from './booking/booking.module';
 import { UsersModule } from './users/users.module';
 import { DashboardModule } from './dashboard/dashboard.module';
-import { PaymentModule } from './payment/payment.module';
 
 @Module({
   imports: [
@@ -23,7 +22,6 @@ import { PaymentModule } from './payment/payment.module';
     BookingModule,
     UsersModule,
     DashboardModule,
-    PaymentModule,
   ],
   controllers: [HealthController],
 })
