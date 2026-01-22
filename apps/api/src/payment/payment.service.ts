@@ -31,7 +31,7 @@ export class PaymentService {
     }
 
     this.stripe = new Stripe(secretKey, {
-      apiVersion: '2024-12-18.acacia', // Latest stable version
+      apiVersion: '2025-12-15.clover', // Latest stable version
     });
   }
 
@@ -358,28 +358,40 @@ export class PaymentService {
    */
   private async activatePremiumMonthly(proId: string, session: Stripe.Checkout.Session): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      // 1. Upsert ProSubscription
-      await tx.proSubscription.upsert({
+      // 1. Find or Create ProSubscription (logique manuelle car proUserId n'est pas unique)
+      const existing = await tx.proSubscription.findFirst({
         where: { proUserId: proId },
-        create: {
-          proUserId: proId,
-          plan: 'PREMIUM_MONTHLY_NO_COMMIT',
-          status: 'ACTIVE',
-          stripeCustomerId: session.customer as string,
-          stripeSubscriptionId: session.subscription as string,
-          priceMad: 350,
-          startedAt: new Date(),
-        },
-        update: {
-          plan: 'PREMIUM_MONTHLY_NO_COMMIT',
-          status: 'ACTIVE',
-          stripeCustomerId: session.customer as string,
-          stripeSubscriptionId: session.subscription as string,
-          priceMad: 350,
-          startedAt: new Date(),
-          endedAt: null,
-        },
+        orderBy: { startedAt: 'desc' },
       });
+
+      if (existing) {
+        // Update l'abonnement existant
+        await tx.proSubscription.update({
+          where: { id: existing.id },
+          data: {
+            plan: 'PREMIUM_MONTHLY_NO_COMMIT',
+            status: 'ACTIVE',
+            stripeCustomerId: session.customer as string,
+            stripeSubscriptionId: session.subscription as string,
+            priceMad: 350,
+            startedAt: new Date(),
+            endedAt: null,
+          },
+        });
+      } else {
+        // Créer un nouvel abonnement
+        await tx.proSubscription.create({
+          data: {
+            proUserId: proId,
+            plan: 'PREMIUM_MONTHLY_NO_COMMIT',
+            status: 'ACTIVE',
+            stripeCustomerId: session.customer as string,
+            stripeSubscriptionId: session.subscription as string,
+            priceMad: 350,
+            startedAt: new Date(),
+          },
+        });
+      }
 
       // 2. Update ProProfile -> isPremium = true
       await tx.proProfile.update({
@@ -402,27 +414,39 @@ export class PaymentService {
     endDate.setFullYear(endDate.getFullYear() + 1); // +1 an
 
     await this.prisma.$transaction(async (tx) => {
-      // 1. Upsert ProSubscription
-      await tx.proSubscription.upsert({
+      // 1. Find or Create ProSubscription (logique manuelle car proUserId n'est pas unique)
+      const existing = await tx.proSubscription.findFirst({
         where: { proUserId: proId },
-        create: {
-          proUserId: proId,
-          plan: 'PREMIUM_ANNUAL_COMMIT',
-          status: 'ACTIVE',
-          stripeCustomerId: session.customer as string,
-          priceMad: 3000,
-          startedAt: now,
-          endedAt: endDate,
-        },
-        update: {
-          plan: 'PREMIUM_ANNUAL_COMMIT',
-          status: 'ACTIVE',
-          stripeCustomerId: session.customer as string,
-          priceMad: 3000,
-          startedAt: now,
-          endedAt: endDate,
-        },
+        orderBy: { startedAt: 'desc' },
       });
+
+      if (existing) {
+        // Update l'abonnement existant
+        await tx.proSubscription.update({
+          where: { id: existing.id },
+          data: {
+            plan: 'PREMIUM_ANNUAL_COMMIT',
+            status: 'ACTIVE',
+            stripeCustomerId: session.customer as string,
+            priceMad: 3000,
+            startedAt: now,
+            endedAt: endDate,
+          },
+        });
+      } else {
+        // Créer un nouvel abonnement
+        await tx.proSubscription.create({
+          data: {
+            proUserId: proId,
+            plan: 'PREMIUM_ANNUAL_COMMIT',
+            status: 'ACTIVE',
+            stripeCustomerId: session.customer as string,
+            priceMad: 3000,
+            startedAt: now,
+            endedAt: endDate,
+          },
+        });
+      }
 
       // 2. Update ProProfile -> isPremium = true
       await tx.proProfile.update({
