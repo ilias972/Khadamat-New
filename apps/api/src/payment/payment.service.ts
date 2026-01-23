@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
+import { SubscriptionPlan, SubscriptionStatus, BoostStatus } from './types/prisma-enums';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
 import { CmiCallbackDto } from './dto/cmi-callback.dto';
 import { generateCmiHash, verifyCmiHash } from './utils/cmi-hash';
@@ -235,10 +236,16 @@ export class PaymentService {
 
         await tx.proBoost.create({
           data: {
-            proUserId: order.proUserId,
-            cityId: order.cityId!,
-            categoryId: order.categoryId!,
-            status: 'ACTIVE',
+            pro: {
+              connect: { userId: order.proUserId },
+            },
+            city: {
+              connect: { id: order.cityId! },
+            },
+            category: {
+              connect: { id: order.categoryId! },
+            },
+            status: BoostStatus.ACTIVE,
             startsAt,
             endsAt,
             priceMad: Math.round(plan.priceMad),
@@ -258,15 +265,17 @@ export class PaymentService {
         const existingSubscription = await tx.proSubscription.findFirst({
           where: {
             proUserId: order.proUserId,
-            status: 'ACTIVE',
+            status: SubscriptionStatus.ACTIVE,
           },
         });
 
+        const subscriptionPlan = order.planType === 'PREMIUM_MONTHLY'
+          ? SubscriptionPlan.PREMIUM_MONTHLY_NO_COMMIT
+          : SubscriptionPlan.PREMIUM_ANNUAL_COMMIT;
+
         const subscriptionData = {
-          plan: order.planType === 'PREMIUM_MONTHLY'
-            ? 'PREMIUM_MONTHLY_NO_COMMIT'
-            : 'PREMIUM_ANNUAL_COMMIT',
-          status: 'ACTIVE' as const,
+          plan: subscriptionPlan,
+          status: SubscriptionStatus.ACTIVE,
           priceMad: Math.round(plan.priceMad),
           startedAt: now,
           commitmentStartsAt: order.planType === 'PREMIUM_ANNUAL' ? now : undefined,
@@ -283,7 +292,9 @@ export class PaymentService {
           // Créer une nouvelle souscription
           await tx.proSubscription.create({
             data: {
-              proUserId: order.proUserId,
+              pro: {
+                connect: { userId: order.proUserId },
+              },
               ...subscriptionData,
             },
           });
