@@ -478,3 +478,35 @@ model ProBoost {
   @@index([cityId, categoryId, status, startsAt])
   @@index([proUserId, endsAt])
 }
+
+model PaymentOrder {
+  id        String  @id @default(cuid())
+  oid       String  @unique  // ID Commande unique CMI
+
+  proUserId  String
+
+  planType  String  // PREMIUM_MONTHLY | PREMIUM_ANNUAL | BOOST
+
+  // Montant en CENTIMES (évite erreurs Float)
+  amountCents  Int
+
+  status  String  // PENDING | PAID | FAILED
+
+  // Debug CMI
+  procReturnCode  String?  // Code retour CMI
+  response        String?  // Message CMI (Approved, etc.)
+  transId         String?  // Transaction ID CMI
+
+  // Metadata Boost (optionnel)
+  cityId      String?
+  categoryId  String?
+
+  createdAt  DateTime   @default(now())
+  paidAt     DateTime?
+
+  // Sauvegarde du payload complet pour audit
+  rawCallback  Json?
+
+  @@index([proUserId, status])
+  @@index([oid])
+}
