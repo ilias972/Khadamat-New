@@ -5,6 +5,7 @@ import {
   Request,
   UseGuards,
   ValidationPipe,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -41,7 +42,10 @@ export class PaymentController {
     @Request() req: any,
     @Body(new ValidationPipe()) dto: InitiatePaymentDto,
   ) {
-    const userId = req.user.userId;
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new UnauthorizedException('User ID introuvable dans le token');
+    }
     return this.paymentService.initiatePayment(userId, dto);
   }
 
