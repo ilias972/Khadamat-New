@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import type {
   UpdateProProfileInput,
@@ -167,8 +167,17 @@ export class ProService {
       throw new NotFoundException('Profil Pro non trouvé');
     }
 
-    // Vérifier que toutes les catégories existent
+    // Extraire les categoryIds
     const categoryIds = dto.map((s) => s.categoryId);
+
+    // RÈGLE MÉTIER : Limiter les comptes gratuits à 1 service maximum
+    if (!existingProfile.isPremium && categoryIds.length > 1) {
+      throw new BadRequestException(
+        'Les comptes gratuits sont limités à 1 service. Passez Premium pour en ajouter davantage.',
+      );
+    }
+
+    // Vérifier que toutes les catégories existent
     const categories = await this.prisma.category.findMany({
       where: { id: { in: categoryIds } },
     });
