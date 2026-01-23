@@ -39,7 +39,7 @@ export function generateCmiHash(
     if (params[field] === undefined || params[field] === null) {
       throw new Error(
         `CMI Hash Error: Le champ requis "${field}" est manquant ou undefined. ` +
-          `Champs reçus: ${JSON.stringify(params)}`,
+          `Ordre attendu: ${hashOrder}`,
       );
     }
   }
@@ -48,15 +48,8 @@ export function generateCmiHash(
   const values = fields.map((field) => params[field]);
   const concatenated = values.join('') + storeKey;
 
-  // Debug: Log de la chaîne avant hashage (avec masquage du storeKey)
-  const concatenatedWithoutKey = values.join('');
-  console.log('[generateCmiHash] String before key:', concatenatedWithoutKey);
-  console.log('[generateCmiHash] String length (with key):', concatenated.length);
-
-  // Génère le hash
+  // Génère le hash (fonction PURE, pas de side effects)
   const hash = crypto.createHash(algorithm).update(concatenated).digest(outputFormat);
-
-  console.log('[generateCmiHash] Hash result:', hash);
 
   return hash;
 }
