@@ -151,10 +151,10 @@ export class ProService {
    * updateServices
    *
    * Met à jour les services proposés par le PRO.
-   * Stratégie UPSERT : Pour chaque service, on fait un upsert basé sur [proUserId, categoryId].
+   * Stratégie REPLACE ALL : Supprime tous les services existants et recrée les nouveaux.
    *
    * @param userId - ID de l'utilisateur PRO
-   * @param dto - Array de services à upsert
+   * @param dto - Array de services à créer
    * @returns Liste complète des services mis à jour
    */
   async updateServices(userId: string, dto: UpdateServicesInput) {
@@ -167,8 +167,8 @@ export class ProService {
       throw new NotFoundException('Profil Pro non trouvé');
     }
 
-    // Extraire les categoryIds
-    const categoryIds = dto.map((s) => s.categoryId);
+    // Extraire et dédupliquer les categoryIds
+    const categoryIds = [...new Set(dto.map((s) => s.categoryId))];
 
     // RÈGLE MÉTIER : Limiter les comptes gratuits à 1 service maximum
     if (!existingProfile.isPremium && categoryIds.length > 1) {
@@ -186,31 +186,31 @@ export class ProService {
       throw new NotFoundException('Une ou plusieurs catégories sont invalides');
     }
 
-    // UPSERT chaque service
-    const upsertPromises = dto.map((service) =>
-      this.prisma.proService.upsert({
-        where: {
-          proUserId_categoryId: {
+    // Transaction : DELETE ALL + CREATE
+    const result = await this.prisma.$transaction(async (tx) => {
+      // 1. Supprimer tous les services existants
+      await tx.proService.deleteMany({
+        where: { proUserId: userId },
+      });
+
+      // 2. Créer les nouveaux services
+      if (dto.length > 0) {
+        await tx.proService.createMany({
+          data: dto.map((service) => ({
             proUserId: userId,
             categoryId: service.categoryId,
-          },
-        },
-        update: {
-          pricingType: service.pricingType,
-          fixedPriceMad: service.fixedPriceMad ?? null,
-          minPriceMad: service.minPriceMad ?? null,
-          maxPriceMad: service.maxPriceMad ?? null,
-          isActive: service.isActive,
-        },
-        create: {
-          proUserId: userId,
-          categoryId: service.categoryId,
-          pricingType: service.pricingType,
-          fixedPriceMad: service.fixedPriceMad ?? null,
-          minPriceMad: service.minPriceMad ?? null,
-          maxPriceMad: service.maxPriceMad ?? null,
-          isActive: service.isActive,
-        },
+            pricingType: service.pricingType,
+            fixedPriceMad: service.fixedPriceMad ?? null,
+            minPriceMad: service.minPriceMad ?? null,
+            maxPriceMad: service.maxPriceMad ?? null,
+            isActive: service.isActive,
+          })),
+        });
+      }
+
+      // 3. Refetch pour confirmer la persistance (self-check)
+      const updatedServices = await tx.proService.findMany({
+        where: { proUserId: userId },
         include: {
           category: {
             select: {
@@ -220,29 +220,15 @@ export class ProService {
             },
           },
         },
-      }),
-    );
-
-    await Promise.all(upsertPromises);
-
-    // Retourner la liste complète des services du PRO
-    const allServices = await this.prisma.proService.findMany({
-      where: { proUserId: userId },
-      include: {
-        category: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
+        orderBy: {
+          createdAt: 'desc',
         },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      });
+
+      return updatedServices;
     });
 
-    return allServices;
+    return result;
   }
 
   /**
