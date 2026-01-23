@@ -95,9 +95,10 @@ export class PaymentService {
     const random = Math.random().toString(36).substring(2, 8).toUpperCase();
     const oid = `CMD-${timestamp}-${random}`;
 
-    // 4. Conversion montant en centimes
+    // 4. Conversion montant en centimes et formatage strict
     const amountCents = Math.round(plan.priceMad * 100);
-    const amountStr = plan.priceMad.toFixed(2);
+    // CRITIQUE : Formater le montant avec exactement 2 décimales
+    const formattedAmount = Number(plan.priceMad).toFixed(2);
 
     // 5. Création du PaymentOrder
     await this.prisma.paymentOrder.create({
@@ -112,39 +113,64 @@ export class PaymentService {
       },
     });
 
-    // 6. Préparation des paramètres CMI
+    // 6. Préparation des paramètres CMI - TOUTES les valeurs finales
     const publicUrl = this.config.get<string>('PUBLIC_URL');
-    const okUrl = `${publicUrl}/api/payment/callback`;
-    const failUrl = `${publicUrl}/api/payment/callback`;
-    const rnd = Math.random().toString(36).substring(2);
+    const rnd = Math.random().toString(36).substring(2, 15); // Random stable
 
+    // Construire l'objet params avec toutes les valeurs finales
     const cmiParams = {
       clientid: this.config.get<string>('CMI_CLIENT_ID')!,
       oid,
-      amount: amountStr,
-      okUrl,
-      failUrl,
+      amount: formattedAmount, // Utilise formattedAmount unique
+      okUrl: `${publicUrl}/api/payment/callback`,
+      failUrl: `${publicUrl}/api/payment/callback`,
       rnd,
       storetype: this.config.get<string>('CMI_STORE_TYPE')!,
       trantype: this.config.get<string>('CMI_TRAN_TYPE')!,
       currency: this.config.get<string>('CMI_CURRENCY')!,
     };
 
-    // 7. Génération du Hash
+    // 7. Logs de debug AVANT la génération du hash
+    const hashOrder = this.config.get<string>('CMI_HASH_ORDER')!;
+    const fields = hashOrder.split(',').map((f) => f.trim());
+    const orderedValues = fields.map((field) => cmiParams[field as keyof typeof cmiParams]);
+    const hashString = orderedValues.join('');
+
+    console.log('🧮 --- CMI DEBUG START ---');
+    console.log('1. Ordered Fields used for Hash:', {
+      ...cmiParams,
+      _note: 'Ces valeurs exactes seront concaténées pour le hash',
+    });
+    console.log('2. Hash Order from Config:', hashOrder);
+    console.log('3. Ordered Values Array:', orderedValues);
+    console.log('4. Raw String to Hash (before storeKey):', hashString);
+    console.log('5. Store Key Check:', {
+      present: !!this.config.get('CMI_STORE_KEY'),
+      length: this.config.get('CMI_STORE_KEY')?.length,
+      _note: 'Key itself is NOT logged for security',
+    });
+    console.log('6. Hash Algorithm:', this.config.get('CMI_HASH_ALGO'));
+    console.log('7. Hash Output Format:', this.config.get('CMI_HASH_OUTPUT'));
+    console.log('🧮 --- CMI DEBUG END ---');
+
+    // 8. Génération du Hash avec les valeurs exactes de cmiParams
     const hash = generateCmiHash(
       cmiParams,
       this.config.get<string>('CMI_STORE_KEY')!,
-      this.config.get<string>('CMI_HASH_ORDER')!,
+      hashOrder,
       this.config.get<string>('CMI_HASH_ALGO')!,
       this.config.get<string>('CMI_HASH_OUTPUT') as 'base64' | 'hex',
     );
 
-    // 8. Retour des données pour le formulaire HTML
+    console.log('8. Generated Hash:', hash);
+
+    // 9. Retour des données pour le formulaire HTML
+    // CRITIQUE : Utiliser exactement les mêmes valeurs que celles utilisées pour le hash
     return {
       actionUrl: this.config.get<string>('CMI_BASE_URL'),
       fields: {
-        ...cmiParams,
-        hash,
+        ...cmiParams, // Utilise le même objet que pour le hash
+        hash, // Ajoute le hash généré
         // Champs optionnels pour améliorer l'UX
         shopurl: this.config.get<string>('FRONTEND_URL'),
         lang: 'fr',
