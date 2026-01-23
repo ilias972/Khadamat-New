@@ -88,6 +88,17 @@ export default function Header() {
               </>
             ) : (
               <>
+                {/* Bouton "Devenir Premium" (PRO uniquement) */}
+                {user?.role === 'PRO' && (
+                  <Link
+                    href="/plans"
+                    className="px-4 py-2 border-2 border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition font-medium flex items-center gap-2"
+                  >
+                    <span className="text-lg">👑</span>
+                    Devenir Premium
+                  </Link>
+                )}
+
                 {/* Connecté - Dropdown Menu */}
                 <div className="relative" ref={dropdownRef}>
                   <button
