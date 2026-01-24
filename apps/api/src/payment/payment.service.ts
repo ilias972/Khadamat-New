@@ -36,10 +36,10 @@ export class PaymentService {
    * Initie un paiement CMI.
    */
   async initiatePayment(userId: string, dto: InitiatePaymentDto) {
-    // 1. Récupérer le profil PRO et l'USER associé (pour les infos de facturation)
+    // 1. Récupérer le profil PRO et l'USER associé
     const proProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
-      include: { user: true }, // On récupère l'user pour son email/nom
+      include: { user: true },
     });
 
     if (!proProfile) {
@@ -50,7 +50,7 @@ export class PaymentService {
     const now = new Date();
     const plan = PAYMENT_PLANS[dto.planType];
 
-    // Vérif BOOST : cityId et categoryId requis
+    // Vérif BOOST
     if (dto.planType === 'BOOST') {
       if (!dto.cityId || !dto.categoryId) {
         throw new BadRequestException(
@@ -58,19 +58,16 @@ export class PaymentService {
         );
       }
 
-      // Vérif exclusivité : Premium actif ?
       if (
         proProfile.isPremium &&
         proProfile.premiumActiveUntil &&
         proProfile.premiumActiveUntil > now
       ) {
         throw new BadRequestException(
-          'Exclusivité : Vous avez déjà un abonnement Premium actif. ' +
-            'Premium et Boost sont mutuellement exclusifs.',
+          'Exclusivité : Vous avez déjà un abonnement Premium actif.',
         );
       }
 
-      // Vérif Cooldown : Dernier Boost < 21 jours ?
       const lastBoost = await this.prisma.proBoost.findFirst({
         where: { proUserId: userId },
         orderBy: { createdAt: 'desc' },
@@ -83,19 +80,17 @@ export class PaymentService {
         );
         if (daysSinceLastBoost < BOOST_COOLDOWN_DAYS) {
           throw new BadRequestException(
-            `Cooldown Boost : Vous devez attendre ${BOOST_COOLDOWN_DAYS - daysSinceLastBoost} jour(s) avant de pouvoir acheter un nouveau Boost. ` +
-              `(1 Boost / ${BOOST_COOLDOWN_DAYS} jours)`,
+            `Cooldown Boost : Attendez ${BOOST_COOLDOWN_DAYS - daysSinceLastBoost} jours.`,
           );
         }
       }
     }
 
-    // Vérif PREMIUM : Boost actif ?
+    // Vérif PREMIUM
     if (dto.planType !== 'BOOST') {
       if (proProfile.boostActiveUntil && proProfile.boostActiveUntil > now) {
         throw new BadRequestException(
-          'Exclusivité : Vous avez déjà un Boost actif. ' +
-            'Premium et Boost sont mutuellement exclusifs.',
+          'Exclusivité : Vous avez déjà un Boost actif.',
         );
       }
     }
@@ -108,7 +103,7 @@ export class PaymentService {
     const rnd = Math.random().toString(36).substring(2, 15);
     const amountCents = Math.round(plan.priceMad * 100);
 
-    // 4. Création du PaymentOrder
+    // 4. Création PaymentOrder
     await this.prisma.paymentOrder.create({
       data: {
         oid,
@@ -121,20 +116,18 @@ export class PaymentService {
       },
     });
 
-    // 5. Construction de l'objet CMI FINAL
+    // 5. Config CMI
     const publicUrl = this.config.get<string>('PUBLIC_URL');
-
     if (!publicUrl) {
-      throw new BadRequestException(
-        "PUBLIC_URL n'est pas configurée. Configurez-la avec Ngrok ou votre domaine.",
-      );
+      throw new BadRequestException("PUBLIC_URL n'est pas configurée.");
     }
 
     const okUrl = `${publicUrl}/api/payment/callback`;
     const failUrl = `${publicUrl}/api/payment/callback`;
 
-    // Préparation des données Client pour éviter l'erreur 3D-1004
-    const safeName = (proProfile.user.name || 'Client Khadamat').replace(/[^a-zA-Z0-9 ]/g, ' ').trim();
+    // --- CORRECTION DU NOM ICI (FirstName + LastName) ---
+    const rawName = `${proProfile.user.firstName} ${proProfile.user.lastName}`;
+    const safeName = (rawName.trim() || 'Client Khadamat').replace(/[^a-zA-Z0-9 ]/g, ' ').trim();
     const safeEmail = proProfile.user.email || 'client@khadamat.ma';
 
     const cmiParams = {
@@ -148,25 +141,24 @@ export class PaymentService {
       trantype: this.config.get<string>('CMI_TRAN_TYPE')!,
       currency: this.config.get<string>('CMI_CURRENCY')!,
       
-      // --- CHAMPS AJOUTÉS POUR FIXER L'ERREUR 3D-1004 ---
+      // Champs Anti-Erreur 3D-1004
       lang: 'fr',
       email: safeEmail,
       BillToName: safeName,
-      BillToCompany: 'Pro Khadamat', // Optionnel mais aide parfois
-      BillToStreet1: 'Adresse Client', // Requis par certains comptes test
+      BillToCompany: 'Pro Khadamat',
+      BillToStreet1: 'Adresse Client',
       BillToCity: 'Casablanca',
-      BillToCountry: '504', // Code ISO Maroc
+      BillToCountry: '504',
       encoding: 'UTF-8',
-      // --------------------------------------------------
     };
 
     if (process.env.NODE_ENV !== 'production') {
       Object.freeze(cmiParams);
     }
 
-    console.log('🔒 CMI Params Final:', { oid, amount: cmiParams.amount, clientid: cmiParams.clientid });
+    console.log('🔒 CMI Params Final:', { oid, amount: cmiParams.amount });
 
-    // 6. Génération du Hash
+    // 6. Hash
     const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha512';
     const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'base64';
     const hashOrder = this.config.get<string>('CMI_HASH_ORDER')!;
@@ -179,7 +171,6 @@ export class PaymentService {
       hashOutput as 'base64' | 'hex',
     );
 
-    // 7. Retour
     return {
       actionUrl: this.config.get<string>('CMI_BASE_URL'),
       fields: {
@@ -192,7 +183,6 @@ export class PaymentService {
 
   /**
    * Traite le callback CMI.
-   * Version Robuste : Accepte les erreurs CMI sans throw 401.
    */
   async handleCallback(data: any) {
     console.log('📥 --- CMI CALLBACK RECEIVED ---');
@@ -201,7 +191,7 @@ export class PaymentService {
     const { oid, Response, ProcReturnCode, HASH, hash, ErrCode, ErrMsg } = data;
     const receivedHash = HASH || hash;
 
-    // 1. DÉTECTION D'ERREUR CMI (Pour éviter le blocage 401)
+    // 1. GESTION ERREUR CMI
     if (Response === 'Error' || ErrCode || (Response === 'Refused')) {
       this.logger.warn(`⚠️ Retour CMI (Erreur/Refus) : ${ErrCode || ProcReturnCode} - ${ErrMsg || Response}`);
       
@@ -217,22 +207,16 @@ export class PaymentService {
           },
         });
       }
-      // On retourne success pour que CMI arrête de nous spammer avec l'erreur
       return { status: 'failed', message: 'Erreur CMI enregistrée' };
     }
 
-    // 2. VÉRIFICATION HASH (Uniquement si pas d'erreur explicite)
-    if (!receivedHash) {
-      throw new UnauthorizedException('Hash manquant dans le callback');
-    }
+    // 2. VÉRIFICATION HASH
+    if (!receivedHash) throw new UnauthorizedException('Hash manquant');
 
     const storeKey = this.config.get<string>('CMI_STORE_KEY')!;
-    // On s'aligne sur ce qu'on a vu dans les logs (SHA1/Base64 semble être le format de retour erreur, 
-    // mais pour le succès, ça dépend de la config. On utilise la config .env)
     const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha512';
     const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'base64';
 
-    // Ordre standard CMI pour le RETOUR
     const params = [
       data.clientid,
       data.oid,
@@ -251,10 +235,9 @@ export class PaymentService {
 
     if (calculatedHash !== receivedHash) {
       if (calculatedHash.toLowerCase() !== receivedHash.toLowerCase()) {
-         // Tentative de fallback SHA1 si la config est SHA512 mais que CMI renvoie du SHA1
          const fallbackHash = createHash('sha1').update(stringToHash).digest('base64');
          if (fallbackHash === receivedHash) {
-            this.logger.warn("⚠️ Hash match via Fallback SHA1 (Config mismatch)");
+            this.logger.warn("⚠️ Hash match via Fallback SHA1");
          } else {
             this.logger.error('❌ ECHEC VALIDATION HASH');
             throw new UnauthorizedException('Hash CMI invalide');
@@ -355,7 +338,7 @@ export class PaymentService {
           await tx.proSubscription.create({
             data: {
               pro: { connect: { userId: order.proUserId } },
-              transactionId: order.oid, // ✅ Utilise la colonne ajoutée
+              transactionId: order.oid,
               ...subscriptionData,
             },
           });
