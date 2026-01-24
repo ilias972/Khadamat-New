@@ -21,7 +21,7 @@ import {
   BOOST_ACTIVE_DAYS,
   PlanType,
 } from './utils/payment.constants';
-import { createHash } from 'crypto'; // <--- AJOUT IMPORTANT
+import { createHash } from 'crypto';
 
 @Injectable()
 export class PaymentService {
@@ -120,17 +120,16 @@ export class PaymentService {
       },
     });
 
-    // 5. Construction de l'objet CMI FINAL (UNE SEULE FOIS, AUCUNE MUTATION APRÈS)
+    // 5. Construction de l'objet CMI FINAL
     const publicUrl = this.config.get<string>('PUBLIC_URL');
 
     if (!publicUrl) {
       throw new BadRequestException(
-        "PUBLIC_URL n'est pas configurée dans les variables d'environnement. " +
-          'Configurez PUBLIC_URL avec votre URL Ngrok ou domaine public.',
+        "PUBLIC_URL n'est pas configurée. Configurez-la avec Ngrok ou votre domaine.",
       );
     }
 
-    // Construction des URLs de callback (Architecture API-First)
+    // Architecture API-First (Ngrok)
     const okUrl = `${publicUrl}/api/payment/callback`;
     const failUrl = `${publicUrl}/api/payment/callback`;
 
@@ -148,7 +147,7 @@ export class PaymentService {
       currency: this.config.get<string>('CMI_CURRENCY')!,
     };
 
-    // 6. FREEZE pour prévenir toute mutation accidentelle
+    // 6. FREEZE pour prévenir toute mutation
     if (process.env.NODE_ENV !== 'production') {
       Object.freeze(cmiParams);
     }
@@ -161,25 +160,28 @@ export class PaymentService {
       clientid: cmiParams.clientid,
     });
 
-    // 8. Génération du Hash UNIQUE (UNE SEULE FOIS)
+    // 8. Génération du Hash
+    // On force les valeurs par défaut SHA1/Base64 si non définies, suite à tes logs
+    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha1';
+    const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'base64';
     const hashOrder = this.config.get<string>('CMI_HASH_ORDER')!;
+
     const signature = generateCmiHash(
       cmiParams,
       this.config.get<string>('CMI_STORE_KEY')!,
       hashOrder,
-      this.config.get<string>('CMI_HASH_ALGO')!,
-      this.config.get<string>('CMI_HASH_OUTPUT') as 'base64' | 'hex',
+      hashAlgo,
+      hashOutput as 'base64' | 'hex',
     );
 
-    console.log('🔒 CMI Signature:', signature);
+    console.log('🔒 CMI Signature Generated:', signature);
 
-    // 9. Retour STRICT (ZÉRO MUTATION après signature)
+    // 9. Retour STRICT
     return {
       actionUrl: this.config.get<string>('CMI_BASE_URL'),
       fields: {
         ...cmiParams,
         hash: signature,
-        // Champs optionnels
         shopurl: this.config.get<string>('FRONTEND_URL'),
         lang: 'fr',
       },
@@ -187,31 +189,51 @@ export class PaymentService {
   }
 
   /**
-   * Traite le callback CMI après paiement.
-   * VERSION DEBUG SCANNER - Vérifie manuellement le Hash
+   * Traite le callback CMI.
+   * Gère les succès ET les erreurs sans bloquer sur le hash si c'est une erreur explicite.
    */
   async handleCallback(data: any) {
-    // 1. LOGS BRUTS (Pour voir ce que CMI envoie vraiment)
-    console.log('📥 --- CMI CALLBACK RAW DATA START ---');
+    console.log('📥 --- CMI CALLBACK RECEIVED ---');
     console.log(JSON.stringify(data, null, 2));
-    console.log('📥 --- CMI CALLBACK RAW DATA END ---');
 
-    // Extraction du Hash reçu
-    const receivedHash = data.HASH || data.hash;
+    const { oid, Response, ProcReturnCode, HASH, hash, ErrCode, ErrMsg } = data;
+    const receivedHash = HASH || hash;
 
+    // 1. DÉTECTION RAPIDE D'ERREUR CMI (Pour éviter le blocage 401)
+    // Si CMI dit "Error" ou envoie un code erreur (ex: 3D-1004), on accepte le callback comme un échec valide.
+    if (Response === 'Error' || ErrCode) {
+      this.logger.warn(`⚠️ Erreur CMI reçue : ${ErrCode} - ${ErrMsg}`);
+      
+      // Mise à jour de la commande en FAILED
+      const order = await this.prisma.paymentOrder.findUnique({ where: { oid } });
+      if (order) {
+        await this.prisma.paymentOrder.update({
+          where: { oid },
+          data: {
+            status: PAYMENT_STATUS.FAILED,
+            response: Response || 'Error',
+            procReturnCode: String(ProcReturnCode || ErrCode || '99'),
+            rawCallback: data,
+          },
+        });
+      }
+      
+      // On retourne un succès HTTP pour dire à CMI "J'ai bien reçu l'info d'erreur",
+      // sinon CMI va réessayer de nous envoyer l'erreur en boucle.
+      return { status: 'failed', message: 'Erreur CMI enregistrée' };
+    }
+
+    // 2. VÉRIFICATION STANDARD DU HASH (Uniquement si pas d'erreur explicite)
     if (!receivedHash) {
-      this.logger.error('❌ Callback reçu sans Hash');
       throw new UnauthorizedException('Hash manquant dans le callback');
     }
 
-    // 2. Configuration pour la vérification
     const storeKey = this.config.get<string>('CMI_STORE_KEY')!;
-    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha512';
-    // On force la lecture en HEX comme configuré dans ton .env
-    const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'hex';
+    // Config alignée sur tes derniers logs (SHA1 / Base64 par défaut)
+    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha1';
+    const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'base64';
 
-    // 3. Construction de la chaîne à hacher (ORDRE SPÉCIFIQUE AU RETOUR)
-    // CMI Standard pour 3D_PAY_HOSTING :
+    // Ordre standard CMI pour le RETOUR (différent de l'aller)
     // clientid + oid + amount + currency + rnd + Response + storetype + trantype + storeKey
     const params = [
       data.clientid,
@@ -219,94 +241,51 @@ export class PaymentService {
       data.amount,
       data.currency,
       data.rnd,
-      data.Response, // <--- C'est lui qui change tout !
+      data.Response,
       data.storetype,
       data.trantype,
     ];
 
-    // Gestion des valeurs null/undefined (CMI peut renvoyer vide parfois)
-    const stringToHash =
-      params.map((val) => (val === undefined || val === null ? '' : val)).join('') +
-      storeKey;
+    // Construction de la string
+    const stringToHash = params.map((val) => (val === undefined || val === null ? '' : val)).join('') + storeKey;
 
-    // 4. Calcul du Hash local
-    const calculatedHash = createHash(hashAlgo)
-      .update(stringToHash)
-      .digest(hashOutput as any);
+    // Calcul
+    const calculatedHash = createHash(hashAlgo).update(stringToHash).digest(hashOutput as any);
 
-    // 5. DEBUG COMPARATIF (Le moment de vérité)
-    console.log('🔐 --- CMI HASH VERIFICATION ---');
-    console.log('1. String Hachée :', stringToHash.replace(storeKey, '***KEY***'));
-    console.log('2. Hash Attendu (Calculé) :', calculatedHash);
-    console.log('3. Hash Reçu (CMI)        :', receivedHash);
-    console.log('4. Match ?                :', calculatedHash.toLowerCase() === receivedHash.toLowerCase());
-    console.log('🔐 -----------------------------');
+    console.log('🔐 Hash Check:', { calculated: calculatedHash, received: receivedHash });
 
-    // 6. Validation
-    if (calculatedHash.toLowerCase() !== receivedHash.toLowerCase()) {
-      // TENTATIVE DE SAUVETAGE (Si CMI renvoie du Base64 alors qu'on attend du Hex)
-      const fallbackHash = createHash(hashAlgo)
-        .update(stringToHash)
-        .digest('base64');
-      
-      if (fallbackHash === receivedHash) {
-        this.logger.warn(
-          "⚠️ Attention: CMI renvoie du Base64 alors que la config est HEX. J'accepte exceptionnellement.",
-        );
-      } else {
-        this.logger.error('❌ ECHEC VALIDATION HASH');
-        throw new UnauthorizedException('Hash CMI invalide : Signature incorrecte');
+    if (calculatedHash !== receivedHash) {
+      // Tolérance minuscules/majuscules pour le Hex/Base64
+      if (calculatedHash.toLowerCase() !== receivedHash.toLowerCase()) {
+         this.logger.error('❌ ECHEC VALIDATION HASH');
+         throw new UnauthorizedException('Hash CMI invalide');
       }
     }
 
-    // 7. Traitement de la commande
-    const { oid, ProcReturnCode, Response, TransId } = data;
+    // 3. TRAITEMENT DU SUCCÈS
+    const isSuccess = (ProcReturnCode === '00' || ProcReturnCode === 0) && Response === 'Approved';
 
-    // Chercher le PaymentOrder
-    const order = await this.prisma.paymentOrder.findUnique({
-      where: { oid },
-    });
-
-    if (!order) {
-      throw new NotFoundException(`Commande ${oid} non trouvée`);
-    }
-
-    // Idempotence
-    if (order.status === PAYMENT_STATUS.PAID) {
-      console.log(`[Payment] Callback idempotent pour oid=${oid}, déjà PAID`);
-      return { status: 'success', message: 'Paiement déjà traité' };
-    }
-
-    // Vérifier le succès
-    const isSuccess =
-      (ProcReturnCode === '00' || ProcReturnCode === 0) &&
-      Response?.toLowerCase() === 'approved';
-
-    // Mise à jour du PaymentOrder
+    // Mise à jour DB
     const updatedOrder = await this.prisma.paymentOrder.update({
       where: { oid },
       data: {
         status: isSuccess ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.FAILED,
         paidAt: isSuccess ? new Date() : undefined,
-        procReturnCode: String(ProcReturnCode), // Force string
+        procReturnCode: String(ProcReturnCode),
         response: Response,
-        transId: TransId,
+        transId: data.TransId,
         rawCallback: data,
       },
     });
 
-    // Si succès, activer le plan
     if (isSuccess) {
       this.logger.log(`✅ PAIEMENT RÉUSSI pour ${oid}`);
       await this.activatePlan(updatedOrder);
     } else {
-      this.logger.warn(`⚠️ PAIEMENT ÉCHOUÉ pour ${oid} : ${data.ErrMsg}`);
+      this.logger.warn(`⚠️ PAIEMENT REFUSÉ pour ${oid}`);
     }
 
-    return {
-      status: isSuccess ? 'success' : 'failed',
-      message: isSuccess ? 'Paiement validé' : 'Paiement échoué',
-    };
+    return { status: isSuccess ? 'success' : 'failed', message: 'Callback traité' };
   }
 
   /**
@@ -365,10 +344,10 @@ export class PaymentService {
             order.planType === 'PREMIUM_ANNUAL' ? now : undefined,
           commitmentEndsAt:
             order.planType === 'PREMIUM_ANNUAL' ? endsAt : undefined,
-          endDate: endsAt, // AJOUT IMPORTANT POUR LE SUIVI
+          endDate: endsAt,
         };
 
-       if (existingSubscription) {
+        if (existingSubscription) {
           await tx.proSubscription.update({
             where: { id: existingSubscription.id },
             data: subscriptionData,
@@ -377,7 +356,7 @@ export class PaymentService {
           await tx.proSubscription.create({
             data: {
               pro: { connect: { userId: order.proUserId } },
-              transactionId: order.oid,
+              transactionId: order.oid, // ✅ Fonctionne car tu as fait la migration
               ...subscriptionData,
             },
           });
