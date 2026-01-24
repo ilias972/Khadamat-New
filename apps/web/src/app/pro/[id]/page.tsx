@@ -3,6 +3,10 @@ import Header from '../../../components/Header';
 import ProBookingCTA from '../../../components/ProBookingCTA';
 import type { PublicProProfile } from '@khadamat/contracts';
 
+// DÉSACTIVE COMPLÈTEMENT LE CACHE NEXT.JS (fix données anciennes)
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 interface ProDetailPageProps {
   params: Promise<{
     id: string;
@@ -14,6 +18,7 @@ interface ProDetailPageProps {
  *
  * - Affiche le profil public complet d'un Pro
  * - 404 si le Pro n'existe pas ou n'est pas actif
+ * - IMPORTANT: Données en temps réel (cache désactivé)
  */
 export default async function ProDetailPage({ params }: ProDetailPageProps) {
   const { id } = await params;
@@ -74,9 +79,7 @@ export default async function ProDetailPage({ params }: ProDetailPageProps) {
                   📍 {pro.city}
                 </p>
 
-                {pro.bio && (
-                  <p className="text-zinc-700 dark:text-zinc-300">{pro.bio}</p>
-                )}
+                {/* NOTE: bio field pas encore implémenté côté backend */}
               </div>
             </div>
           </div>
