@@ -445,7 +445,7 @@ model ProSubscription {
   endedAt    DateTime?
 
   pro  ProProfile  @relation(fields: [proUserId], references: [userId], onDelete: Cascade)
-
+  transactionId String?
   @@index([proUserId, status])
 }
 
