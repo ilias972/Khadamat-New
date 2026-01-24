@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../database/prisma.service';
 import type { GetSlotsInput, CreateBookingInput, UpdateBookingStatusInput } from '@khadamat/contracts';
+import { BookingEventTypes, BookingEventPayload } from '../notifications/events/booking-events.types';
 
 /**
  * BookingService
@@ -10,7 +12,10 @@ import type { GetSlotsInput, CreateBookingInput, UpdateBookingStatusInput } from
  */
 @Injectable()
 export class BookingService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private eventEmitter: EventEmitter2,
+  ) {}
 
   /**
    * getAvailableSlots
@@ -225,6 +230,18 @@ export class BookingService {
       },
     });
 
+    // 8. ÉMETTRE ÉVÉNEMENT (aucune logique d'email/push ici)
+    const eventPayload: BookingEventPayload = {
+      bookingId: booking.id,
+      proId: dto.proId,
+      clientId: clientUserId,
+      metadata: {
+        categoryId: dto.categoryId,
+        timeSlot: timeSlot.toISOString(),
+      },
+    };
+    this.eventEmitter.emit(BookingEventTypes.CREATED, eventPayload);
+
     return booking;
   }
 
@@ -334,18 +351,29 @@ export class BookingService {
     if (dto.status === 'DECLINED') {
       const booking = await this.prisma.booking.findUnique({
         where: { id: bookingId },
-        select: { id: true, proId: true, status: true },
+        select: { id: true, proId: true, clientId: true, status: true },
       });
 
       if (!booking) throw new NotFoundException('Réservation introuvable');
       if (booking.proId !== userId) throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
       if (booking.status !== 'PENDING') throw new BadRequestException('Seules les réservations en attente peuvent être modifiées');
 
-      return this.prisma.booking.update({
+      const updatedBooking = await this.prisma.booking.update({
         where: { id: bookingId },
         data: { status: 'DECLINED' },
         select: { id: true, status: true, timeSlot: true, proId: true },
       });
+
+      // ÉMETTRE ÉVÉNEMENT ANNULATION
+      const eventPayload: BookingEventPayload = {
+        bookingId: booking.id,
+        proId: booking.proId,
+        clientId: booking.clientId,
+        reason: 'Réservation refusée par le professionnel',
+      };
+      this.eventEmitter.emit(BookingEventTypes.CANCELLED, eventPayload);
+
+      return updatedBooking;
     }
 
     // CONFIRMED → Transaction atomique avec Winner-Takes-All
@@ -432,6 +460,27 @@ export class BookingService {
     }).then(async (booking) => {
       // 9. AUTOMATION BACK-TO-BACK (hors transaction)
       await this.autoCompletePreviousBooking(booking.proId, booking.timeSlot);
+
+      // 10. ÉMETTRE ÉVÉNEMENT CONFIRMATION
+      // Récupérer clientId pour l'événement
+      const bookingDetails = await this.prisma.booking.findUnique({
+        where: { id: booking.id },
+        select: { clientId: true },
+      });
+
+      if (bookingDetails) {
+        const eventPayload: BookingEventPayload = {
+          bookingId: booking.id,
+          proId: booking.proId,
+          clientId: bookingDetails.clientId,
+          metadata: {
+            timeSlot: booking.timeSlot.toISOString(),
+            duration: booking.duration,
+          },
+        };
+        this.eventEmitter.emit(BookingEventTypes.CONFIRMED, eventPayload);
+      }
+
       return booking;
     });
   }
@@ -541,8 +590,21 @@ export class BookingService {
         timeSlot: true,
         duration: true,
         isModifiedByPro: true,
+        clientId: true,
       },
     });
+
+    // 9. ÉMETTRE ÉVÉNEMENT MODIFICATION
+    const eventPayload: BookingEventPayload = {
+      bookingId: updatedBooking.id,
+      proId: userId,
+      clientId: updatedBooking.clientId,
+      metadata: {
+        newDuration: duration,
+        timeSlot: updatedBooking.timeSlot.toISOString(),
+      },
+    };
+    this.eventEmitter.emit(BookingEventTypes.MODIFIED, eventPayload);
 
     return updatedBooking;
   }
@@ -578,18 +640,29 @@ export class BookingService {
     if (!accept) {
       const booking = await this.prisma.booking.findUnique({
         where: { id: bookingId },
-        select: { id: true, clientId: true, status: true },
+        select: { id: true, clientId: true, proId: true, status: true },
       });
 
       if (!booking) throw new NotFoundException('Réservation introuvable');
       if (booking.clientId !== userId) throw new ForbiddenException('Vous ne pouvez répondre qu\'à vos propres réservations');
       if (booking.status !== 'WAITING_FOR_CLIENT') throw new BadRequestException('Cette réservation n\'attend pas de réponse');
 
-      return this.prisma.booking.update({
+      const updatedBooking = await this.prisma.booking.update({
         where: { id: bookingId },
         data: { status: 'DECLINED' },
         select: { id: true, status: true, timeSlot: true, proId: true },
       });
+
+      // ÉMETTRE ÉVÉNEMENT ANNULATION
+      const eventPayload: BookingEventPayload = {
+        bookingId: booking.id,
+        proId: booking.proId,
+        clientId: booking.clientId,
+        reason: 'Modification refusée par le client',
+      };
+      this.eventEmitter.emit(BookingEventTypes.CANCELLED, eventPayload);
+
+      return updatedBooking;
     }
 
     // CONFIRMED → Transaction atomique avec Winner-Takes-All
@@ -677,6 +750,27 @@ export class BookingService {
     }).then(async (booking) => {
       // 9. AUTOMATION BACK-TO-BACK (hors transaction)
       await this.autoCompletePreviousBooking(booking.proId, booking.timeSlot);
+
+      // 10. ÉMETTRE ÉVÉNEMENT CONFIRMATION (client accepte modification)
+      const bookingDetails = await this.prisma.booking.findUnique({
+        where: { id: booking.id },
+        select: { clientId: true },
+      });
+
+      if (bookingDetails) {
+        const eventPayload: BookingEventPayload = {
+          bookingId: booking.id,
+          proId: booking.proId,
+          clientId: bookingDetails.clientId,
+          metadata: {
+            timeSlot: booking.timeSlot.toISOString(),
+            duration: booking.duration,
+            modificationAccepted: true,
+          },
+        };
+        this.eventEmitter.emit(BookingEventTypes.CONFIRMED, eventPayload);
+      }
+
       return booking;
     });
   }

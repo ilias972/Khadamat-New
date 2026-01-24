@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { DatabaseModule } from './database/database.module';
 import { HealthController } from './health/health.controller';
 import { CatalogModule } from './catalog/catalog.module';
@@ -9,6 +10,7 @@ import { BookingModule } from './booking/booking.module';
 import { UsersModule } from './users/users.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PaymentModule } from './payment/payment.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -16,6 +18,7 @@ import { PaymentModule } from './payment/payment.module';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    EventEmitterModule.forRoot(),
     DatabaseModule,
     CatalogModule,
     AuthModule,
@@ -24,6 +27,7 @@ import { PaymentModule } from './payment/payment.module';
     UsersModule,
     DashboardModule,
     PaymentModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
 })
