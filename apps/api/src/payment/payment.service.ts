@@ -3,13 +3,17 @@ import {
   BadRequestException,
   UnauthorizedException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
-import { SubscriptionPlan, SubscriptionStatus, BoostStatus } from './types/prisma-enums';
+import {
+  SubscriptionPlan,
+  SubscriptionStatus,
+  BoostStatus,
+} from './types/prisma-enums';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
-import { CmiCallbackDto } from './dto/cmi-callback.dto';
-import { generateCmiHash, verifyCmiHash } from './utils/cmi-hash';
+import { generateCmiHash } from './utils/cmi-hash';
 import {
   PAYMENT_PLANS,
   PAYMENT_STATUS,
@@ -17,9 +21,12 @@ import {
   BOOST_ACTIVE_DAYS,
   PlanType,
 } from './utils/payment.constants';
+import { createHash } from 'crypto'; // <--- AJOUT IMPORTANT
 
 @Injectable()
 export class PaymentService {
+  private readonly logger = new Logger(PaymentService.name);
+
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
@@ -27,11 +34,6 @@ export class PaymentService {
 
   /**
    * Initie un paiement CMI.
-   *
-   * Règles métier :
-   * - Premium et Boost sont mutuellement exclusifs
-   * - Cooldown Boost : 1 Boost / 21 jours (7j actif + 14j repos)
-   * - Les Gratuits ont max 1 service (déjà codé ailleurs)
    */
   async initiatePayment(userId: string, dto: InitiatePaymentDto) {
     // 1. Récupérer le profil PRO
@@ -50,11 +52,17 @@ export class PaymentService {
     // Vérif BOOST : cityId et categoryId requis
     if (dto.planType === 'BOOST') {
       if (!dto.cityId || !dto.categoryId) {
-        throw new BadRequestException('cityId et categoryId sont requis pour BOOST');
+        throw new BadRequestException(
+          'cityId et categoryId sont requis pour BOOST',
+        );
       }
 
       // Vérif exclusivité : Premium actif ?
-      if (proProfile.isPremium && proProfile.premiumActiveUntil && proProfile.premiumActiveUntil > now) {
+      if (
+        proProfile.isPremium &&
+        proProfile.premiumActiveUntil &&
+        proProfile.premiumActiveUntil > now
+      ) {
         throw new BadRequestException(
           'Exclusivité : Vous avez déjà un abonnement Premium actif. ' +
             'Premium et Boost sont mutuellement exclusifs.',
@@ -69,7 +77,8 @@ export class PaymentService {
 
       if (lastBoost) {
         const daysSinceLastBoost = Math.floor(
-          (now.getTime() - lastBoost.createdAt.getTime()) / (1000 * 60 * 60 * 24),
+          (now.getTime() - lastBoost.createdAt.getTime()) /
+            (1000 * 60 * 60 * 24),
         );
         if (daysSinceLastBoost < BOOST_COOLDOWN_DAYS) {
           throw new BadRequestException(
@@ -112,13 +121,12 @@ export class PaymentService {
     });
 
     // 5. Construction de l'objet CMI FINAL (UNE SEULE FOIS, AUCUNE MUTATION APRÈS)
-    // Récupération de l'URL publique (Ngrok ou domaine de production)
     const publicUrl = this.config.get<string>('PUBLIC_URL');
 
     if (!publicUrl) {
       throw new BadRequestException(
-        'PUBLIC_URL n\'est pas configurée dans les variables d\'environnement. ' +
-        'Configurez PUBLIC_URL avec votre URL Ngrok ou domaine public.',
+        "PUBLIC_URL n'est pas configurée dans les variables d'environnement. " +
+          'Configurez PUBLIC_URL avec votre URL Ngrok ou domaine public.',
       );
     }
 
@@ -180,13 +188,81 @@ export class PaymentService {
 
   /**
    * Traite le callback CMI après paiement.
-   *
-   * Gère l'idempotence, la sécurité (hash), et active le plan si succès.
+   * VERSION DEBUG SCANNER - Vérifie manuellement le Hash
    */
-  async handleCallback(payload: CmiCallbackDto) {
-    const { oid, ProcReturnCode, Response, TransId, HASH } = payload;
+  async handleCallback(data: any) {
+    // 1. LOGS BRUTS (Pour voir ce que CMI envoie vraiment)
+    console.log('📥 --- CMI CALLBACK RAW DATA START ---');
+    console.log(JSON.stringify(data, null, 2));
+    console.log('📥 --- CMI CALLBACK RAW DATA END ---');
 
-    // 1. Idempotence : Chercher le PaymentOrder
+    // Extraction du Hash reçu
+    const receivedHash = data.HASH || data.hash;
+
+    if (!receivedHash) {
+      this.logger.error('❌ Callback reçu sans Hash');
+      throw new UnauthorizedException('Hash manquant dans le callback');
+    }
+
+    // 2. Configuration pour la vérification
+    const storeKey = this.config.get<string>('CMI_STORE_KEY')!;
+    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha512';
+    // On force la lecture en HEX comme configuré dans ton .env
+    const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'hex';
+
+    // 3. Construction de la chaîne à hacher (ORDRE SPÉCIFIQUE AU RETOUR)
+    // CMI Standard pour 3D_PAY_HOSTING :
+    // clientid + oid + amount + currency + rnd + Response + storetype + trantype + storeKey
+    const params = [
+      data.clientid,
+      data.oid,
+      data.amount,
+      data.currency,
+      data.rnd,
+      data.Response, // <--- C'est lui qui change tout !
+      data.storetype,
+      data.trantype,
+    ];
+
+    // Gestion des valeurs null/undefined (CMI peut renvoyer vide parfois)
+    const stringToHash =
+      params.map((val) => (val === undefined || val === null ? '' : val)).join('') +
+      storeKey;
+
+    // 4. Calcul du Hash local
+    const calculatedHash = createHash(hashAlgo)
+      .update(stringToHash)
+      .digest(hashOutput as any);
+
+    // 5. DEBUG COMPARATIF (Le moment de vérité)
+    console.log('🔐 --- CMI HASH VERIFICATION ---');
+    console.log('1. String Hachée :', stringToHash.replace(storeKey, '***KEY***'));
+    console.log('2. Hash Attendu (Calculé) :', calculatedHash);
+    console.log('3. Hash Reçu (CMI)        :', receivedHash);
+    console.log('4. Match ?                :', calculatedHash.toLowerCase() === receivedHash.toLowerCase());
+    console.log('🔐 -----------------------------');
+
+    // 6. Validation
+    if (calculatedHash.toLowerCase() !== receivedHash.toLowerCase()) {
+      // TENTATIVE DE SAUVETAGE (Si CMI renvoie du Base64 alors qu'on attend du Hex)
+      const fallbackHash = createHash(hashAlgo)
+        .update(stringToHash)
+        .digest('base64');
+      
+      if (fallbackHash === receivedHash) {
+        this.logger.warn(
+          "⚠️ Attention: CMI renvoie du Base64 alors que la config est HEX. J'accepte exceptionnellement.",
+        );
+      } else {
+        this.logger.error('❌ ECHEC VALIDATION HASH');
+        throw new UnauthorizedException('Hash CMI invalide : Signature incorrecte');
+      }
+    }
+
+    // 7. Traitement de la commande
+    const { oid, ProcReturnCode, Response, TransId } = data;
+
+    // Chercher le PaymentOrder
     const order = await this.prisma.paymentOrder.findUnique({
       where: { oid },
     });
@@ -195,49 +271,36 @@ export class PaymentService {
       throw new NotFoundException(`Commande ${oid} non trouvée`);
     }
 
-    // Si déjà payé, retour immédiat (idempotence)
+    // Idempotence
     if (order.status === PAYMENT_STATUS.PAID) {
       console.log(`[Payment] Callback idempotent pour oid=${oid}, déjà PAID`);
       return { status: 'success', message: 'Paiement déjà traité' };
     }
 
-    // 2. Sécurité : Vérifier le Hash
-    if (HASH) {
-      const isValid = verifyCmiHash(
-        HASH,
-        payload,
-        this.config.get<string>('CMI_STORE_KEY')!,
-        this.config.get<string>('CMI_HASH_ORDER')!,
-        this.config.get<string>('CMI_HASH_ALGO')!,
-        this.config.get<string>('CMI_HASH_OUTPUT') as 'base64' | 'hex',
-      );
-
-      if (!isValid) {
-        throw new UnauthorizedException('Hash CMI invalide');
-      }
-    }
-
-    // 3. Validation : Vérifier ProcReturnCode ou Response
+    // Vérifier le succès
     const isSuccess =
-      ProcReturnCode === '00' ||
+      (ProcReturnCode === '00' || ProcReturnCode === 0) &&
       Response?.toLowerCase() === 'approved';
 
-    // 4. Mise à jour du PaymentOrder
+    // Mise à jour du PaymentOrder
     const updatedOrder = await this.prisma.paymentOrder.update({
       where: { oid },
       data: {
         status: isSuccess ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.FAILED,
         paidAt: isSuccess ? new Date() : undefined,
-        procReturnCode: ProcReturnCode,
+        procReturnCode: String(ProcReturnCode), // Force string
         response: Response,
         transId: TransId,
-        rawCallback: payload as any,
+        rawCallback: data,
       },
     });
 
-    // 5. Si succès, activer le plan
+    // Si succès, activer le plan
     if (isSuccess) {
+      this.logger.log(`✅ PAIEMENT RÉUSSI pour ${oid}`);
       await this.activatePlan(updatedOrder);
+    } else {
+      this.logger.warn(`⚠️ PAIEMENT ÉCHOUÉ pour ${oid} : ${data.ErrMsg}`);
     }
 
     return {
@@ -248,7 +311,6 @@ export class PaymentService {
 
   /**
    * Active le plan (Premium ou Boost) après paiement validé.
-   * Utilise une transaction pour garantir la cohérence.
    */
   private async activatePlan(order: any) {
     const now = new Date();
@@ -256,21 +318,16 @@ export class PaymentService {
 
     await this.prisma.$transaction(async (tx) => {
       if (order.planType === 'BOOST') {
-        // Créer un ProBoost
         const startsAt = now;
-        const endsAt = new Date(now.getTime() + BOOST_ACTIVE_DAYS * 24 * 60 * 60 * 1000);
+        const endsAt = new Date(
+          now.getTime() + BOOST_ACTIVE_DAYS * 24 * 60 * 60 * 1000,
+        );
 
         await tx.proBoost.create({
           data: {
-            pro: {
-              connect: { userId: order.proUserId },
-            },
-            city: {
-              connect: { id: order.cityId! },
-            },
-            category: {
-              connect: { id: order.categoryId! },
-            },
+            pro: { connect: { userId: order.proUserId } },
+            city: { connect: { id: order.cityId! } },
+            category: { connect: { id: order.categoryId! } },
             status: BoostStatus.ACTIVE,
             startsAt,
             endsAt,
@@ -278,16 +335,15 @@ export class PaymentService {
           },
         });
 
-        // Update ProProfile.boostActiveUntil
         await tx.proProfile.update({
           where: { userId: order.proUserId },
           data: { boostActiveUntil: endsAt },
         });
       } else {
-        // PREMIUM_MONTHLY ou PREMIUM_ANNUAL
-        const endsAt = new Date(now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000);
+        const endsAt = new Date(
+          now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000,
+        );
 
-        // Chercher une souscription active existante
         const existingSubscription = await tx.proSubscription.findFirst({
           where: {
             proUserId: order.proUserId,
@@ -295,38 +351,38 @@ export class PaymentService {
           },
         });
 
-        const subscriptionPlan = order.planType === 'PREMIUM_MONTHLY'
-          ? SubscriptionPlan.PREMIUM_MONTHLY_NO_COMMIT
-          : SubscriptionPlan.PREMIUM_ANNUAL_COMMIT;
+        const subscriptionPlan =
+          order.planType === 'PREMIUM_MONTHLY'
+            ? SubscriptionPlan.PREMIUM_MONTHLY_NO_COMMIT
+            : SubscriptionPlan.PREMIUM_ANNUAL_COMMIT;
 
         const subscriptionData = {
           plan: subscriptionPlan,
           status: SubscriptionStatus.ACTIVE,
           priceMad: Math.round(plan.priceMad),
           startedAt: now,
-          commitmentStartsAt: order.planType === 'PREMIUM_ANNUAL' ? now : undefined,
-          commitmentEndsAt: order.planType === 'PREMIUM_ANNUAL' ? endsAt : undefined,
+          commitmentStartsAt:
+            order.planType === 'PREMIUM_ANNUAL' ? now : undefined,
+          commitmentEndsAt:
+            order.planType === 'PREMIUM_ANNUAL' ? endsAt : undefined,
+          endDate: endsAt, // AJOUT IMPORTANT POUR LE SUIVI
         };
 
         if (existingSubscription) {
-          // Mettre à jour la souscription existante
           await tx.proSubscription.update({
             where: { id: existingSubscription.id },
             data: subscriptionData,
           });
         } else {
-          // Créer une nouvelle souscription
           await tx.proSubscription.create({
             data: {
-              pro: {
-                connect: { userId: order.proUserId },
-              },
+              pro: { connect: { userId: order.proUserId } },
+              transactionId: order.oid, // Lien important
               ...subscriptionData,
             },
           });
         }
 
-        // Update ProProfile
         await tx.proProfile.update({
           where: { userId: order.proUserId },
           data: {
@@ -337,6 +393,8 @@ export class PaymentService {
       }
     });
 
-    console.log(`[Payment] Plan activé : ${order.planType} pour userId=${order.proUserId}`);
+    console.log(
+      `[Payment] Plan activé : ${order.planType} pour userId=${order.proUserId}`,
+    );
   }
 }
