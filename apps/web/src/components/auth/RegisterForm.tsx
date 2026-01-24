@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
-import { postJSON, getJSON, APIError } from '@/lib/api';
+import { postJSON, APIError } from '@/lib/api';
+import CitySelect from '@/components/shared/CitySelect';
 import type { RegisterInput, AuthResponse } from '@khadamat/contracts';
 
 /**
@@ -11,19 +12,13 @@ import type { RegisterInput, AuthResponse } from '@khadamat/contracts';
  *
  * Formulaire d'inscription avec tabs Client/Pro
  * - Tabs : [Client] vs [Pro]
- * - Champs communs : Prénom, Nom, Email, Phone, Password
- * - Spécifique Pro : Select Ville (chargé via GET /public/cities)
- * - Success : setAuth() + redirect '/'
+ * - Champs communs : Prénom, Nom, Email, Phone, Password, Ville (cityId)
+ * - Spécifique Client : Adresse complète (addressLine)
+ * - Success : setAuth() + redirect selon rôle (CLIENT → '/', PRO → '/dashboard/kyc')
  * - Error : Affichage message d'erreur
  *
  * ⚠️ "use client" OBLIGATOIRE (hooks)
  */
-
-interface City {
-  id: string;
-  name: string;
-  slug: string;
-}
 
 export default function RegisterForm() {
   const router = useRouter();
@@ -39,33 +34,13 @@ export default function RegisterForm() {
     email: '',
     phone: '',
     password: '',
-    cityId: '', // Uniquement pour PRO
+    cityId: '', // Requis pour TOUS
+    addressLine: '', // Requis pour CLIENT uniquement
   });
-
-  // Cities pour le select (PRO uniquement)
-  const [cities, setCities] = useState<City[]>([]);
-  const [loadingCities, setLoadingCities] = useState(false);
 
   // UI states
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  // Charger les villes au montage du composant
-  useEffect(() => {
-    const fetchCities = async () => {
-      setLoadingCities(true);
-      try {
-        const citiesData = await getJSON<City[]>('/public/cities');
-        setCities(citiesData);
-      } catch (err) {
-        console.error('Erreur lors du chargement des villes:', err);
-      } finally {
-        setLoadingCities(false);
-      }
-    };
-
-    fetchCities();
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,14 +56,23 @@ export default function RegisterForm() {
         phone: formData.phone,
         password: formData.password,
         role,
-        ...(role === 'PRO' && formData.cityId ? { cityId: formData.cityId } : {}),
+        cityId: formData.cityId, // Requis pour tous
+        ...(role === 'CLIENT' && formData.addressLine
+          ? { addressLine: formData.addressLine }
+          : {}),
       };
 
       const response = await postJSON<AuthResponse>('/auth/register', payload);
 
-      // Success : stocker auth et rediriger
+      // Success : stocker auth et rediriger selon rôle
       setAuth(response.user, response.accessToken);
-      router.push('/');
+
+      // Redirect selon le rôle
+      if (role === 'PRO') {
+        router.push('/dashboard/kyc');
+      } else {
+        router.push('/');
+      }
     } catch (err) {
       if (err instanceof APIError) {
         setError(err.message);
@@ -235,34 +219,44 @@ export default function RegisterForm() {
           />
         </div>
 
-        {/* Ville (PRO uniquement) */}
-        {role === 'PRO' && (
+        {/* Ville (TOUS) */}
+        <div>
+          <label
+            htmlFor="cityId"
+            className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+          >
+            Ville <span className="text-red-500">*</span>
+          </label>
+          <CitySelect
+            value={formData.cityId}
+            onChange={(cityId) => setFormData({ ...formData, cityId })}
+            required
+          />
+        </div>
+
+        {/* Adresse complète (CLIENT uniquement) */}
+        {role === 'CLIENT' && (
           <div>
             <label
-              htmlFor="cityId"
+              htmlFor="addressLine"
               className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
             >
-              Ville
+              Adresse complète <span className="text-red-500">*</span>
             </label>
-            <select
-              id="cityId"
-              value={formData.cityId}
+            <input
+              type="text"
+              id="addressLine"
+              value={formData.addressLine}
               onChange={(e) =>
-                setFormData({ ...formData, cityId: e.target.value })
+                setFormData({ ...formData, addressLine: e.target.value })
               }
               className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
+              placeholder="12 Rue Hassan II, Appartement 5"
               required
-              disabled={loadingCities}
-            >
-              <option value="">
-                {loadingCities ? 'Chargement...' : 'Sélectionnez une ville'}
-              </option>
-              {cities.map((city) => (
-                <option key={city.id} value={city.id}>
-                  {city.name}
-                </option>
-              ))}
-            </select>
+            />
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+              Cette adresse sera utilisée pour vos réservations
+            </p>
           </div>
         )}
 
@@ -276,7 +270,7 @@ export default function RegisterForm() {
         {/* Bouton Submit */}
         <button
           type="submit"
-          disabled={loading || (role === 'PRO' && loadingCities)}
+          disabled={loading}
           className="w-full px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? 'Inscription...' : "S'inscrire"}
