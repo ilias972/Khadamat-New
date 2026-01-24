@@ -377,7 +377,7 @@ export class PaymentService {
           await tx.proSubscription.create({
             data: {
               pro: { connect: { userId: order.proUserId } },
-              // transactionId: order.oid,  <-- LIGNE SUPPRIMÉE (Cause de l'erreur)
+              transactionId: order.oid,
               ...subscriptionData,
             },
           });
