@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 import { DatabaseModule } from './database/database.module';
 import { HealthController } from './health/health.controller';
 import { CatalogModule } from './catalog/catalog.module';
@@ -11,6 +13,7 @@ import { UsersModule } from './users/users.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PaymentModule } from './payment/payment.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { KycModule } from './kyc/kyc.module';
 
 @Module({
   imports: [
@@ -19,6 +22,11 @@ import { NotificationsModule } from './notifications/notifications.module';
       envFilePath: '.env',
     }),
     EventEmitterModule.forRoot(),
+    // Serve static files from uploads directory
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'uploads'),
+      serveRoot: '/uploads',
+    }),
     DatabaseModule,
     CatalogModule,
     AuthModule,
@@ -28,6 +36,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     DashboardModule,
     PaymentModule,
     NotificationsModule,
+    KycModule,
   ],
   controllers: [HealthController],
 })

@@ -43,16 +43,21 @@ export class AuthService {
       throw new ConflictException('Ce numéro de téléphone est déjà utilisé.');
     }
 
-    // 3. Vérifier la ville si c'est un PRO
-    if (dto.role === 'PRO') {
-      if (!dto.cityId) {
-        throw new BadRequestException('La ville est obligatoire pour un professionnel.');
-      }
-      const cityExists = await this.prisma.city.findUnique({
-        where: { id: dto.cityId },
-      });
-      if (!cityExists) {
-        throw new BadRequestException('Ville invalide.');
+    // 3. Vérifier la ville (obligatoire pour TOUS)
+    if (!dto.cityId) {
+      throw new BadRequestException('La ville est obligatoire.');
+    }
+    const cityExists = await this.prisma.city.findUnique({
+      where: { id: dto.cityId },
+    });
+    if (!cityExists) {
+      throw new BadRequestException('Ville invalide.');
+    }
+
+    // 4. Vérifier l'adresse si c'est un CLIENT
+    if (dto.role === 'CLIENT') {
+      if (!dto.addressLine || dto.addressLine.trim().length === 0) {
+        throw new BadRequestException('L\'adresse est obligatoire pour un client.');
       }
     }
 
@@ -61,7 +66,7 @@ export class AuthService {
 
     // 5. Transaction : Créer User + (Optionnel) ProProfile
     const user = await this.prisma.$transaction(async (tx) => {
-      // A. Créer le User
+      // A. Créer le User avec cityId et addressLine
       const newUser = await tx.user.create({
         data: {
           email: email, // Peut être null
@@ -71,6 +76,8 @@ export class AuthService {
           lastName: dto.lastName.trim(),
           role: dto.role,
           status: 'ACTIVE',
+          cityId: dto.cityId, // Obligatoire pour tous
+          addressLine: dto.addressLine?.trim() || null, // Obligatoire si CLIENT
         },
       });
 
