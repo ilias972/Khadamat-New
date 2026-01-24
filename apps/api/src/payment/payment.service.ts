@@ -112,13 +112,28 @@ export class PaymentService {
     });
 
     // 5. Construction de l'objet CMI FINAL (UNE SEULE FOIS, AUCUNE MUTATION APRÈS)
+    // Récupération de l'URL publique (Ngrok ou domaine de production)
     const publicUrl = this.config.get<string>('PUBLIC_URL');
+
+    if (!publicUrl) {
+      throw new BadRequestException(
+        'PUBLIC_URL n\'est pas configurée dans les variables d\'environnement. ' +
+        'Configurez PUBLIC_URL avec votre URL Ngrok ou domaine public.',
+      );
+    }
+
+    // Construction des URLs de callback (Architecture API-First)
+    const okUrl = `${publicUrl}/api/payment/callback`;
+    const failUrl = `${publicUrl}/api/payment/callback`;
+
+    console.log('🔗 CMI URLs used:', { okUrl, failUrl });
+
     const cmiParams = {
       clientid: this.config.get<string>('CMI_CLIENT_ID')!,
       oid,
       amount: formattedAmount,
-      okUrl: `${publicUrl}/api/payment/callback`,
-      failUrl: `${publicUrl}/api/payment/callback`,
+      okUrl,
+      failUrl,
       rnd,
       storetype: this.config.get<string>('CMI_STORE_TYPE')!,
       trantype: this.config.get<string>('CMI_TRAN_TYPE')!,
