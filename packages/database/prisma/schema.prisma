@@ -164,6 +164,7 @@ model ProProfile {
   whatsapp String
 
   // KYC
+  cinNumber            String?    @unique  // Numéro CIN marocain (unique, normalisé)
   kycStatus            KycStatus  @default(NOT_SUBMITTED)
   kycCinFrontUrl       String?
   kycCinBackUrl        String?
