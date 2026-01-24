@@ -368,7 +368,7 @@ export class PaymentService {
           endDate: endsAt, // AJOUT IMPORTANT POUR LE SUIVI
         };
 
-        if (existingSubscription) {
+       if (existingSubscription) {
           await tx.proSubscription.update({
             where: { id: existingSubscription.id },
             data: subscriptionData,
@@ -377,7 +377,7 @@ export class PaymentService {
           await tx.proSubscription.create({
             data: {
               pro: { connect: { userId: order.proUserId } },
-              transactionId: order.oid, // Lien important
+              // transactionId: order.oid,  <-- LIGNE SUPPRIMÉE (Cause de l'erreur)
               ...subscriptionData,
             },
           });
