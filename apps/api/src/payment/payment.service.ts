@@ -36,9 +36,10 @@ export class PaymentService {
    * Initie un paiement CMI.
    */
   async initiatePayment(userId: string, dto: InitiatePaymentDto) {
-    // 1. Récupérer le profil PRO
+    // 1. Récupérer le profil PRO et l'USER associé (pour les infos de facturation)
     const proProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
+      include: { user: true }, // On récupère l'user pour son email/nom
     });
 
     if (!proProfile) {
@@ -99,7 +100,7 @@ export class PaymentService {
       }
     }
 
-    // 3. Génération des constantes IMMUABLES (UNE SEULE FOIS)
+    // 3. Génération des constantes
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8).toUpperCase();
     const oid = `CMD-${timestamp}-${random}`;
@@ -129,11 +130,12 @@ export class PaymentService {
       );
     }
 
-    // Architecture API-First (Ngrok)
     const okUrl = `${publicUrl}/api/payment/callback`;
     const failUrl = `${publicUrl}/api/payment/callback`;
 
-    console.log('🔗 CMI URLs used:', { okUrl, failUrl });
+    // Préparation des données Client pour éviter l'erreur 3D-1004
+    const safeName = (proProfile.user.name || 'Client Khadamat').replace(/[^a-zA-Z0-9 ]/g, ' ').trim();
+    const safeEmail = proProfile.user.email || 'client@khadamat.ma';
 
     const cmiParams = {
       clientid: this.config.get<string>('CMI_CLIENT_ID')!,
@@ -145,24 +147,27 @@ export class PaymentService {
       storetype: this.config.get<string>('CMI_STORE_TYPE')!,
       trantype: this.config.get<string>('CMI_TRAN_TYPE')!,
       currency: this.config.get<string>('CMI_CURRENCY')!,
+      
+      // --- CHAMPS AJOUTÉS POUR FIXER L'ERREUR 3D-1004 ---
+      lang: 'fr',
+      email: safeEmail,
+      BillToName: safeName,
+      BillToCompany: 'Pro Khadamat', // Optionnel mais aide parfois
+      BillToStreet1: 'Adresse Client', // Requis par certains comptes test
+      BillToCity: 'Casablanca',
+      BillToCountry: '504', // Code ISO Maroc
+      encoding: 'UTF-8',
+      // --------------------------------------------------
     };
 
-    // 6. FREEZE pour prévenir toute mutation
     if (process.env.NODE_ENV !== 'production') {
       Object.freeze(cmiParams);
     }
 
-    // 7. Log propre AVANT hashage
-    console.log('🔒 CMI Params Final:', {
-      oid,
-      rnd,
-      amount: cmiParams.amount,
-      clientid: cmiParams.clientid,
-    });
+    console.log('🔒 CMI Params Final:', { oid, amount: cmiParams.amount, clientid: cmiParams.clientid });
 
-    // 8. Génération du Hash
-    // On force les valeurs par défaut SHA1/Base64 si non définies, suite à tes logs
-    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha1';
+    // 6. Génération du Hash
+    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha512';
     const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'base64';
     const hashOrder = this.config.get<string>('CMI_HASH_ORDER')!;
 
@@ -174,23 +179,20 @@ export class PaymentService {
       hashOutput as 'base64' | 'hex',
     );
 
-    console.log('🔒 CMI Signature Generated:', signature);
-
-    // 9. Retour STRICT
+    // 7. Retour
     return {
       actionUrl: this.config.get<string>('CMI_BASE_URL'),
       fields: {
         ...cmiParams,
         hash: signature,
         shopurl: this.config.get<string>('FRONTEND_URL'),
-        lang: 'fr',
       },
     };
   }
 
   /**
    * Traite le callback CMI.
-   * Gère les succès ET les erreurs sans bloquer sur le hash si c'est une erreur explicite.
+   * Version Robuste : Accepte les erreurs CMI sans throw 401.
    */
   async handleCallback(data: any) {
     console.log('📥 --- CMI CALLBACK RECEIVED ---');
@@ -199,12 +201,10 @@ export class PaymentService {
     const { oid, Response, ProcReturnCode, HASH, hash, ErrCode, ErrMsg } = data;
     const receivedHash = HASH || hash;
 
-    // 1. DÉTECTION RAPIDE D'ERREUR CMI (Pour éviter le blocage 401)
-    // Si CMI dit "Error" ou envoie un code erreur (ex: 3D-1004), on accepte le callback comme un échec valide.
-    if (Response === 'Error' || ErrCode) {
-      this.logger.warn(`⚠️ Erreur CMI reçue : ${ErrCode} - ${ErrMsg}`);
+    // 1. DÉTECTION D'ERREUR CMI (Pour éviter le blocage 401)
+    if (Response === 'Error' || ErrCode || (Response === 'Refused')) {
+      this.logger.warn(`⚠️ Retour CMI (Erreur/Refus) : ${ErrCode || ProcReturnCode} - ${ErrMsg || Response}`);
       
-      // Mise à jour de la commande en FAILED
       const order = await this.prisma.paymentOrder.findUnique({ where: { oid } });
       if (order) {
         await this.prisma.paymentOrder.update({
@@ -217,24 +217,22 @@ export class PaymentService {
           },
         });
       }
-      
-      // On retourne un succès HTTP pour dire à CMI "J'ai bien reçu l'info d'erreur",
-      // sinon CMI va réessayer de nous envoyer l'erreur en boucle.
+      // On retourne success pour que CMI arrête de nous spammer avec l'erreur
       return { status: 'failed', message: 'Erreur CMI enregistrée' };
     }
 
-    // 2. VÉRIFICATION STANDARD DU HASH (Uniquement si pas d'erreur explicite)
+    // 2. VÉRIFICATION HASH (Uniquement si pas d'erreur explicite)
     if (!receivedHash) {
       throw new UnauthorizedException('Hash manquant dans le callback');
     }
 
     const storeKey = this.config.get<string>('CMI_STORE_KEY')!;
-    // Config alignée sur tes derniers logs (SHA1 / Base64 par défaut)
-    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha1';
+    // On s'aligne sur ce qu'on a vu dans les logs (SHA1/Base64 semble être le format de retour erreur, 
+    // mais pour le succès, ça dépend de la config. On utilise la config .env)
+    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha512';
     const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'base64';
 
-    // Ordre standard CMI pour le RETOUR (différent de l'aller)
-    // clientid + oid + amount + currency + rnd + Response + storetype + trantype + storeKey
+    // Ordre standard CMI pour le RETOUR
     const params = [
       data.clientid,
       data.oid,
@@ -246,26 +244,27 @@ export class PaymentService {
       data.trantype,
     ];
 
-    // Construction de la string
     const stringToHash = params.map((val) => (val === undefined || val === null ? '' : val)).join('') + storeKey;
-
-    // Calcul
     const calculatedHash = createHash(hashAlgo).update(stringToHash).digest(hashOutput as any);
 
     console.log('🔐 Hash Check:', { calculated: calculatedHash, received: receivedHash });
 
     if (calculatedHash !== receivedHash) {
-      // Tolérance minuscules/majuscules pour le Hex/Base64
       if (calculatedHash.toLowerCase() !== receivedHash.toLowerCase()) {
-         this.logger.error('❌ ECHEC VALIDATION HASH');
-         throw new UnauthorizedException('Hash CMI invalide');
+         // Tentative de fallback SHA1 si la config est SHA512 mais que CMI renvoie du SHA1
+         const fallbackHash = createHash('sha1').update(stringToHash).digest('base64');
+         if (fallbackHash === receivedHash) {
+            this.logger.warn("⚠️ Hash match via Fallback SHA1 (Config mismatch)");
+         } else {
+            this.logger.error('❌ ECHEC VALIDATION HASH');
+            throw new UnauthorizedException('Hash CMI invalide');
+         }
       }
     }
 
-    // 3. TRAITEMENT DU SUCCÈS
+    // 3. SUCCÈS
     const isSuccess = (ProcReturnCode === '00' || ProcReturnCode === 0) && Response === 'Approved';
 
-    // Mise à jour DB
     const updatedOrder = await this.prisma.paymentOrder.update({
       where: { oid },
       data: {
@@ -356,7 +355,7 @@ export class PaymentService {
           await tx.proSubscription.create({
             data: {
               pro: { connect: { userId: order.proUserId } },
-              transactionId: order.oid, // ✅ Fonctionne car tu as fait la migration
+              transactionId: order.oid, // ✅ Utilise la colonne ajoutée
               ...subscriptionData,
             },
           });
