@@ -10,7 +10,8 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "prisma:generate": "pnpm --filter @khadamat/database generate"
   },
   "devDependencies": {
     "turbo": "^2.3.3"
@@ -19,5 +20,13 @@
     "node": ">=18",
     "pnpm": ">=8"
   },
-  "packageManager": "pnpm@10.27.0"
+  "packageManager": "pnpm@10.27.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild"
+    ]
+  }
 }
