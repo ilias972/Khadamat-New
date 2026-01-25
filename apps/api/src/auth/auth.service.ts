@@ -73,7 +73,17 @@ export class AuthService {
       }
     }
 
-    // 5. Vérifier l'unicité du CIN si PRO
+    // 5. HARD GATE PRO : Vérifier cinNumber + fichiers OBLIGATOIRES
+    if (dto.role === 'PRO') {
+      if (!dto.cinNumber?.trim()) {
+        throw new BadRequestException('Le numéro CIN est obligatoire pour les professionnels.');
+      }
+      if (!cinFrontFile || !cinBackFile) {
+        throw new BadRequestException('Les photos du CIN (recto et verso) sont obligatoires pour les professionnels.');
+      }
+    }
+
+    // 6. Vérifier l'unicité du CIN si PRO
     if (dto.role === 'PRO' && dto.cinNumber) {
       const normalizedCinNumber = dto.cinNumber.trim().toUpperCase();
       const existingCin = await this.prisma.proProfile.findUnique({
@@ -84,15 +94,15 @@ export class AuthService {
       }
     }
 
-    // 6. Hasher le mot de passe
+    // 7. Hasher le mot de passe
     const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-    // 7. Générer les URLs publiques pour les fichiers (si PRO)
+    // 8. Générer les URLs publiques pour les fichiers (si PRO)
     const baseUrl = this.config.get<string>('PUBLIC_URL') || 'http://localhost:3001';
     const frontUrl = cinFrontFile ? `${baseUrl}/uploads/kyc/${cinFrontFile.filename}` : null;
     const backUrl = cinBackFile ? `${baseUrl}/uploads/kyc/${cinBackFile.filename}` : null;
 
-    // 8. Transaction atomique : Créer User + ProProfile
+    // 9. Transaction atomique : Créer User + ProProfile
     try {
       const user = await this.prisma.$transaction(async (tx) => {
         // A. Créer le User avec cityId et addressLine
