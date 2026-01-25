@@ -1,14 +1,26 @@
-import { Controller, Post, Get, Body, UseGuards, Request } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  UseGuards,
+  Request,
+  UseInterceptors,
+  UploadedFiles,
+  BadRequestException,
+} from '@nestjs/common';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
-import type { RegisterInput, LoginInput, AuthResponse, PublicUser } from '@khadamat/contracts';
+import { multerConfig } from '../kyc/multer.config';
+import type { LoginInput, AuthResponse, PublicUser } from '@khadamat/contracts';
 
 /**
  * AuthController
  *
  * Endpoints d'authentification
- * - POST /api/auth/register : Inscription
+ * - POST /api/auth/register : Inscription (Multipart avec fichiers CIN pour PRO)
  * - POST /api/auth/login : Connexion
  * - GET /api/auth/me : Profil utilisateur connecté (protégé)
  */
@@ -19,19 +31,72 @@ export class AuthController {
 
   /**
    * POST /api/auth/register
-   * Inscription d'un nouveau Client ou Pro
+   * Inscription ATOMIQUE d'un nouveau Client ou Pro
    *
-   * RÈGLE MÉTIER :
-   * - Un seul `phone` à l'inscription
-   * - Si PRO : phone copié automatiquement vers ProProfile.whatsapp
+   * RÈGLE MÉTIER HARD GATE :
+   * - CLIENT : Fichiers CIN optionnels/ignorés
+   * - PRO : cinNumber, cinFront, cinBack OBLIGATOIRES (validé par le service)
+   * - Si upload échoue pour PRO, compte non créé (transaction atomique)
+   *
+   * Format : multipart/form-data
+   * Champs texte : firstName, lastName, email, phone, password, role, cityId, addressLine?, cinNumber?
+   * Fichiers : cinFront?, cinBack? (obligatoires si role=PRO)
    */
   @Post('register')
-  @ApiOperation({ summary: 'Inscription d\'un nouveau Client ou Pro' })
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'cinFront', maxCount: 1 },
+        { name: 'cinBack', maxCount: 1 },
+      ],
+      multerConfig,
+    ),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Inscription atomique Client/Pro avec KYC' })
   @ApiResponse({ status: 201, description: 'Inscription réussie' })
-  @ApiResponse({ status: 409, description: 'Email ou téléphone déjà utilisé' })
-  @ApiResponse({ status: 400, description: 'Données invalides' })
-  async register(@Body() dto: RegisterInput): Promise<AuthResponse> {
-    return this.authService.register(dto);
+  @ApiResponse({ status: 409, description: 'Email, téléphone ou CIN déjà utilisé' })
+  @ApiResponse({ status: 400, description: 'Données invalides ou fichiers manquants (PRO)' })
+  async register(
+    @Body() body: any,
+    @UploadedFiles()
+    files: {
+      cinFront?: Express.Multer.File[];
+      cinBack?: Express.Multer.File[];
+    },
+  ): Promise<AuthResponse> {
+    // Extract files
+    const cinFrontFile = files?.cinFront?.[0];
+    const cinBackFile = files?.cinBack?.[0];
+
+    // Validation PRO : Fichiers obligatoires
+    if (body.role === 'PRO') {
+      if (!body.cinNumber || body.cinNumber.trim().length === 0) {
+        throw new BadRequestException('Le numéro CIN est obligatoire pour les professionnels');
+      }
+      if (!cinFrontFile) {
+        throw new BadRequestException('La photo CIN recto est obligatoire pour les professionnels');
+      }
+      if (!cinBackFile) {
+        throw new BadRequestException('La photo CIN verso est obligatoire pour les professionnels');
+      }
+    }
+
+    // Construire le DTO
+    const dto = {
+      firstName: body.firstName,
+      lastName: body.lastName,
+      email: body.email,
+      phone: body.phone,
+      password: body.password,
+      role: body.role,
+      cityId: body.cityId,
+      addressLine: body.addressLine || undefined,
+      cinNumber: body.cinNumber || undefined,
+    };
+
+    // Appeler le service avec fichiers
+    return this.authService.register(dto, cinFrontFile, cinBackFile);
   }
 
   /**
