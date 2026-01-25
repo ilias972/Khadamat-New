@@ -25,6 +25,7 @@ export type LoginInput = z.infer<typeof LoginSchema>;
  * - Si role === 'PRO', ce phone sera automatiquement copié vers ProProfile.whatsapp
  * - cityId est OBLIGATOIRE pour TOUS (CLIENT et PRO)
  * - addressLine est OBLIGATOIRE si role === 'CLIENT'
+ * - cinNumber est OBLIGATOIRE si role === 'PRO' (KYC atomique)
  */
 export const RegisterSchema = z
   .object({
@@ -36,6 +37,7 @@ export const RegisterSchema = z
     role: RoleSchema.exclude(['ADMIN']), // CLIENT ou PRO uniquement
     cityId: z.string().min(1, 'La ville est obligatoire'), // Requis pour TOUS
     addressLine: z.string().optional(), // Requis si CLIENT, validé dans refine
+    cinNumber: z.string().optional(), // Requis si PRO, validé dans refine
   })
   .refine(
     (data) => {
@@ -48,6 +50,19 @@ export const RegisterSchema = z
     {
       message: 'L\'adresse est obligatoire pour les clients',
       path: ['addressLine'],
+    },
+  )
+  .refine(
+    (data) => {
+      // Si role === PRO, cinNumber est obligatoire (KYC atomique)
+      if (data.role === 'PRO') {
+        return !!data.cinNumber && data.cinNumber.trim().length > 0;
+      }
+      return true;
+    },
+    {
+      message: 'Le numéro CIN est obligatoire pour les professionnels',
+      path: ['cinNumber'],
     },
   );
 
