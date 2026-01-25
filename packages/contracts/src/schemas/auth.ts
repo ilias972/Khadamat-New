@@ -74,6 +74,7 @@ export const PublicUserSchema = z.object({
     name: z.string(),
   }).nullable().optional(),
   isPremium: z.boolean().optional(), // Pour les PRO
+  kycStatus: z.enum(['NOT_SUBMITTED', 'PENDING', 'APPROVED', 'REJECTED']).optional(), // Pour les PRO
 });
 
 export type PublicUser = z.infer<typeof PublicUserSchema>;

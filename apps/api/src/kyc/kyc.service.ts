@@ -71,6 +71,102 @@ export class KycService {
   }
 
   /**
+   * resubmitKyc
+   *
+   * Re-soumet le dossier KYC après rejet (REJECTED → PENDING).
+   *
+   * - Accessible uniquement si kycStatus === 'REJECTED'
+   * - Met à jour cinNumber et/ou fichiers si fournis
+   * - Repasse le statut à PENDING
+   * - Efface le motif de rejet
+   *
+   * @param userId - ID du PRO connecté
+   * @param dto - { cinNumber?, frontUrl?, backUrl? }
+   * @returns ProProfile mis à jour
+   */
+  async resubmitKyc(
+    userId: string,
+    dto: { cinNumber?: string; frontUrl?: string; backUrl?: string },
+  ) {
+    // 1. Vérifier que le profil existe
+    const existingProfile = await this.prisma.proProfile.findUnique({
+      where: { userId },
+      select: {
+        kycStatus: true,
+        cinNumber: true,
+        kycCinFrontUrl: true,
+        kycCinBackUrl: true,
+      },
+    });
+
+    if (!existingProfile) {
+      throw new NotFoundException('Profil Pro non trouvé');
+    }
+
+    // 2. Vérifier que le statut est REJECTED
+    if (existingProfile.kycStatus !== 'REJECTED') {
+      throw new BadRequestException(
+        'La re-soumission est autorisée uniquement si le dossier a été rejeté',
+      );
+    }
+
+    // 3. Préparer les données de mise à jour
+    const updateData: any = {
+      kycStatus: 'PENDING', // Repasser à PENDING
+      kycRejectionReason: null, // Effacer le motif de rejet
+    };
+
+    // Mettre à jour cinNumber si fourni
+    if (dto.cinNumber) {
+      const normalizedCinNumber = dto.cinNumber.trim().toUpperCase();
+
+      // Vérifier l'unicité si changement de numéro
+      if (normalizedCinNumber !== existingProfile.cinNumber) {
+        const existingCin = await this.prisma.proProfile.findUnique({
+          where: { cinNumber: normalizedCinNumber },
+        });
+        if (existingCin) {
+          throw new ConflictException('Ce numéro CIN est déjà utilisé par un autre professionnel');
+        }
+      }
+
+      updateData.cinNumber = normalizedCinNumber;
+    }
+
+    // Mettre à jour les URLs si fournies
+    if (dto.frontUrl) {
+      updateData.kycCinFrontUrl = dto.frontUrl;
+    }
+    if (dto.backUrl) {
+      updateData.kycCinBackUrl = dto.backUrl;
+    }
+
+    // 4. Mettre à jour le profil
+    try {
+      const updatedProfile = await this.prisma.proProfile.update({
+        where: { userId },
+        data: updateData,
+        select: {
+          userId: true,
+          cinNumber: true,
+          kycStatus: true,
+          kycCinFrontUrl: true,
+          kycCinBackUrl: true,
+          kycRejectionReason: true,
+        },
+      });
+
+      return updatedProfile;
+    } catch (error: any) {
+      // Gestion de l'erreur d'unicité Prisma (P2002)
+      if (error.code === 'P2002' && error.meta?.target?.includes('cinNumber')) {
+        throw new ConflictException('Ce numéro CIN est déjà utilisé par un autre professionnel');
+      }
+      throw error;
+    }
+  }
+
+  /**
    * getMyKycStatus
    *
    * Récupère le statut KYC du PRO connecté.

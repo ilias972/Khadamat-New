@@ -26,11 +26,6 @@ interface KycStatus {
   hasCinNumber: boolean;
 }
 
-interface UploadResponse {
-  url: string;
-  filename: string;
-}
-
 export default function KycPage() {
   const router = useRouter();
   const { user, accessToken } = useAuthStore();
@@ -52,9 +47,6 @@ export default function KycPage() {
   const [cinNumber, setCinNumber] = useState('');
   const [frontFile, setFrontFile] = useState<File | null>(null);
   const [backFile, setBackFile] = useState<File | null>(null);
-  const [frontUrl, setFrontUrl] = useState('');
-  const [backUrl, setBackUrl] = useState('');
-  const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // Fetch KYC status
@@ -79,19 +71,31 @@ export default function KycPage() {
     fetchStatus();
   }, [accessToken]);
 
-  // Upload file
-  const uploadFile = async (file: File, type: 'front' | 'back') => {
-    if (!accessToken) return;
 
-    setUploading(true);
+  // Submit KYC (multipart avec resubmit si REJECTED)
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError('');
+    setSuccess('');
+
+    // Vérifier que les fichiers sont présents
+    if (!frontFile || !backFile) {
+      setError('Veuillez sélectionner les deux photos de votre CIN');
+      return;
+    }
+
+    setSubmitting(true);
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('cinNumber', cinNumber);
+      formData.append('cinFront', frontFile);
+      formData.append('cinBack', backFile);
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
-      const response = await fetch(`${apiUrl}/kyc/upload`, {
+      const endpoint = kycStatus?.kycStatus === 'REJECTED' ? '/kyc/resubmit' : '/kyc/submit';
+
+      const response = await fetch(`${apiUrl}${endpoint}`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -101,54 +105,14 @@ export default function KycPage() {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.message || 'Erreur lors de l\'upload');
+        throw new Error(errorData.message || 'Erreur lors de la soumission');
       }
 
-      const data: UploadResponse = await response.json();
-
-      if (type === 'front') {
-        setFrontUrl(data.url);
-      } else {
-        setBackUrl(data.url);
-      }
-
-      setSuccess(`Photo ${type === 'front' ? 'recto' : 'verso'} uploadée avec succès`);
-    } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError('Erreur lors de l\'upload');
-      }
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  // Submit KYC
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-
-    if (!frontUrl || !backUrl) {
-      setError('Veuillez uploader les deux photos de votre CIN');
-      return;
-    }
-
-    setSubmitting(true);
-
-    try {
-      await postJSON(
-        '/kyc/submit',
-        {
-          cinNumber,
-          frontUrl,
-          backUrl,
-        },
-        accessToken || undefined,
+      setSuccess(
+        kycStatus?.kycStatus === 'REJECTED'
+          ? 'Dossier re-soumis avec succès ! Nous le vérifierons sous 48h.'
+          : 'Dossier KYC soumis avec succès ! Nous le vérifierons sous 48h.',
       );
-
-      setSuccess('Dossier KYC soumis avec succès ! Nous le vérifierons sous 48h.');
 
       // Refresh status
       const updatedStatus = await getJSON<KycStatus>('/kyc/status', accessToken || undefined);
@@ -158,10 +122,8 @@ export default function KycPage() {
       setCinNumber('');
       setFrontFile(null);
       setBackFile(null);
-      setFrontUrl('');
-      setBackUrl('');
     } catch (err) {
-      if (err instanceof APIError) {
+      if (err instanceof Error) {
         setError(err.message);
       } else {
         setError('Erreur lors de la soumission');
@@ -230,8 +192,29 @@ export default function KycPage() {
           </p>
         </div>
 
-        {/* Statut actuel */}
-        {kycStatus && (
+        {/* 🚨 GROSSE ALERTE ROUGE si REJECTED */}
+        {kycStatus && kycStatus.kycStatus === 'REJECTED' && (
+          <div className="bg-red-600 dark:bg-red-700 text-white rounded-lg p-6 shadow-lg">
+            <div className="flex items-start gap-4">
+              <span className="text-4xl">⚠️</span>
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold mb-2">Dossier KYC Rejeté</h2>
+                <p className="text-lg mb-4">
+                  Votre dossier de vérification d'identité a été rejeté. Vous devez le soumettre à nouveau pour accéder au dashboard.
+                </p>
+                {kycStatus.kycRejectionReason && (
+                  <div className="bg-red-800 dark:bg-red-900 rounded-lg p-4">
+                    <p className="font-semibold mb-1">Motif du rejet :</p>
+                    <p className="text-base">{kycStatus.kycRejectionReason}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Statut actuel (si pas REJECTED) */}
+        {kycStatus && kycStatus.kycStatus !== 'REJECTED' && (
           <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -241,15 +224,6 @@ export default function KycPage() {
               </div>
               {getStatusBadge(kycStatus.kycStatus)}
             </div>
-
-            {/* Rejection reason */}
-            {kycStatus.kycStatus === 'REJECTED' && kycStatus.kycRejectionReason && (
-              <div className="mt-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-                <p className="text-sm text-red-800 dark:text-red-200">
-                  <strong>Motif de rejet :</strong> {kycStatus.kycRejectionReason}
-                </p>
-              </div>
-            )}
 
             {/* Approved message */}
             {kycStatus.kycStatus === 'APPROVED' && (
@@ -310,16 +284,14 @@ export default function KycPage() {
                     const file = e.target.files?.[0];
                     if (file) {
                       setFrontFile(file);
-                      uploadFile(file, 'front');
                     }
                   }}
                   className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-zinc-900 file:text-zinc-50 dark:file:bg-zinc-50 dark:file:text-zinc-900 hover:file:bg-zinc-800 dark:hover:file:bg-zinc-200"
-                  required={!frontUrl}
-                  disabled={uploading}
+                  required
                 />
-                {frontUrl && (
+                {frontFile && (
                   <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                    ✓ Photo recto uploadée
+                    ✓ {frontFile.name} ({(frontFile.size / 1024 / 1024).toFixed(2)} MB)
                   </p>
                 )}
               </div>
@@ -340,16 +312,14 @@ export default function KycPage() {
                     const file = e.target.files?.[0];
                     if (file) {
                       setBackFile(file);
-                      uploadFile(file, 'back');
                     }
                   }}
                   className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-zinc-900 file:text-zinc-50 dark:file:bg-zinc-50 dark:file:text-zinc-900 hover:file:bg-zinc-800 dark:hover:file:bg-zinc-200"
-                  required={!backUrl}
-                  disabled={uploading}
+                  required
                 />
-                {backUrl && (
+                {backFile && (
                   <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                    ✓ Photo verso uploadée
+                    ✓ {backFile.name} ({(backFile.size / 1024 / 1024).toFixed(2)} MB)
                   </p>
                 )}
               </div>
@@ -370,13 +340,13 @@ export default function KycPage() {
               {/* Submit button */}
               <button
                 type="submit"
-                disabled={submitting || uploading || !frontUrl || !backUrl}
+                disabled={submitting || !frontFile || !backFile}
                 className="w-full px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {submitting
                   ? 'Soumission...'
-                  : uploading
-                  ? 'Upload en cours...'
+                  : kycStatus?.kycStatus === 'REJECTED'
+                  ? 'Re-soumettre mon dossier'
                   : 'Soumettre mon dossier'}
               </button>
             </form>
