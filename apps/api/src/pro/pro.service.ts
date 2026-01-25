@@ -102,6 +102,10 @@ export class ProService {
    *
    * Met à jour le profil du PRO (WhatsApp, ville).
    *
+   * IMPORTANT: cityId est mis à jour sur DEUX tables simultanément :
+   * - User.cityId (source de vérité pour l'affichage)
+   * - ProProfile.cityId (nécessaire pour le filtrage de recherche)
+   *
    * @param userId - ID de l'utilisateur PRO
    * @param dto - Données de mise à jour
    * @returns Profil Pro mis à jour
@@ -126,22 +130,33 @@ export class ProService {
       }
     }
 
-    // Mettre à jour le profil
-    const updatedProfile = await this.prisma.proProfile.update({
-      where: { userId },
-      data: {
-        whatsapp: dto.whatsapp,
-        ...(dto.cityId ? { cityId: dto.cityId } : {}),
-      },
-      include: {
-        city: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
+    // Transaction : Mettre à jour User.cityId ET ProProfile.cityId simultanément
+    const updatedProfile = await this.prisma.$transaction(async (tx) => {
+      // 1. Mettre à jour User.cityId (source de vérité)
+      if (dto.cityId) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { cityId: dto.cityId },
+        });
+      }
+
+      // 2. Mettre à jour ProProfile (whatsapp + cityId pour le filtrage)
+      return tx.proProfile.update({
+        where: { userId },
+        data: {
+          whatsapp: dto.whatsapp,
+          ...(dto.cityId ? { cityId: dto.cityId } : {}),
+        },
+        include: {
+          city: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+            },
           },
         },
-      },
+      });
     });
 
     return updatedProfile;
