@@ -6,12 +6,17 @@ import { z } from 'zod';
  * Permet au PRO de mettre à jour son profil :
  * - whatsapp : Numéro WhatsApp (format téléphone marocain)
  * - cityId : Correction de la ville (optionnel)
+ * - phone : Numéro de téléphone du compte User (optionnel, unique)
  */
 export const UpdateProProfileSchema = z.object({
   whatsapp: z
     .string()
     .regex(/^(06|07)\d{8}$/, 'Format invalide. Ex: 0612345678'),
   cityId: z.string().cuid().optional(),
+  phone: z
+    .string()
+    .regex(/^(06|07)\d{8}$/, 'Format invalide. Ex: 0612345678')
+    .optional(),
 });
 
 export type UpdateProProfileInput = z.infer<typeof UpdateProProfileSchema>;
