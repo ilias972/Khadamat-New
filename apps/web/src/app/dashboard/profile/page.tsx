@@ -9,8 +9,7 @@ import DashboardLayout from '@/components/dashboard/DashboardLayout';
  * Dashboard Profile Page
  *
  * Permet au Pro de modifier son profil :
- * - Téléphone du compte (User.phone) - utilisé pour le login
- * - WhatsApp (ProProfile.whatsapp) - pour les contacts clients
+ * - Téléphone du compte (User.phone) - utilisé pour le login et contact clients
  * - Ville (synchronisé User.cityId + ProProfile.cityId)
  *
  * ⚠️ "use client" OBLIGATOIRE
@@ -37,7 +36,6 @@ interface ProProfile {
   userId: string;
   cityId: string;
   city: City;
-  whatsapp: string;
   kycStatus: string;
 }
 
@@ -54,7 +52,6 @@ export default function ProfilePage() {
 
   const [formData, setFormData] = useState({
     phone: '',
-    whatsapp: '',
     cityId: '',
   });
 
@@ -83,7 +80,6 @@ export default function ProfilePage() {
 
         setFormData({
           phone: dashboardData.user.phone || '',
-          whatsapp: dashboardData.profile.whatsapp || '',
           cityId: truthCityId,
         });
 
@@ -171,7 +167,7 @@ export default function ProfilePage() {
                   htmlFor="phone"
                   className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
                 >
-                  Téléphone du compte
+                  Téléphone
                 </label>
                 <input
                   type="tel"
@@ -187,28 +183,7 @@ export default function ProfilePage() {
                   title="Format: 06XXXXXXXX ou 07XXXXXXXX"
                 />
                 <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
-                  Numéro utilisé pour vous connecter. Format: 06XXXXXXXX ou 07XXXXXXXX
-                </p>
-              </div>
-
-              {/* WhatsApp */}
-              <div>
-                <label htmlFor="whatsapp" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
-                  Numéro WhatsApp
-                </label>
-                <input
-                  type="tel"
-                  id="whatsapp"
-                  value={formData.whatsapp}
-                  onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
-                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
-                  placeholder="0612345678"
-                  required
-                  pattern="^(06|07)\d{8}$"
-                  title="Format: 06XXXXXXXX ou 07XXXXXXXX"
-                />
-                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
-                  Numéro affiché aux clients pour vous contacter. Format: 06XXXXXXXX ou 07XXXXXXXX
+                  Numéro utilisé pour vous connecter et être contacté par les clients
                 </p>
               </div>
 
