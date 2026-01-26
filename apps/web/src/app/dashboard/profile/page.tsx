@@ -30,7 +30,7 @@ interface ProProfile {
 }
 
 export default function ProfilePage() {
-  const { accessToken } = useAuthStore();
+  const { accessToken, setUser, user: currentUser } = useAuthStore();
   const [profile, setProfile] = useState<ProProfile | null>(null);
   const [cities, setCities] = useState<City[]>([]);
   const [formData, setFormData] = useState({
@@ -80,19 +80,28 @@ export default function ProfilePage() {
     setSaving(true);
 
     try {
-      await patchJSON(
+      // L'API retourne maintenant { user, profile }
+      const response = await patchJSON<{ user: any; profile: ProProfile }>(
         '/pro/profile',
         formData,
         accessToken || undefined,
       );
-      setSuccess('Profil mis à jour avec succès !');
 
-      // Recharger le profil
-      const dashboardData = await getJSON<{ profile: ProProfile }>(
-        '/pro/me',
-        accessToken || undefined,
-      );
-      setProfile(dashboardData.profile);
+      // Mettre à jour le profil local
+      setProfile(response.profile);
+
+      // IMPORTANT: Mettre à jour le store global avec les données User actualisées
+      // Cela synchronise la page /profile avec les changements du dashboard
+      if (response.user && currentUser) {
+        setUser({
+          ...currentUser,
+          cityId: response.user.cityId,
+          city: response.user.city,
+          // Conserver les autres champs du user actuel
+        });
+      }
+
+      setSuccess('Profil mis à jour avec succès !');
     } catch (err) {
       if (err instanceof APIError) {
         setError(err.message);
