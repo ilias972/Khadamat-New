@@ -42,6 +42,7 @@ export class ProService {
             email: true,
             firstName: true,
             lastName: true,
+            addressLine: true,
             createdAt: true,
           },
         },
