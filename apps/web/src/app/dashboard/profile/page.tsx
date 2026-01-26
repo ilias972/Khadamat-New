@@ -105,8 +105,12 @@ export default function ProfilePage() {
         '/pro/me',
         accessToken || undefined,
       );
+        // C. ✅ NOUVEAU : Récupération des données COMPLÈTES de l'utilisateur depuis /auth/me
+    // Ceci garantit qu'on a TOUTES les infos (addressLine inclus)
+    const fullUserData = await getJSON<PublicUser>('/auth/me', accessToken || undefined);
 
-      // C. Update Local UI
+
+      // D. Update Local UI
       setProfile(dashboardData.profile);
 
       // ✅ D. Update Store (Simple et Propre)
