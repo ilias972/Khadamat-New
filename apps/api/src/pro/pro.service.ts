@@ -182,13 +182,15 @@ export class ProService {
         },
       });
 
-      // 2. Mettre à jour ProProfile (whatsapp + cityId pour le filtrage)
+      // 2. Mettre à jour ProProfile (cityId pour le filtrage)
+      // Note: whatsapp n'est plus modifié depuis le dashboard (champ deprecated)
+      const profileUpdateData: { cityId?: string; whatsapp?: string } = {};
+      if (dto.cityId) profileUpdateData.cityId = dto.cityId;
+      if (dto.whatsapp) profileUpdateData.whatsapp = dto.whatsapp; // Rétrocompatibilité
+
       const updatedProfile = await tx.proProfile.update({
         where: { userId },
-        data: {
-          whatsapp: dto.whatsapp,
-          ...(dto.cityId ? { cityId: dto.cityId } : {}),
-        },
+        data: profileUpdateData,
         include: {
           city: {
             select: {

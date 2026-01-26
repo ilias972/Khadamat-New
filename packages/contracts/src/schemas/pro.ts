@@ -4,19 +4,21 @@ import { z } from 'zod';
  * UpdateProProfileSchema
  *
  * Permet au PRO de mettre à jour son profil :
- * - whatsapp : Numéro WhatsApp (format téléphone marocain)
- * - cityId : Correction de la ville (optionnel)
  * - phone : Numéro de téléphone du compte User (optionnel, unique)
+ * - cityId : Correction de la ville (optionnel)
+ *
+ * Note: whatsapp est gardé optionnel pour rétrocompatibilité mais n'est plus utilisé
  */
 export const UpdateProProfileSchema = z.object({
-  whatsapp: z
-    .string()
-    .regex(/^(06|07)\d{8}$/, 'Format invalide. Ex: 0612345678'),
-  cityId: z.string().cuid().optional(),
   phone: z
     .string()
     .regex(/^(06|07)\d{8}$/, 'Format invalide. Ex: 0612345678')
     .optional(),
+  cityId: z.string().cuid().optional(),
+  whatsapp: z
+    .string()
+    .regex(/^(06|07)\d{8}$/, 'Format invalide. Ex: 0612345678')
+    .optional(), // Deprecated - gardé pour rétrocompatibilité
 });
 
 export type UpdateProProfileInput = z.infer<typeof UpdateProProfileSchema>;
