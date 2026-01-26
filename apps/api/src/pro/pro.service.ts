@@ -108,15 +108,17 @@ export class ProService {
   /**
    * updateProfile
    *
-   * Met à jour le profil du PRO (WhatsApp, ville).
+   * Met à jour le profil du PRO (WhatsApp, ville, téléphone).
    *
-   * IMPORTANT: cityId est mis à jour sur DEUX tables simultanément :
+   * IMPORTANT: Synchronisation sur DEUX tables :
    * - User.cityId (source de vérité pour l'affichage)
+   * - User.phone (identifiant unique, utilisé pour le login)
    * - ProProfile.cityId (nécessaire pour le filtrage de recherche)
+   * - ProProfile.whatsapp (numéro WhatsApp distinct)
    *
    * @param userId - ID de l'utilisateur PRO
    * @param dto - Données de mise à jour
-   * @returns Profil Pro mis à jour
+   * @returns Profil Pro mis à jour avec User
    */
   async updateProfile(userId: string, dto: UpdateProProfileInput) {
     // Vérifier que le profil existe
@@ -138,12 +140,29 @@ export class ProService {
       }
     }
 
-    // Transaction : Mettre à jour User.cityId ET ProProfile.cityId simultanément
+    // Vérifier que le téléphone n'est pas déjà utilisé par un autre utilisateur
+    if (dto.phone) {
+      const existingPhone = await this.prisma.user.findFirst({
+        where: {
+          phone: dto.phone,
+          id: { not: userId }, // Exclure l'utilisateur actuel
+        },
+      });
+      if (existingPhone) {
+        throw new BadRequestException('Ce numéro de téléphone est déjà utilisé par un autre compte.');
+      }
+    }
+
+    // Transaction : Mettre à jour User ET ProProfile simultanément
     const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Mettre à jour User.cityId (source de vérité)
+      // 1. Mettre à jour User (cityId + phone)
+      const userUpdateData: { cityId?: string; phone?: string } = {};
+      if (dto.cityId) userUpdateData.cityId = dto.cityId;
+      if (dto.phone) userUpdateData.phone = dto.phone;
+
       const updatedUser = await tx.user.update({
         where: { id: userId },
-        data: dto.cityId ? { cityId: dto.cityId } : {},
+        data: userUpdateData,
         select: {
           id: true,
           role: true,

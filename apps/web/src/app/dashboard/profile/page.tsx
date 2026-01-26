@@ -1,10 +1,20 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { getJSON, patchJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
+
+/**
+ * Dashboard Profile Page
+ *
+ * Permet au Pro de modifier son profil :
+ * - Téléphone du compte (User.phone) - utilisé pour le login
+ * - WhatsApp (ProProfile.whatsapp) - pour les contacts clients
+ * - Ville (synchronisé User.cityId + ProProfile.cityId)
+ *
+ * ⚠️ "use client" OBLIGATOIRE
+ */
 
 interface City {
   id: string;
@@ -12,7 +22,6 @@ interface City {
   slug: string;
 }
 
-// ✅ Mise à jour de l'interface pour inclure addressLine
 interface UserSummary {
   id: string;
   firstName: string;
@@ -20,7 +29,8 @@ interface UserSummary {
   email: string;
   phone: string;
   cityId?: string | null;
-  addressLine?: string | null; // ✅ Ajouté grâce au fix backend
+  addressLine?: string | null;
+  city?: { id: string; name: string } | null;
 }
 
 interface ProProfile {
@@ -39,13 +49,15 @@ interface DashboardResponse {
 export default function ProfilePage() {
   const { accessToken, setUser, user: currentUser } = useAuthStore();
   const [profile, setProfile] = useState<ProProfile | null>(null);
+  const [dashboardUser, setDashboardUser] = useState<UserSummary | null>(null);
   const [cities, setCities] = useState<City[]>([]);
-  
+
   const [formData, setFormData] = useState({
+    phone: '',
     whatsapp: '',
     cityId: '',
   });
-  
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -63,12 +75,14 @@ export default function ProfilePage() {
         ]);
 
         setProfile(dashboardData.profile);
+        setDashboardUser(dashboardData.user);
         setCities(citiesData);
 
         // Priorité à user.cityId
         const truthCityId = dashboardData.user?.cityId || dashboardData.profile?.cityId || '';
 
         setFormData({
+          phone: dashboardData.user.phone || '',
           whatsapp: dashboardData.profile.whatsapp || '',
           cityId: truthCityId,
         });
@@ -87,7 +101,7 @@ export default function ProfilePage() {
     fetchData();
   }, [accessToken]);
 
-  // 2. Sauvegarde Simplifiée
+  // 2. Sauvegarde
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -96,7 +110,7 @@ export default function ProfilePage() {
 
     try {
       // L'API retourne maintenant { user, profile }
-      const response = await patchJSON<{ user: any; profile: ProProfile }>(
+      const response = await patchJSON<DashboardResponse>(
         '/pro/profile',
         formData,
         accessToken || undefined,
@@ -105,14 +119,17 @@ export default function ProfilePage() {
       // Mettre à jour le profil local
       setProfile(response.profile);
 
+      // Mettre à jour le user local du dashboard
+      setDashboardUser(response.user);
+
       // IMPORTANT: Mettre à jour le store global avec les données User actualisées
       // Cela synchronise la page /profile avec les changements du dashboard
       if (response.user && currentUser) {
         setUser({
           ...currentUser,
+          phone: response.user.phone,
           cityId: response.user.cityId,
           city: response.user.city,
-          // Conserver les autres champs du user actuel
         });
       }
 
@@ -148,6 +165,32 @@ export default function ProfilePage() {
         {!loading && profile && (
           <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
             <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Téléphone du compte */}
+              <div>
+                <label
+                  htmlFor="phone"
+                  className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+                >
+                  Téléphone du compte
+                </label>
+                <input
+                  type="tel"
+                  id="phone"
+                  value={formData.phone}
+                  onChange={(e) =>
+                    setFormData({ ...formData, phone: e.target.value })
+                  }
+                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
+                  placeholder="0612345678"
+                  required
+                  pattern="^(06|07)\d{8}$"
+                  title="Format: 06XXXXXXXX ou 07XXXXXXXX"
+                />
+                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
+                  Numéro utilisé pour vous connecter. Format: 06XXXXXXXX ou 07XXXXXXXX
+                </p>
+              </div>
+
               {/* WhatsApp */}
               <div>
                 <label htmlFor="whatsapp" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
@@ -158,10 +201,15 @@ export default function ProfilePage() {
                   id="whatsapp"
                   value={formData.whatsapp}
                   onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
-                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg"
+                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
                   placeholder="0612345678"
                   required
+                  pattern="^(06|07)\d{8}$"
+                  title="Format: 06XXXXXXXX ou 07XXXXXXXX"
                 />
+                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
+                  Numéro affiché aux clients pour vous contacter. Format: 06XXXXXXXX ou 07XXXXXXXX
+                </p>
               </div>
 
               {/* Ville */}
@@ -173,7 +221,7 @@ export default function ProfilePage() {
                   id="cityId"
                   value={formData.cityId}
                   onChange={(e) => setFormData({ ...formData, cityId: e.target.value })}
-                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg"
+                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
                   required
                 >
                   <option value="">Sélectionnez une ville</option>
@@ -189,15 +237,23 @@ export default function ProfilePage() {
               </div>
 
               {/* Messages */}
-              {error && <div className="text-red-600 bg-red-50 p-3 rounded">{error}</div>}
-              {success && <div className="text-green-600 bg-green-50 p-3 rounded">{success}</div>}
+              {error && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                  <p className="text-red-800 dark:text-red-200">{error}</p>
+                </div>
+              )}
+              {success && (
+                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
+                  <p className="text-green-800 dark:text-green-200">{success}</p>
+                </div>
+              )}
 
               <button
                 type="submit"
                 disabled={saving}
-                className="w-full px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 transition disabled:opacity-50"
+                className="w-full px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {saving ? 'Enregistrement...' : 'Enregistrer'}
+                {saving ? 'Enregistrement...' : 'Enregistrer les modifications'}
               </button>
             </form>
           </div>
