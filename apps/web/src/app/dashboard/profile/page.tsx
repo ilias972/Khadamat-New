@@ -1,19 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation'; // ✅ AJOUT
 import { useAuthStore } from '@/store/authStore';
 import { getJSON, patchJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
-
-/**
- * Dashboard Profile Page
- *
- * Permet au Pro de modifier son profil :
- * - WhatsApp (requis)
- * - Ville (optionnel, correction d'erreur d'inscription)
- *
- * ⚠️ "use client" OBLIGATOIRE
- */
 
 interface City {
   id: string;
@@ -30,13 +21,17 @@ interface ProProfile {
 }
 
 export default function ProfilePage() {
-  const { accessToken } = useAuthStore();
+  const router = useRouter(); // ✅ AJOUT
+  // ✅ AJOUT : on récupère setUser pour mettre à jour le store global
+  const { accessToken, setUser } = useAuthStore();
+  
   const [profile, setProfile] = useState<ProProfile | null>(null);
   const [cities, setCities] = useState<City[]>([]);
   const [formData, setFormData] = useState({
     whatsapp: '',
     cityId: '',
   });
+  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -80,19 +75,30 @@ export default function ProfilePage() {
     setSaving(true);
 
     try {
+      // 1. Mise à jour Backend
       await patchJSON(
         '/pro/profile',
         formData,
         accessToken || undefined,
       );
-      setSuccess('Profil mis à jour avec succès !');
 
-      // Recharger le profil
+      // 2. Recharger le profil local (pour le formulaire)
       const dashboardData = await getJSON<{ profile: ProProfile }>(
         '/pro/me',
         accessToken || undefined,
       );
       setProfile(dashboardData.profile);
+
+      // ✅ 3. SYNCHRONISATION CRITIQUE : Mettre à jour le Store Global
+      // On récupère l'objet User standard mis à jour pour le store
+      const updatedUser = await getJSON<any>('/users/me', accessToken || undefined);
+      setUser(updatedUser);
+
+      // ✅ 4. Forcer le rafraîchissement du cache Next.js
+      router.refresh();
+
+      setSuccess('Profil mis à jour avec succès !');
+
     } catch (err) {
       if (err instanceof APIError) {
         setError(err.message);
