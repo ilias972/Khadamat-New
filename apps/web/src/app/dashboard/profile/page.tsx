@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation'; // ✅ AJOUT
+import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import { getJSON, patchJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
@@ -20,10 +20,15 @@ interface ProProfile {
   kycStatus: string;
 }
 
+// ✅ AJOUT : Interface pour typer la réponse complète de /pro/me
+interface DashboardResponse {
+  user: any; // L'objet User complet
+  profile: ProProfile;
+}
+
 export default function ProfilePage() {
-  const router = useRouter(); // ✅ AJOUT
-  // ✅ AJOUT : on récupère setUser pour mettre à jour le store global
-  const { accessToken, setUser } = useAuthStore();
+  const router = useRouter();
+  const { accessToken, setUser } = useAuthStore(); // ✅ On récupère setUser
   
   const [profile, setProfile] = useState<ProProfile | null>(null);
   const [cities, setCities] = useState<City[]>([]);
@@ -44,7 +49,7 @@ export default function ProfilePage() {
 
       try {
         const [dashboardData, citiesData] = await Promise.all([
-          getJSON<{ profile: ProProfile }>('/pro/me', accessToken),
+          getJSON<DashboardResponse>('/pro/me', accessToken), // ✅ On utilise le bon type
           getJSON<City[]>('/public/cities'),
         ]);
 
@@ -82,19 +87,23 @@ export default function ProfilePage() {
         accessToken || undefined,
       );
 
-      // 2. Recharger le profil local (pour le formulaire)
-      const dashboardData = await getJSON<{ profile: ProProfile }>(
+      // 2. Recharger les données fraîches depuis /pro/me
+      // (Cet endpoint renvoie { user: ..., profile: ... })
+      const dashboardData = await getJSON<DashboardResponse>(
         '/pro/me',
         accessToken || undefined,
       );
+
+      // 3. Mise à jour de l'état local du formulaire
       setProfile(dashboardData.profile);
 
-      // ✅ 3. SYNCHRONISATION CRITIQUE : Mettre à jour le Store Global
-      // On récupère l'objet User standard mis à jour pour le store
-      const updatedUser = await getJSON<any>('/users/me', accessToken || undefined);
-      setUser(updatedUser);
+      // ✅ 4. SYNCHRONISATION DU STORE GLOBAL
+      // On utilise l'objet "user" qui est déjà dans la réponse de /pro/me !
+      if (dashboardData.user) {
+        setUser(dashboardData.user);
+      }
 
-      // ✅ 4. Forcer le rafraîchissement du cache Next.js
+      // 5. Forcer le rafraîchissement Next.js
       router.refresh();
 
       setSuccess('Profil mis à jour avec succès !');
@@ -113,7 +122,6 @@ export default function ProfilePage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header */}
         <div>
           <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">
             Profil
@@ -123,7 +131,6 @@ export default function ProfilePage() {
           </p>
         </div>
 
-        {/* Loading */}
         {loading && (
           <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-8 text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-4"></div>
@@ -131,11 +138,9 @@ export default function ProfilePage() {
           </div>
         )}
 
-        {/* Form */}
         {!loading && profile && (
           <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
             <form onSubmit={handleSubmit} className="space-y-6">
-              {/* WhatsApp */}
               <div>
                 <label
                   htmlFor="whatsapp"
@@ -156,12 +161,8 @@ export default function ProfilePage() {
                   pattern="^(06|07)\d{8}$"
                   title="Format: 06XXXXXXXX ou 07XXXXXXXX"
                 />
-                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
-                  Format: 06XXXXXXXX ou 07XXXXXXXX
-                </p>
               </div>
 
-              {/* Ville */}
               <div>
                 <label
                   htmlFor="cityId"
@@ -190,7 +191,6 @@ export default function ProfilePage() {
                 </p>
               </div>
 
-              {/* Messages */}
               {error && (
                 <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
                   <p className="text-red-800 dark:text-red-200">{error}</p>
@@ -203,7 +203,6 @@ export default function ProfilePage() {
                 </div>
               )}
 
-              {/* Submit */}
               <button
                 type="submit"
                 disabled={saving}
