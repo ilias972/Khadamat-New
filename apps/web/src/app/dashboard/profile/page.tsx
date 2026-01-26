@@ -37,9 +37,7 @@ interface DashboardResponse {
 }
 
 export default function ProfilePage() {
-  const router = useRouter();
-  const { accessToken, setUser } = useAuthStore(); // Plus besoin de 'user: currentUser' pour le merge
-  
+  const { accessToken, setUser, user: currentUser } = useAuthStore();
   const [profile, setProfile] = useState<ProProfile | null>(null);
   const [cities, setCities] = useState<City[]>([]);
   
@@ -97,33 +95,28 @@ export default function ProfilePage() {
     setSaving(true);
 
     try {
-      // A. Update Backend
-      await patchJSON('/pro/profile', formData, accessToken || undefined);
-
-      // B. Reload Data (qui contient maintenant l'user COMPLET avec addressLine)
-      const dashboardData = await getJSON<DashboardResponse>(
-        '/pro/me',
+      // L'API retourne maintenant { user, profile }
+      const response = await patchJSON<{ user: any; profile: ProProfile }>(
+        '/pro/profile',
+        formData,
         accessToken || undefined,
       );
-        // C. ✅ NOUVEAU : Récupération des données COMPLÈTES de l'utilisateur depuis /auth/me
-    // Ceci garantit qu'on a TOUTES les infos (addressLine inclus)
-    const fullUserData = await getJSON<PublicUser>('/auth/me', accessToken || undefined);
 
+      // Mettre à jour le profil local
+      setProfile(response.profile);
 
-      // D. Update Local UI
-      setProfile(dashboardData.profile);
-
-      // ✅ D. Update Store (Simple et Propre)
-      // Comme le backend renvoie addressLine, on peut écraser le store sans peur.
-      if (dashboardData.user) {
-        setUser(dashboardData.user);
+      // IMPORTANT: Mettre à jour le store global avec les données User actualisées
+      // Cela synchronise la page /profile avec les changements du dashboard
+      if (response.user && currentUser) {
+        setUser({
+          ...currentUser,
+          cityId: response.user.cityId,
+          city: response.user.city,
+          // Conserver les autres champs du user actuel
+        });
       }
 
-      // E. Refresh Cache
-      router.refresh();
-
       setSuccess('Profil mis à jour avec succès !');
-
     } catch (err) {
       if (err instanceof APIError) {
         setError(err.message);

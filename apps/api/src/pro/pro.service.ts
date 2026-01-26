@@ -42,7 +42,14 @@ export class ProService {
             email: true,
             firstName: true,
             lastName: true,
+            cityId: true,
             addressLine: true,
+            city: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
             createdAt: true,
           },
         },
@@ -132,17 +139,32 @@ export class ProService {
     }
 
     // Transaction : Mettre à jour User.cityId ET ProProfile.cityId simultanément
-    const updatedProfile = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Mettre à jour User.cityId (source de vérité)
-      if (dto.cityId) {
-        await tx.user.update({
-          where: { id: userId },
-          data: { cityId: dto.cityId },
-        });
-      }
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: dto.cityId ? { cityId: dto.cityId } : {},
+        select: {
+          id: true,
+          role: true,
+          status: true,
+          phone: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          cityId: true,
+          addressLine: true,
+          city: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      });
 
       // 2. Mettre à jour ProProfile (whatsapp + cityId pour le filtrage)
-      return tx.proProfile.update({
+      const updatedProfile = await tx.proProfile.update({
         where: { userId },
         data: {
           whatsapp: dto.whatsapp,
@@ -158,9 +180,11 @@ export class ProService {
           },
         },
       });
+
+      return { user: updatedUser, profile: updatedProfile };
     });
 
-    return updatedProfile;
+    return result;
   }
 
   /**
