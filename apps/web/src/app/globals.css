@@ -1,66 +1,13 @@
 @import "tailwindcss";
 
-@plugin "tailwindcss-animate";
-
-@theme {
-  /* Couleurs sémantiques basées sur TaskRabbit mais avec votre Orange */
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
 }
 
-:root {
-  /* Base */
-  --background: #FFFFFF;
-  --foreground: #0F172A; /* Slate-900 pour le texte (plus lisible que le noir pur) */
-
-  /* Primary: Orange #F97316 */
-  --primary: #F97316;
-  --primary-foreground: #FFFFFF;
-
-  /* Secondary: Un gris très léger pour les fonds de section */
-  --secondary: #F8FAFC; /* Slate-50 */
-  --secondary-foreground: #0F172A;
-
-  /* Muted: Pour les textes secondaires */
-  --muted: #F1F5F9;
-  --muted-foreground: #64748B; /* Slate-500 */
-
-  /* Accent: Pour les survols */
-  --accent: #FFF7ED; /* Orange-50 */
-  --accent-foreground: #C2410C; /* Orange-700 */
-
-  --radius: 0.75rem; /* Arrondis modernes (12px) */
-  --border: #E2E8F0;
-}
-
-.dark {
-  /* Mode sombre optionnel mais prêt */
-  --background: #020617;
-  --foreground: #F8FAFC;
-  --primary: #F97316;
-  --primary-foreground: #FFFFFF;
-  --secondary: #1E293B;
-  --secondary-foreground: #F8FAFC;
-  --muted: #1E293B;
-  --muted-foreground: #94A3B8;
-  --accent: #1E293B;
-  --accent-foreground: #F8FAFC;
-  --border: #1E293B;
-}
-
+html,
 body {
-  @apply bg-background text-foreground antialiased;
+  max-width: 100vw;
+  overflow-x: hidden;
 }
