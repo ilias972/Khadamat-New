@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
-import { useCmiPayment } from '@/hooks/use-cmi-payment';
+import { PaymentButton } from '@/components/payment/PaymentButton';
 import { getJSON } from '@/lib/api';
 import {
   Crown,
@@ -32,7 +32,6 @@ interface Category {
 export default function PlansPage() {
   const router = useRouter();
   const { user, accessToken, isAuthenticated } = useAuthStore();
-  const { subscribe, isLoading } = useCmiPayment();
 
   // Premium plan state
   const [isAnnual, setIsAnnual] = useState(false);
@@ -78,22 +77,6 @@ export default function PlansPage() {
 
     fetchData();
   }, []);
-
-  const handlePremiumSubscribe = () => {
-    const planType = isAnnual ? 'PREMIUM_ANNUAL' : 'PREMIUM_MONTHLY';
-    subscribe(planType);
-  };
-
-  const handleBoostSubscribe = () => {
-    if (!selectedCityId || !selectedCategoryId) {
-      return;
-    }
-
-    subscribe('BOOST', {
-      cityId: selectedCityId,
-      categoryId: selectedCategoryId,
-    });
-  };
 
   if (!isAuthenticated || user?.role !== 'PRO') {
     return null;
@@ -214,24 +197,12 @@ export default function PlansPage() {
             </ul>
 
             {/* CTA Button */}
-            <button
-              type="button"
-              onClick={handlePremiumSubscribe}
-              disabled={isLoading}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Redirection...
-                </>
-              ) : (
-                <>
-                  <Crown className="w-5 h-5" />
-                  Devenir Premium
-                </>
-              )}
-            </button>
+            <PaymentButton
+              planType={isAnnual ? 'PREMIUM_ANNUAL' : 'PREMIUM_MONTHLY'}
+              amount={isAnnual ? 3000 : 350}
+              label="Devenir Premium"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4"
+            />
           </div>
 
           {/* Boost Card */}
@@ -298,7 +269,7 @@ export default function PlansPage() {
                   className="block text-sm font-medium text-purple-900 dark:text-purple-50 mb-2 flex items-center gap-2"
                 >
                   <MapPin className="w-4 h-4" />
-                  Ville cibleée
+                  Ville ciblée
                 </label>
                 <select
                   id="boost-city"
@@ -345,31 +316,22 @@ export default function PlansPage() {
             </div>
 
             {/* CTA Button */}
-            <button
-              type="button"
-              onClick={handleBoostSubscribe}
-              disabled={isLoading || !selectedCityId || !selectedCategoryId}
-              className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Redirection...
-                </>
-              ) : (
-                <>
-                  <Zap className="w-5 h-5" />
-                  Activer le Boost
-                </>
-              )}
-            </button>
+            <PaymentButton
+              planType="BOOST"
+              amount={200}
+              label="Activer le Boost"
+              cityId={selectedCityId}
+              categoryId={selectedCategoryId}
+              disabled={!selectedCityId || !selectedCategoryId}
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-4"
+            />
           </div>
         </div>
 
         {/* Reassurance Section */}
         <div className="bg-white dark:bg-zinc-800 rounded-xl p-6 text-center">
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            💳 Paiement sécurisé par CMI • 🔒 Activation immédiate • ✅ Sans engagement
+            💳 Paiement manuel (virement, cash, mobile money) • 🔒 Activation sous 24-48h après validation • ✅ Sans engagement
           </p>
         </div>
       </div>

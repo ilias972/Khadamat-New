@@ -6,8 +6,8 @@ import * as express from 'express';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Middleware pour accepter les données urlencoded (callback CMI)
-app.use(express.urlencoded({ extended: true }));
+  // Middleware pour parser les données
+  app.use(express.urlencoded({ extended: true }));
   app.use(express.json());
   // CORS (permissif en mode dev)
   app.enableCors({
