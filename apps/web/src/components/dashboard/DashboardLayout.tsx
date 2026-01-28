@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import { getJSON } from '@/lib/api';
+import KycPendingState from './KycPendingState';
 
 /**
  * DashboardLayout
@@ -95,6 +96,15 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   // 🔒 PRISON UX : Masquer la sidebar si REJECTED
   const isRejected = user?.kycStatus === 'REJECTED';
+
+  // 🔒 HARD GATE UX : Afficher Waiting Room si PENDING (sauf sur /dashboard/profile)
+  const isPending = user?.kycStatus === 'PENDING';
+  const allowedPendingPaths = ['/dashboard/profile'];
+  const showPendingState = isPending && !allowedPendingPaths.includes(pathname);
+
+  if (showPendingState) {
+    return <KycPendingState />;
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900 flex">

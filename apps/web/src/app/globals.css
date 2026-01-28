@@ -1,5 +1,61 @@
 @import "tailwindcss";
 
+/**
+ * KHADAMAT DESIGN SYSTEM
+ *
+ * Inspiration : TaskRabbit (Friendly, Energetic, Accessible)
+ * Couleurs : Orange vif (#F08C1B) + Fond beige doux (#F2F0EF)
+ * Formes : Coins arrondis, ombres douces
+ */
+
+@theme {
+  /* === COULEURS PRIMAIRES === */
+  --color-primary-50: #FEF7ED;
+  --color-primary-100: #FDE9CF;
+  --color-primary-200: #FBCF9E;
+  --color-primary-300: #F9B16D;
+  --color-primary-400: #F49A44;
+  --color-primary-500: #F08C1B;
+  --color-primary-600: #D97213;
+  --color-primary-700: #B55812;
+  --color-primary-800: #914616;
+  --color-primary-900: #763B15;
+
+  /* === COULEURS DE FOND === */
+  --color-background: #F2F0EF;
+  --color-surface: #FFFFFF;
+  --color-surface-hover: #FAFAFA;
+
+  /* === COULEURS DE TEXTE === */
+  --color-text-primary: #1A1A1A;
+  --color-text-secondary: #6B6B6B;
+  --color-text-muted: #9CA3AF;
+  --color-text-inverse: #FFFFFF;
+
+  /* === COULEURS D'ÉTAT === */
+  --color-success-50: #ECFDF5;
+  --color-success-500: #10B981;
+  --color-success-600: #059669;
+
+  --color-warning-50: #FFFBEB;
+  --color-warning-500: #F59E0B;
+  --color-warning-600: #D97706;
+
+  --color-error-50: #FEF2F2;
+  --color-error-500: #EF4444;
+  --color-error-600: #DC2626;
+
+  --color-info-50: #EFF6FF;
+  --color-info-500: #3B82F6;
+  --color-info-600: #2563EB;
+
+  /* === OMBRES === */
+  --shadow-soft: 0 4px 20px rgb(0 0 0 / 0.08);
+  --shadow-card: 0 2px 8px rgb(0 0 0 / 0.06);
+  --shadow-card-hover: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+
+/* === BASE STYLES === */
 * {
   box-sizing: border-box;
   padding: 0;
@@ -10,4 +66,24 @@ html,
 body {
   max-width: 100vw;
   overflow-x: hidden;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* === FOCUS VISIBLE === */
+:focus-visible {
+  outline: 2px solid var(--color-primary-500);
+  outline-offset: 2px;
+}
+
+/* === SELECTION === */
+::selection {
+  background-color: var(--color-primary-200);
+  color: var(--color-text-primary);
 }
