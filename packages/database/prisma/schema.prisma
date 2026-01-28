@@ -93,6 +93,12 @@ enum Platform {
   WEB
 }
 
+enum PaymentProvider {
+  MANUAL
+  // STRIPE  // Future
+  // PAYPAL  // Future
+}
+
 model City {
   id        String   @id @default(cuid())
   name      String   @unique
@@ -483,31 +489,27 @@ model ProBoost {
 
 model PaymentOrder {
   id        String  @id @default(cuid())
-  oid       String  @unique  // ID Commande unique CMI
+  oid       String  @unique  // Référence unique de commande
 
   proUserId  String
 
   planType  String  // PREMIUM_MONTHLY | PREMIUM_ANNUAL | BOOST
+  provider  PaymentProvider  @default(MANUAL)
 
   // Montant en CENTIMES (évite erreurs Float)
   amountCents  Int
 
   status  String  // PENDING | PAID | FAILED
 
-  // Debug CMI
-  procReturnCode  String?  // Code retour CMI
-  response        String?  // Message CMI (Approved, etc.)
-  transId         String?  // Transaction ID CMI
-
   // Metadata Boost (optionnel)
   cityId      String?
   categoryId  String?
 
+  // Notes admin (pour paiement manuel)
+  adminNotes  String?
+
   createdAt  DateTime   @default(now())
   paidAt     DateTime?
-
-  // Sauvegarde du payload complet pour audit
-  rawCallback  Json?
 
   @@index([proUserId, status])
   @@index([oid])

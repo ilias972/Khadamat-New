@@ -105,6 +105,11 @@ export const Platform = {
 } as const;
 export type Platform = (typeof Platform)[keyof typeof Platform];
 
+export const PaymentProvider = {
+  MANUAL: 'MANUAL',
+} as const;
+export type PaymentProvider = (typeof PaymentProvider)[keyof typeof PaymentProvider];
+
 // ============================================================================
 // FILTER TYPES (Prisma-compatible)
 // ============================================================================
@@ -472,16 +477,14 @@ export interface PaymentOrder {
   oid: string;
   proUserId: string;
   planType: string;
+  provider: PaymentProvider;
   amountCents: number;
   status: string;
-  procReturnCode: string | null;
-  response: string | null;
-  transId: string | null;
   cityId: string | null;
   categoryId: string | null;
+  adminNotes: string | null;
   createdAt: Date;
   paidAt: Date | null;
-  rawCallback: any;
 }
 
 // ============================================================================
@@ -1020,15 +1023,13 @@ export type PaymentOrderCreateInput = {
   oid: string;
   proUserId: string;
   planType: string;
+  provider?: PaymentProvider;
   amountCents: number;
   status: string;
-  procReturnCode?: string | null;
-  response?: string | null;
-  transId?: string | null;
   cityId?: string | null;
   categoryId?: string | null;
+  adminNotes?: string | null;
   paidAt?: Date | null;
-  rawCallback?: any;
 };
 
 export type PaymentOrderUpdateInput = Partial<Omit<PaymentOrderCreateInput, 'id'>>;

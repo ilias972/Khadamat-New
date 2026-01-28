@@ -1,11 +1,9 @@
 import {
   Injectable,
   BadRequestException,
-  UnauthorizedException,
   NotFoundException,
   Logger,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import {
   SubscriptionPlan,
@@ -13,7 +11,6 @@ import {
   BoostStatus,
 } from './types/prisma-enums';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
-import { generateCmiHash } from './utils/cmi-hash';
 import {
   PAYMENT_PLANS,
   PAYMENT_STATUS,
@@ -21,20 +18,23 @@ import {
   BOOST_ACTIVE_DAYS,
   PlanType,
 } from './utils/payment.constants';
-import { createHash } from 'crypto';
 
+/**
+ * PaymentService - Version MANUAL (MVP)
+ *
+ * Gère les paiements manuels pour Premium et Boost.
+ * Le paiement réel se fait hors plateforme (virement, cash, etc.)
+ * Un admin validera manuellement le paiement.
+ */
 @Injectable()
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
 
-  constructor(
-    private prisma: PrismaService,
-    private config: ConfigService,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
   /**
-   * Initie un paiement CMI.
-   * Architecture : API-First avec validation stricte des données avant envoi.
+   * Crée une demande de paiement (PENDING).
+   * Retourne une référence que le client utilisera pour le règlement manuel.
    */
   async initiatePayment(userId: string, dto: InitiatePaymentDto) {
     // 1. Récupération Profil & User
@@ -51,12 +51,18 @@ export class PaymentService {
     const now = new Date();
     const plan = PAYMENT_PLANS[dto.planType];
 
+    if (!plan) {
+      throw new BadRequestException(`Plan invalide: ${dto.planType}`);
+    }
+
     if (dto.planType === 'BOOST') {
-      if (!dto.cityId || !dto.categoryId) throw new BadRequestException('Infos manquantes pour BOOST');
-      if (proProfile.isPremium && proProfile.premiumActiveUntil && proProfile.premiumActiveUntil > now) {
-        throw new BadRequestException('Exclusivité: Premium déjà actif');
+      if (!dto.cityId || !dto.categoryId) {
+        throw new BadRequestException('cityId et categoryId requis pour BOOST');
       }
-      
+      if (proProfile.isPremium && proProfile.premiumActiveUntil && proProfile.premiumActiveUntil > now) {
+        throw new BadRequestException('Exclusivité: Premium déjà actif, Boost non disponible');
+      }
+
       // Check Cooldown Boost
       const lastBoost = await this.prisma.proBoost.findFirst({
         where: { proUserId: userId },
@@ -64,191 +70,176 @@ export class PaymentService {
       });
 
       if (lastBoost) {
-        const daysSinceLastBoost = Math.floor((now.getTime() - lastBoost.createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const daysSinceLastBoost = Math.floor(
+          (now.getTime() - lastBoost.createdAt.getTime()) / (1000 * 60 * 60 * 24)
+        );
         if (daysSinceLastBoost < BOOST_COOLDOWN_DAYS) {
-          throw new BadRequestException(`Cooldown Boost : Attendez ${BOOST_COOLDOWN_DAYS - daysSinceLastBoost} jours.`);
+          throw new BadRequestException(
+            `Cooldown Boost: Attendez ${BOOST_COOLDOWN_DAYS - daysSinceLastBoost} jours.`
+          );
         }
       }
     } else {
+      // Premium: Vérifier qu'un boost n'est pas actif
       if (proProfile.boostActiveUntil && proProfile.boostActiveUntil > now) {
         throw new BadRequestException('Exclusivité: Boost déjà actif');
       }
     }
 
-    // 3. Préparation des Données
+    // 3. Génération de la référence unique
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const oid = `CMD-${timestamp}-${random}`;
-    // IMPORTANT : Format XXX.YY obligatoire pour CMI
-    const formattedAmount = Number(plan.priceMad).toFixed(2);
-    const rnd = Math.random().toString(36).substring(2, 15);
+    const oid = `KHD-${timestamp}-${random}`;
     const amountCents = Math.round(plan.priceMad * 100);
 
-    // 4. Enregistrement DB (Traceabilité immédiate)
-    await this.prisma.paymentOrder.create({
+    // 4. Enregistrement de la demande (PENDING)
+    const order = await this.prisma.paymentOrder.create({
       data: {
         oid,
         proUserId: userId,
         planType: dto.planType,
         amountCents,
         status: PAYMENT_STATUS.PENDING,
-        cityId: dto.cityId,
-        categoryId: dto.categoryId,
+        provider: 'MANUAL',
+        cityId: dto.cityId || null,
+        categoryId: dto.categoryId || null,
       },
     });
 
-    // 5. Configuration CMI
-    const publicUrl = this.config.get<string>('PUBLIC_URL');
-    if (!publicUrl) throw new BadRequestException("PUBLIC_URL manquante");
+    this.logger.log(`📝 Demande de paiement créée: ${oid} | ${dto.planType} | ${plan.priceMad} MAD`);
 
-    const okUrl = `${publicUrl}/api/payment/callback`;
-    const failUrl = `${publicUrl}/api/payment/callback`;
-
-    // Nettoyage des données Client (Crucial pour éviter 3D-1004 et garantir la compatibilité future)
-    const rawName = `${proProfile.user.firstName || ''} ${proProfile.user.lastName || ''}`;
-    const safeName = (rawName.trim() || 'Client Khadamat').replace(/[^a-zA-Z0-9 ]/g, ' ').trim();
-    const safeEmail = proProfile.user.email || 'client@khadamat.ma';
-
-    // 6. Construction des Paramètres (Champs envoyés au Front)
-    const cmiParams = {
-      clientid: this.config.get<string>('CMI_CLIENT_ID')!,
-      oid,
-      amount: formattedAmount,
-      okUrl,
-      failUrl,
-      rnd,
-      storetype: this.config.get<string>('CMI_STORE_TYPE')!,
-      trantype: this.config.get<string>('CMI_TRAN_TYPE')!,
-      currency: this.config.get<string>('CMI_CURRENCY')!,
-      
-      // Champs additionnels recommandés (Future-Proofing)
-      lang: 'fr',
-      email: safeEmail,
-      BillToName: safeName,
-      BillToCompany: 'Pro Khadamat',
-      BillToStreet1: 'Adresse Client',
-      BillToCity: 'Casablanca',
-      BillToCountry: '504',
-      encoding: 'UTF-8',
-      // Indication de version pour CMI
-      hashAlgorithm: 'ver3', 
-    };
-
-    if (process.env.NODE_ENV !== 'production') {
-      Object.freeze(cmiParams);
-    }
-
-    // 7. Génération du Hash (Dynamique via .env)
-    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha512';
-    const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'base64';
-    const hashOrder = this.config.get<string>('CMI_HASH_ORDER')!;
-
-    const signature = generateCmiHash(
-      cmiParams,
-      this.config.get<string>('CMI_STORE_KEY')!,
-      hashOrder,
-      hashAlgo,
-      hashOutput as 'base64' | 'hex',
-    );
-
-    // 8. Retour Frontend
-    const finalResponse = {
-      actionUrl: this.config.get<string>('CMI_BASE_URL'),
-      fields: {
-        ...cmiParams,
-        hash: signature,
-        shopurl: this.config.get<string>('FRONTEND_URL'),
+    // 5. Retour au Frontend
+    return {
+      success: true,
+      order: {
+        id: order.id,
+        reference: order.oid,
+        planType: order.planType,
+        amount: plan.priceMad,
+        currency: 'MAD',
+        status: order.status,
+      },
+      message: `Demande enregistrée. Référence: ${order.oid}. Contactez-nous pour le règlement.`,
+      paymentInstructions: {
+        reference: order.oid,
+        amount: `${plan.priceMad} MAD`,
+        methods: [
+          'Virement bancaire',
+          'Cash en agence',
+          'Mobile Money (Orange Money, inwi money)',
+        ],
+        contact: {
+          phone: '+212 6XX XXX XXX',
+          email: 'paiement@khadamat.ma',
+        },
+        note: 'Mentionnez votre référence lors du paiement.',
       },
     };
-
-    // Log discret pour debug (A garder, très utile)
-    this.logger.debug(`[CMI Init] OID: ${oid} | Algo: ${hashAlgo}`);
-
-    return finalResponse;
   }
 
   /**
-   * Traitement du Callback (Réponse CMI)
-   * Sécurisé, Idempotent et Robuste aux erreurs.
+   * [ADMIN] Valide manuellement un paiement et active le plan.
+   * Appelé par un admin après vérification du paiement reçu.
    */
-  async handleCallback(data: any) {
-    this.logger.log(`📥 CMI Callback reçu pour OID: ${data.oid}`);
+  async confirmPayment(oid: string, adminNotes?: string) {
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { oid },
+    });
 
-    const { oid, Response, ProcReturnCode, HASH, hash, ErrCode, ErrMsg } = data;
-    const receivedHash = HASH || hash;
-
-    // 1. Gestion des Erreurs Explicites CMI (Ne jamais planter ici)
-    if (Response === 'Error' || ErrCode || Response === 'Refused') {
-      this.logger.warn(`⚠️ Erreur CMI : ${ErrCode || ProcReturnCode} - ${ErrMsg || Response}`);
-      
-      const order = await this.prisma.paymentOrder.findUnique({ where: { oid } });
-      if (order) {
-        await this.prisma.paymentOrder.update({
-          where: { oid },
-          data: {
-            status: PAYMENT_STATUS.FAILED,
-            response: Response || 'Error',
-            procReturnCode: String(ProcReturnCode || ErrCode || '99'),
-            rawCallback: data,
-          },
-        });
-      }
-      return { status: 'failed', message: 'Erreur CMI enregistrée' };
+    if (!order) {
+      throw new NotFoundException(`Commande non trouvée: ${oid}`);
     }
 
-    // 2. Vérification Hash (Dynamique via .env)
-    if (!receivedHash) throw new UnauthorizedException('Hash manquant');
-
-    const storeKey = this.config.get<string>('CMI_STORE_KEY')!;
-    const hashAlgo = this.config.get<string>('CMI_HASH_ALGO') || 'sha512';
-    const hashOutput = this.config.get<string>('CMI_HASH_OUTPUT') || 'base64';
-
-    // Ordre standard de RETOUR (Client ID + OID + Amount + Currency + Rnd + Response + StoreType + TranType + Key)
-    const params = [
-      data.clientid,
-      data.oid,
-      data.amount,
-      data.currency,
-      data.rnd,
-      data.Response,
-      data.storetype,
-      data.trantype,
-    ];
-
-    const stringToHash = params.map((val) => (val === undefined || val === null ? '' : val)).join('') + storeKey;
-    
-    // ✅ CORRECTION LONG TERME : Utiliser la variable hashAlgo et pas 'sha1' en dur
-    const calculatedHash = createHash(hashAlgo).update(stringToHash).digest(hashOutput as any);
-
-    if (calculatedHash !== receivedHash) {
-       // Tolérance pour les environnements de test capricieux (Fallback)
-       if (calculatedHash.toLowerCase() !== receivedHash.toLowerCase()) {
-           this.logger.error('❌ ECHEC VALIDATION HASH');
-           throw new UnauthorizedException('Hash CMI invalide');
-       }
+    if (order.status === PAYMENT_STATUS.PAID) {
+      throw new BadRequestException('Ce paiement a déjà été validé');
     }
 
-    // 3. Traitement Succès
-    const isSuccess = (ProcReturnCode === '00' || ProcReturnCode === 0) && Response === 'Approved';
-
+    // Mise à jour du statut
     const updatedOrder = await this.prisma.paymentOrder.update({
       where: { oid },
       data: {
-        status: isSuccess ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.FAILED,
-        paidAt: isSuccess ? new Date() : undefined,
-        procReturnCode: String(ProcReturnCode),
-        response: Response,
-        transId: data.TransId,
-        rawCallback: data,
+        status: PAYMENT_STATUS.PAID,
+        paidAt: new Date(),
+        adminNotes: adminNotes || 'Validé manuellement',
       },
     });
 
-    if (isSuccess) {
-      this.logger.log(`✅ PAIEMENT VALIDÉ pour ${oid}`);
-      await this.activatePlan(updatedOrder);
+    // Activer le plan
+    await this.activatePlan(updatedOrder);
+
+    this.logger.log(`✅ Paiement validé manuellement: ${oid}`);
+
+    return {
+      success: true,
+      message: `Paiement ${oid} validé et plan activé.`,
+    };
+  }
+
+  /**
+   * [ADMIN] Rejette un paiement.
+   */
+  async rejectPayment(oid: string, reason: string) {
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { oid },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Commande non trouvée: ${oid}`);
     }
 
-    return { status: isSuccess ? 'success' : 'failed', message: 'Callback traité' };
+    if (order.status !== PAYMENT_STATUS.PENDING) {
+      throw new BadRequestException('Seuls les paiements en attente peuvent être rejetés');
+    }
+
+    await this.prisma.paymentOrder.update({
+      where: { oid },
+      data: {
+        status: PAYMENT_STATUS.FAILED,
+        adminNotes: reason || 'Rejeté par admin',
+      },
+    });
+
+    this.logger.log(`❌ Paiement rejeté: ${oid} - ${reason}`);
+
+    return {
+      success: true,
+      message: `Paiement ${oid} rejeté.`,
+    };
+  }
+
+  /**
+   * Liste les paiements en attente (pour admin).
+   */
+  async getPendingPayments() {
+    return this.prisma.paymentOrder.findMany({
+      where: { status: PAYMENT_STATUS.PENDING },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Récupère le statut d'un paiement.
+   */
+  async getPaymentStatus(oid: string) {
+    const order = await this.prisma.paymentOrder.findUnique({
+      where: { oid },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Commande non trouvée: ${oid}`);
+    }
+
+    const plan = PAYMENT_PLANS[order.planType as PlanType];
+
+    return {
+      reference: order.oid,
+      planType: order.planType,
+      amount: order.amountCents / 100,
+      currency: 'MAD',
+      status: order.status,
+      createdAt: order.createdAt,
+      paidAt: order.paidAt,
+    };
   }
 
   /**
@@ -264,6 +255,7 @@ export class PaymentService {
       if (order.planType === 'BOOST') {
         const startsAt = now;
         const endsAt = new Date(now.getTime() + BOOST_ACTIVE_DAYS * 24 * 60 * 60 * 1000);
+
         await tx.proBoost.create({
           data: {
             pro: { connect: { userId: order.proUserId } },
@@ -275,22 +267,25 @@ export class PaymentService {
             priceMad: Math.round(plan.priceMad),
           },
         });
+
         await tx.proProfile.update({
           where: { userId: order.proUserId },
           data: { boostActiveUntil: endsAt },
         });
-      } 
+      }
       // Logique PREMIUM
       else {
         const endsAt = new Date(now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000);
+
         const existingSubscription = await tx.proSubscription.findFirst({
           where: { proUserId: order.proUserId, status: SubscriptionStatus.ACTIVE },
         });
-        
-        const subscriptionPlan = order.planType === 'PREMIUM_MONTHLY' 
-          ? SubscriptionPlan.PREMIUM_MONTHLY_NO_COMMIT 
-          : SubscriptionPlan.PREMIUM_ANNUAL_COMMIT;
-          
+
+        const subscriptionPlan =
+          order.planType === 'PREMIUM_MONTHLY'
+            ? SubscriptionPlan.PREMIUM_MONTHLY_NO_COMMIT
+            : SubscriptionPlan.PREMIUM_ANNUAL_COMMIT;
+
         const subscriptionData = {
           plan: subscriptionPlan,
           status: SubscriptionStatus.ACTIVE,
@@ -302,19 +297,27 @@ export class PaymentService {
         };
 
         if (existingSubscription) {
-          await tx.proSubscription.update({ where: { id: existingSubscription.id }, data: subscriptionData });
+          await tx.proSubscription.update({
+            where: { id: existingSubscription.id },
+            data: subscriptionData,
+          });
         } else {
           await tx.proSubscription.create({
             data: {
               pro: { connect: { userId: order.proUserId } },
-              transactionId: order.oid, // ✅ Lien fort pour la traçabilité
+              transactionId: order.oid,
               ...subscriptionData,
             },
           });
         }
-        await tx.proProfile.update({ where: { userId: order.proUserId }, data: { isPremium: true, premiumActiveUntil: endsAt } });
+
+        await tx.proProfile.update({
+          where: { userId: order.proUserId },
+          data: { isPremium: true, premiumActiveUntil: endsAt },
+        });
       }
     });
-    this.logger.log(`🚀 Plan activé : ${order.planType} pour User ${order.proUserId}`);
+
+    this.logger.log(`🚀 Plan activé: ${order.planType} pour User ${order.proUserId}`);
   }
 }
