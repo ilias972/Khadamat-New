@@ -1,17 +1,22 @@
 @import "tailwindcss";
 
 /**
- * KHADAMAT DESIGN SYSTEM
+ * ═══════════════════════════════════════════════════════════════════════════
+ * KHADAMAT DESIGN SYSTEM v2.0
+ * ═══════════════════════════════════════════════════════════════════════════
  *
  * Inspiration : TaskRabbit (Friendly, Energetic, Accessible)
  * Couleurs : Orange vif (#F08C1B) + Fond beige doux (#F2F0EF)
- * Formes : Coins arrondis, ombres douces
+ * Formes : Coins arrondis (12-16px), ombres douces
+ * Typographie : Inter / Geist / System UI
  */
 
 @theme {
-  /* === COULEURS PRIMAIRES === */
+  /* ═══════════════════════════════════════════════════════════════════════
+     COULEURS PRIMAIRES (Orange Khadamat)
+     ═══════════════════════════════════════════════════════════════════════ */
   --color-primary-50: #FEF7ED;
-  --color-primary-100: #FDE9CF;
+  --color-primary-100: #FDECD4;
   --color-primary-200: #FBCF9E;
   --color-primary-300: #F9B16D;
   --color-primary-400: #F49A44;
@@ -20,46 +25,97 @@
   --color-primary-700: #B55812;
   --color-primary-800: #914616;
   --color-primary-900: #763B15;
+  --color-primary-950: #451D08;
 
-  /* === COULEURS DE FOND === */
+  /* ═══════════════════════════════════════════════════════════════════════
+     COULEURS DE FOND & SURFACE
+     ═══════════════════════════════════════════════════════════════════════ */
   --color-background: #F2F0EF;
   --color-surface: #FFFFFF;
   --color-surface-hover: #FAFAFA;
+  --color-surface-muted: #F8F7F6;
+  --color-card: #FFFFFF;
+  --color-card-hover: #FEFEFE;
 
-  /* === COULEURS DE TEXTE === */
+  /* ═══════════════════════════════════════════════════════════════════════
+     COULEURS DE TEXTE
+     ═══════════════════════════════════════════════════════════════════════ */
   --color-text-primary: #1A1A1A;
-  --color-text-secondary: #6B6B6B;
+  --color-text-secondary: #4B5563;
   --color-text-muted: #9CA3AF;
   --color-text-inverse: #FFFFFF;
+  --color-text-link: #F08C1B;
 
-  /* === COULEURS D'ÉTAT === */
+  /* ═══════════════════════════════════════════════════════════════════════
+     COULEURS DE BORDURE
+     ═══════════════════════════════════════════════════════════════════════ */
+  --color-border: #E5E7EB;
+  --color-border-muted: #F3F4F6;
+  --color-border-focus: #F08C1B;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     COULEURS D'ÉTAT
+     ═══════════════════════════════════════════════════════════════════════ */
   --color-success-50: #ECFDF5;
+  --color-success-100: #D1FAE5;
   --color-success-500: #10B981;
   --color-success-600: #059669;
+  --color-success-700: #047857;
 
   --color-warning-50: #FFFBEB;
+  --color-warning-100: #FEF3C7;
   --color-warning-500: #F59E0B;
   --color-warning-600: #D97706;
+  --color-warning-700: #B45309;
 
   --color-error-50: #FEF2F2;
+  --color-error-100: #FEE2E2;
   --color-error-500: #EF4444;
   --color-error-600: #DC2626;
+  --color-error-700: #B91C1C;
 
   --color-info-50: #EFF6FF;
+  --color-info-100: #DBEAFE;
   --color-info-500: #3B82F6;
   --color-info-600: #2563EB;
+  --color-info-700: #1D4ED8;
 
-  /* === OMBRES === */
+  /* ═══════════════════════════════════════════════════════════════════════
+     OMBRES
+     ═══════════════════════════════════════════════════════════════════════ */
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-sm: 0 1px 3px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.06);
   --shadow-soft: 0 4px 20px rgb(0 0 0 / 0.08);
   --shadow-card: 0 2px 8px rgb(0 0 0 / 0.06);
   --shadow-card-hover: 0 8px 24px rgb(0 0 0 / 0.12);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 10px 10px -5px rgb(0 0 0 / 0.04);
+  --shadow-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+  --shadow-orange: 0 4px 14px rgb(240 140 27 / 0.25);
+  --shadow-orange-lg: 0 10px 30px rgb(240 140 27 / 0.3);
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     BORDER RADIUS
+     ═══════════════════════════════════════════════════════════════════════ */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-full: 9999px;
 }
 
-/* === BASE STYLES === */
+/* ═══════════════════════════════════════════════════════════════════════════
+   BASE STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 * {
   box-sizing: border-box;
   padding: 0;
   margin: 0;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 html,
@@ -71,19 +127,153 @@ body {
 body {
   background-color: var(--color-background);
   color: var(--color-text-primary);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    'Inter',
+    'Geist',
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  line-height: 1.6;
 }
 
-/* === FOCUS VISIBLE === */
+/* ═══════════════════════════════════════════════════════════════════════════
+   FOCUS & ACCESSIBILITY
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 :focus-visible {
   outline: 2px solid var(--color-primary-500);
   outline-offset: 2px;
 }
 
-/* === SELECTION === */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SELECTION
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 ::selection {
   background-color: var(--color-primary-200);
   color: var(--color-text-primary);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCROLLBAR (Webkit)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-text-muted);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-secondary);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-orange {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(240, 140, 27, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(240, 140, 27, 0);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.5s ease-out forwards;
+}
+
+.animate-slide-in-left {
+  animation: slideInLeft 0.5s ease-out forwards;
+}
+
+.animate-pulse-orange {
+  animation: pulse-orange 2s infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Staggered animations */
+.stagger-1 { animation-delay: 0.1s; opacity: 0; }
+.stagger-2 { animation-delay: 0.2s; opacity: 0; }
+.stagger-3 { animation-delay: 0.3s; opacity: 0; }
+.stagger-4 { animation-delay: 0.4s; opacity: 0; }
+.stagger-5 { animation-delay: 0.5s; opacity: 0; }
