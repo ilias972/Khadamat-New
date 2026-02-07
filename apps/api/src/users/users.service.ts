@@ -1,11 +1,25 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { IsOptional, IsUUID, Length, Matches } from 'class-validator';
 import { PrismaService } from '../database/prisma.service';
 
-export interface UpdateProfileDto {
+export class UpdateProfileDto {
+  @IsOptional()
+  @IsUUID('4')
   cityId?: string;
-  addressLine?: string;
+
+  @IsOptional()
+  @Length(2, 50)
+  @Matches(/^[a-zA-ZÀ-ÿ\s'-]+$/)
   firstName?: string;
+
+  @IsOptional()
+  @Length(2, 50)
+  @Matches(/^[a-zA-ZÀ-ÿ\s'-]+$/)
   lastName?: string;
+
+  @IsOptional()
+  @Length(5, 200)
+  addressLine?: string;
 }
 
 @Injectable()

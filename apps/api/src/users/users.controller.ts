@@ -1,4 +1,4 @@
-import { Controller, Patch, Body, Request, UseGuards } from '@nestjs/common';
+import { Controller, Patch, Body, Request, UseGuards, ValidationPipe } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UsersService, UpdateProfileDto } from './users.service';
 
@@ -23,7 +23,11 @@ export class UsersController {
    */
   @Patch('me')
   @UseGuards(JwtAuthGuard)
-  async updateProfile(@Request() req, @Body() dto: UpdateProfileDto) {
+  async updateProfile(
+    @Request() req,
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+    dto: UpdateProfileDto,
+  ) {
     return this.usersService.updateProfile(req.user.id, dto);
   }
 }

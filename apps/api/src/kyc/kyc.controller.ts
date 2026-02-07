@@ -3,7 +3,9 @@ import {
   Post,
   Get,
   Body,
+  Param,
   Request,
+  Res,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -11,6 +13,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import { ApiConsumes } from '@nestjs/swagger';
@@ -158,5 +161,44 @@ export class KycController {
   @Get('status')
   async getMyKycStatus(@Request() req) {
     return this.kycService.getMyKycStatus(req.user.id);
+  }
+
+  @Get('file/:filename')
+  @UseGuards(JwtAuthGuard)
+  @Roles('PRO', 'ADMIN')
+  async getKycFile(
+    @Request() req,
+    @Param('filename') filename: string,
+    @Res() res: Response,
+  ) {
+    const userId: string = req.user.id;
+
+    const { stream } = await this.kycService.getKycFile(
+      userId,
+      req.user.role,
+      filename,
+      req.ip || 'unknown',
+    );
+
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'attachment; filename="kyc-file"',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Download-Options': 'noopen',
+      'Content-Security-Policy': "default-src 'none'",
+    });
+
+    stream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(500).end();
+      } else {
+        res.end();
+      }
+    });
+
+    stream.pipe(res);
   }
 }

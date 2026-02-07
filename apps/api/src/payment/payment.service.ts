@@ -2,8 +2,10 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
   Logger,
 } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import {
   SubscriptionPlan,
@@ -88,8 +90,8 @@ export class PaymentService {
 
     // 3. Génération de la référence unique
     const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const oid = `KHD-${timestamp}-${random}`;
+    const entropy = randomBytes(16).toString('hex').toUpperCase();
+    const oid = `KHD-${timestamp}-${entropy}`;
     const amountCents = Math.round(plan.priceMad * 100);
 
     // 4. Enregistrement de la demande (PENDING)
@@ -210,9 +212,12 @@ export class PaymentService {
   /**
    * Liste les paiements en attente (pour admin).
    */
-  async getPendingPayments() {
+  async getPendingPayments(page: number = 1, limit: number = 20) {
+    const skip = (page - 1) * limit;
     return this.prisma.paymentOrder.findMany({
       where: { status: PAYMENT_STATUS.PENDING },
+      skip,
+      take: limit,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -220,13 +225,17 @@ export class PaymentService {
   /**
    * Récupère le statut d'un paiement.
    */
-  async getPaymentStatus(oid: string) {
+  async getPaymentStatus(oid: string, userId: string) {
     const order = await this.prisma.paymentOrder.findUnique({
       where: { oid },
     });
 
     if (!order) {
-      throw new NotFoundException(`Commande non trouvée: ${oid}`);
+      throw new NotFoundException('Commande introuvable');
+    }
+
+    if (order.proUserId !== userId) {
+      throw new ForbiddenException('Accès refusé');
     }
 
     const plan = PAYMENT_PLANS[order.planType as PlanType];

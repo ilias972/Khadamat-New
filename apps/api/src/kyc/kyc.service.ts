@@ -1,5 +1,7 @@
-import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import * as path from 'path';
+import * as fs from 'fs';
 import type { SubmitKycDto } from './kyc.dto';
 
 /**
@@ -10,6 +12,9 @@ import type { SubmitKycDto } from './kyc.dto';
  */
 @Injectable()
 export class KycService {
+  private readonly logger = new Logger(KycService.name);
+  private readonly kycDir = path.join(process.cwd(), 'uploads', 'kyc');
+
   constructor(private prisma: PrismaService) {}
 
   /**
@@ -64,7 +69,7 @@ export class KycService {
     } catch (error: any) {
       // Gestion de l'erreur d'unicité Prisma (P2002)
       if (error.code === 'P2002' && error.meta?.target?.includes('cinNumber')) {
-        throw new ConflictException('Ce numéro CIN est déjà utilisé par un autre professionnel');
+        throw new ConflictException('Données en conflit');
       }
       throw error; // Relancer les autres erreurs
     }
@@ -126,7 +131,7 @@ export class KycService {
           where: { cinNumber: normalizedCinNumber },
         });
         if (existingCin) {
-          throw new ConflictException('Ce numéro CIN est déjà utilisé par un autre professionnel');
+          throw new ConflictException('Données en conflit');
         }
       }
 
@@ -160,7 +165,7 @@ export class KycService {
     } catch (error: any) {
       // Gestion de l'erreur d'unicité Prisma (P2002)
       if (error.code === 'P2002' && error.meta?.target?.includes('cinNumber')) {
-        throw new ConflictException('Ce numéro CIN est déjà utilisé par un autre professionnel');
+        throw new ConflictException('Données en conflit');
       }
       throw error;
     }
@@ -193,5 +198,91 @@ export class KycService {
       kycRejectionReason: profile.kycRejectionReason,
       hasCinNumber: !!profile.cinNumber,
     };
+  }
+
+  private static readonly STREAM_TIMEOUT_MS = 15_000;
+
+  async getKycFile(
+    requestingUserId: string,
+    requestingUserRole: string,
+    filename: string,
+    clientIp: string,
+  ): Promise<{ stream: fs.ReadStream }> {
+    if (!filename || typeof filename !== 'string') {
+      this.logAudit(requestingUserId, filename || '', 'DENY', clientIp);
+      throw new BadRequestException('Nom de fichier invalide');
+    }
+
+    const safeFilename = path.basename(filename);
+    if (safeFilename !== filename || filename.includes('..')) {
+      this.logAudit(requestingUserId, filename, 'DENY', clientIp);
+      throw new BadRequestException('Nom de fichier invalide');
+    }
+
+    const ext = path.extname(safeFilename).toLowerCase();
+    const allowedExts = ['.jpg', '.jpeg', '.png', '.webp'];
+    if (!allowedExts.includes(ext)) {
+      this.logAudit(requestingUserId, safeFilename, 'DENY', clientIp);
+      throw new BadRequestException('Type de fichier non autorisé');
+    }
+
+    const profile = await this.prisma.proProfile.findFirst({
+      where: {
+        OR: [
+          { kycCinFrontUrl: { endsWith: `/${safeFilename}` } },
+          { kycCinBackUrl: { endsWith: `/${safeFilename}` } },
+        ],
+      },
+      select: {
+        userId: true,
+        kycCinFrontUrl: true,
+        kycCinBackUrl: true,
+      },
+    });
+
+    if (!profile) {
+      this.logAudit(requestingUserId, safeFilename, 'DENY', clientIp);
+      throw new NotFoundException('Fichier non trouvé');
+    }
+
+    if (requestingUserRole !== 'ADMIN' && profile.userId !== requestingUserId) {
+      this.logAudit(requestingUserId, safeFilename, 'DENY', clientIp);
+      throw new ForbiddenException('Accès non autorisé');
+    }
+
+    const filePath = path.join(this.kycDir, safeFilename);
+    if (!fs.existsSync(filePath)) {
+      this.logAudit(requestingUserId, safeFilename, 'DENY', clientIp);
+      throw new NotFoundException('Fichier non trouvé');
+    }
+
+    this.logAudit(requestingUserId, safeFilename, 'ALLOW', clientIp);
+
+    const stream = fs.createReadStream(filePath);
+
+    const timeout = setTimeout(() => {
+      stream.destroy(new Error('Stream timeout'));
+    }, KycService.STREAM_TIMEOUT_MS);
+
+    stream.on('end', () => clearTimeout(timeout));
+    stream.on('error', () => clearTimeout(timeout));
+    stream.on('close', () => clearTimeout(timeout));
+
+    return { stream };
+  }
+
+  private logAudit(
+    userId: string,
+    filename: string,
+    result: 'ALLOW' | 'DENY',
+    ip: string,
+  ): void {
+    this.prisma.kycAccessLog
+      .create({
+        data: { userId, filename, result, ip },
+      })
+      .catch((err) => {
+        this.logger.error(`KYC audit write failed: ${err.message}`);
+      });
   }
 }

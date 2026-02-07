@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(openssl rand:*)",
+      "Bash(npx prisma migrate:*)",
+      "Bash(PGPASSWORD=khadamat2025 psql:*)",
+      "Bash(DATABASE_URL=\"postgresql://khadamat_user:khadamat2025@localhost:5432/khadamat_deploy_test\" npx prisma migrate deploy:*)",
+      "Bash(DATABASE_URL=\"postgresql://khadamat_user:khadamat2025@localhost:5432/khadamat_deploy_test\" npx prisma migrate:*)",
+      "Bash(DATABASE_URL=\"postgresql://khadamat_user:khadamat2025@localhost:5432/khadamat_deploy_test\" npx prisma migrate diff:*)",
+      "Bash(DATABASE_URL=\"postgresql://khadamat_user:khadamat2025@localhost:5432/khadamat_deploy_test\" npx prisma migrate dev:*)",
+      "Bash(pnpm --filter api exec tsc:*)",
+      "Bash(pnpm --filter api run build:*)",
+      "Bash(pnpm approve-builds:*)",
+      "Bash(npx:*)",
+      "Bash(node -e \"\nconst fs = require\\(''fs''\\);\nconst rc = JSON.parse\\(fs.readFileSync\\(''.npmrc'', ''utf8''\\).split\\(''\\\\n''\\).reduce\\(\\(a,l\\) => {\n  if\\(l.includes\\(''=''\\)\\) { const [k,v] = l.split\\(''='',2\\); a[k.trim\\(\\)] = v.trim\\(\\); }\n  return a;\n}, ''''\\) || ''{}''\\);\n\")",
+      "Bash(pnpm install:*)"
+    ]
+  }
+}

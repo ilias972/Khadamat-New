@@ -15,9 +15,4 @@ export class PrismaService
     await this.$disconnect();
     console.log('🔌 Database disconnected (Prisma)');
   }
-
-  // Compatibility layer for raw queries (used by health check)
-  async query(sql: string, params?: any[]) {
-    return this.$queryRawUnsafe(sql, ...(params || []));
-  }
 }

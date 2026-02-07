@@ -3,6 +3,16 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { NotificationsService } from './notifications.service';
 import { BookingEventPayload, BookingEventTypes } from './events/booking-events.types';
 
+function escapeHtml(input: string | undefined | null): string {
+  if (!input) return '';
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /**
  * NotificationsListener
  *
@@ -38,7 +48,7 @@ export class NotificationsListener {
         `
           <h1>Nouvelle demande de réservation</h1>
           <p>Vous avez reçu une nouvelle demande de réservation.</p>
-          <p><strong>ID de réservation :</strong> ${payload.bookingId}</p>
+          <p><strong>ID de réservation :</strong> ${escapeHtml(payload.bookingId)}</p>
           <p>Connectez-vous pour voir les détails et confirmer.</p>
         `,
       );
@@ -82,7 +92,7 @@ export class NotificationsListener {
         `
           <h1>Réservation confirmée ✅</h1>
           <p>Votre réservation a été confirmée par le professionnel.</p>
-          <p><strong>ID de réservation :</strong> ${payload.bookingId}</p>
+          <p><strong>ID de réservation :</strong> ${escapeHtml(payload.bookingId)}</p>
           <p>Connectez-vous pour voir les détails.</p>
         `,
       );
@@ -119,7 +129,7 @@ export class NotificationsListener {
         reason: payload.reason,
       });
 
-      const reasonText = payload.reason ? `Raison : ${payload.reason}` : '';
+      const reasonText = payload.reason ? `Raison : ${escapeHtml(payload.reason)}` : '';
 
       // Notifier les deux parties (CLIENT et PRO)
       // Email au CLIENT
@@ -129,7 +139,7 @@ export class NotificationsListener {
         `
           <h1>Réservation annulée ❌</h1>
           <p>Votre réservation a été annulée.</p>
-          <p><strong>ID de réservation :</strong> ${payload.bookingId}</p>
+          <p><strong>ID de réservation :</strong> ${escapeHtml(payload.bookingId)}</p>
           ${reasonText ? `<p>${reasonText}</p>` : ''}
         `,
       );
@@ -141,7 +151,7 @@ export class NotificationsListener {
         `
           <h1>Réservation annulée ❌</h1>
           <p>Une réservation a été annulée.</p>
-          <p><strong>ID de réservation :</strong> ${payload.bookingId}</p>
+          <p><strong>ID de réservation :</strong> ${escapeHtml(payload.bookingId)}</p>
           ${reasonText ? `<p>${reasonText}</p>` : ''}
         `,
       );
@@ -150,7 +160,7 @@ export class NotificationsListener {
       await this.notificationsService.sendPush(
         payload.clientId,
         'Réservation annulée',
-        `Réservation annulée${payload.reason ? ` : ${payload.reason}` : ''}`,
+        `Réservation annulée${payload.reason ? ` : ${escapeHtml(payload.reason)}` : ''}`,
         { bookingId: payload.bookingId, type: 'booking_cancelled' },
       );
 
@@ -158,7 +168,7 @@ export class NotificationsListener {
       await this.notificationsService.sendPush(
         payload.proId,
         'Réservation annulée',
-        `Réservation annulée${payload.reason ? ` : ${payload.reason}` : ''}`,
+        `Réservation annulée${payload.reason ? ` : ${escapeHtml(payload.reason)}` : ''}`,
         { bookingId: payload.bookingId, type: 'booking_cancelled' },
       );
     } catch (error: unknown) {
@@ -192,7 +202,7 @@ export class NotificationsListener {
         `
           <h1>Réservation modifiée 📝</h1>
           <p>Le professionnel a modifié votre réservation.</p>
-          <p><strong>ID de réservation :</strong> ${payload.bookingId}</p>
+          <p><strong>ID de réservation :</strong> ${escapeHtml(payload.bookingId)}</p>
           <p>Connectez-vous pour voir les nouvelles informations et accepter ou refuser.</p>
         `,
       );

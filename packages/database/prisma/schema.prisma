@@ -157,6 +157,7 @@ model User {
   penaltyLogs       PenaltyLog[]
   reportsAsClient   Report[]       @relation("ReportsAsClient")
   reviewsAsClient   Review[]       @relation("ReviewsAsClient")
+  refreshTokens     RefreshToken[]
 }
 
 model ProProfile {
@@ -487,6 +488,20 @@ model ProBoost {
   @@index([proUserId, endsAt])
 }
 
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique   // SHA-256 hash du refresh token (jamais le token brut)
+  revoked   Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
 model PaymentOrder {
   id        String  @id @default(cuid())
   oid       String  @unique  // Référence unique de commande
@@ -513,4 +528,16 @@ model PaymentOrder {
 
   @@index([proUserId, status])
   @@index([oid])
+}
+
+model KycAccessLog {
+  id        String   @id @default(uuid())
+  userId    String
+  filename  String
+  result    String
+  ip        String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
 }

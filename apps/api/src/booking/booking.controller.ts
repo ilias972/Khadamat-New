@@ -8,10 +8,25 @@ import {
   Body,
   Request,
   UseGuards,
+  ValidationPipe,
+  BadRequestException,
 } from '@nestjs/common';
+import { IsInt, Min, Max, IsBoolean } from 'class-validator';
 import { BookingService } from './booking.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+
+export class UpdateDurationDto {
+  @IsInt()
+  @Min(1)
+  @Max(8)
+  duration!: number;
+}
+
+export class RespondDto {
+  @IsBoolean()
+  accept!: boolean;
+}
 import {
   GetSlotsSchema,
   CreateBookingSchema,
@@ -92,8 +107,17 @@ export class BookingController {
    */
   @Get('bookings')
   @UseGuards(JwtAuthGuard)
-  async getMyBookings(@Request() req) {
-    return this.bookingService.getMyBookings(req.user.id, req.user.role);
+  async getMyBookings(
+    @Request() req,
+    @Query('page') rawPage?: string,
+    @Query('limit') rawLimit?: string,
+  ) {
+    const page = rawPage ? Number(rawPage) : 1;
+    const limit = rawLimit ? Number(rawLimit) : 20;
+    if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
+      throw new BadRequestException('Paramètres de pagination invalides');
+    }
+    return this.bookingService.getMyBookings(req.user.id, req.user.role, page, limit);
   }
 
   /**
@@ -146,7 +170,8 @@ export class BookingController {
   async updateBookingDuration(
     @Param('id') id: string,
     @Request() req,
-    @Body() body: { duration: number },
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+    body: UpdateDurationDto,
   ) {
     return this.bookingService.updateBooking(id, req.user.id, req.user.role, body.duration);
   }
@@ -172,7 +197,8 @@ export class BookingController {
   async respondToModification(
     @Param('id') id: string,
     @Request() req,
-    @Body() body: { accept: boolean },
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+    body: RespondDto,
   ) {
     return this.bookingService.respondToModification(id, req.user.id, req.user.role, body.accept);
   }

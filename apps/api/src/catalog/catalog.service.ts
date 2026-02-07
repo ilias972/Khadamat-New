@@ -7,6 +7,11 @@ import type {
   PublicProProfile,
 } from '@khadamat/contracts';
 
+function maskPhone(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  return phone.slice(0, 2) + '******' + phone.slice(-2);
+}
+
 @Injectable()
 export class CatalogService {
   private readonly logger = new Logger(CatalogService.name);
@@ -21,7 +26,7 @@ export class CatalogService {
     return this.prisma.category.findMany({ orderBy: { name: 'asc' } });
   }
 
-  async getPros(filters: { cityId?: string; categoryId?: string }): Promise<PublicProCard[]> {
+  async getPros(filters: { cityId?: string; categoryId?: string }, page: number = 1, limit: number = 20): Promise<PublicProCard[]> {
     const { cityId, categoryId } = filters;
     this.logger.log(`🔍 Recherche Pro avec filtres: City=${cityId}, Cat=${categoryId}`);
 
@@ -59,8 +64,11 @@ export class CatalogService {
     }
 
     try {
+      const skip = (page - 1) * limit;
       const pros = await this.prisma.user.findMany({
         where: whereClause,
+        skip,
+        take: limit,
         include: {
           proProfile: {
             include: {
@@ -80,14 +88,14 @@ export class CatalogService {
     }
   }
 
-  async getProDetail(id: string): Promise<PublicProProfile> {
+  async getProDetail(id: string, currentUserId?: string): Promise<PublicProProfile> {
     const pro = await this.prisma.user.findUnique({
       where: { id, role: 'PRO', status: 'ACTIVE' },
       select: {
         id: true,
         firstName: true,
         lastName: true,
-        phone: true, // Ajout pour le lien WhatsApp
+        phone: true,
         proProfile: {
           include: {
             city: true,
@@ -101,7 +109,26 @@ export class CatalogService {
       throw new NotFoundException(`Pro introuvable`);
     }
 
-    return this.mapToPublicProCard(pro) as PublicProProfile;
+    const result = this.mapToPublicProCard(pro) as PublicProProfile;
+
+    // Démasquer le phone si owner ou client avec booking confirmé
+    if (currentUserId) {
+      const isOwner = currentUserId === pro.id;
+
+      const hasConfirmedBooking = !isOwner && await this.prisma.booking.count({
+        where: {
+          proId: pro.id,
+          clientId: currentUserId,
+          status: 'CONFIRMED',
+        },
+      }) > 0;
+
+      if (isOwner || hasConfirmedBooking) {
+        result.phone = pro.phone;
+      }
+    }
+
+    return result;
   }
 
   private mapToPublicProCard(user: any): PublicProCard {
@@ -139,7 +166,7 @@ export class CatalogService {
       id: user.id,
       firstName: user.firstName,
       lastName: lastNameInitial,
-      phone: user.phone, // Ajout pour le lien WhatsApp
+      phone: maskPhone(user.phone),
       city: profile.city?.name || 'Maroc',
       isVerified: profile.kycStatus === 'APPROVED',
       services: servicesFormatted,

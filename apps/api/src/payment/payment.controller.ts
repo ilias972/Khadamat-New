@@ -4,10 +4,12 @@ import {
   Get,
   Body,
   Param,
+  Query,
   Request,
   UseGuards,
   ValidationPipe,
   UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -63,8 +65,8 @@ export class PaymentController {
   @Get('status/:oid')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('PRO')
-  async getPaymentStatus(@Param('oid') oid: string) {
-    return this.paymentService.getPaymentStatus(oid);
+  async getPaymentStatus(@Param('oid') oid: string, @Request() req) {
+    return this.paymentService.getPaymentStatus(oid, req.user.id);
   }
 
   /**
@@ -112,7 +114,15 @@ export class PaymentController {
   @Get('admin/pending')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN')
-  async getPendingPayments() {
-    return this.paymentService.getPendingPayments();
+  async getPendingPayments(
+    @Query('page') rawPage?: string,
+    @Query('limit') rawLimit?: string,
+  ) {
+    const page = rawPage ? Number(rawPage) : 1;
+    const limit = rawLimit ? Number(rawLimit) : 20;
+    if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
+      throw new BadRequestException('Paramètres de pagination invalides');
+    }
+    return this.paymentService.getPendingPayments(page, limit);
   }
 }

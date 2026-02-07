@@ -136,7 +136,7 @@ export class ProService {
         where: { id: dto.cityId },
       });
       if (!city) {
-        throw new NotFoundException(`Ville avec ID ${dto.cityId} non trouvée`);
+        throw new BadRequestException('Données invalides');
       }
     }
 
@@ -149,7 +149,7 @@ export class ProService {
         },
       });
       if (existingPhone) {
-        throw new BadRequestException('Ce numéro de téléphone est déjà utilisé par un autre compte.');
+        throw new BadRequestException('Données invalides');
       }
     }
 

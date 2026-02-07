@@ -3,31 +3,40 @@ import {
   ConflictException,
   UnauthorizedException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../database/prisma.service';
 import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import type { RegisterInput, LoginInput, PublicUser } from '@khadamat/contracts';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  private readonly refreshExpiresMs: number;
+
+  // Rate-limit replay detection : max 1 warn par userId par 60s
+  private readonly replayWarnings = new Map<string, number>();
+  private static readonly REPLAY_COOLDOWN_MS = 60_000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
-  ) {}
+  ) {
+    // Convertir JWT_REFRESH_EXPIRES en ms (défaut 7 jours)
+    this.refreshExpiresMs = this.parseDurationToMs(
+      this.config.get<string>('JWT_REFRESH_EXPIRES') || '7d',
+    );
+  }
 
-  /**
-   * REGISTER ATOMIQUE
-   * Inscription d'un nouvel utilisateur avec upload de fichiers (PRO)
-   *
-   * HARD GATE :
-   * - Si PRO : cinNumber + fichiers OBLIGATOIRES, statut PENDING
-   * - Si CLIENT : fichiers ignorés
-   * - Transaction atomique : Si upload échoue, compte non créé
-   */
+  // ═══════════════════════════════════════════════════════════════
+  //  REGISTER
+  // ═══════════════════════════════════════════════════════════════
+
   async register(
     dto: RegisterInput,
     cinFrontFile?: Express.Multer.File,
@@ -43,7 +52,7 @@ export class AuthService {
         where: { email: email },
       });
       if (existingEmail) {
-        throw new ConflictException('Cet email est déjà utilisé.');
+        throw new ConflictException('Données en conflit');
       }
     }
 
@@ -52,7 +61,7 @@ export class AuthService {
       where: { phone: phone },
     });
     if (existingPhone) {
-      throw new ConflictException('Ce numéro de téléphone est déjà utilisé.');
+      throw new ConflictException('Données en conflit');
     }
 
     // 3. Vérifier la ville (obligatoire pour TOUS)
@@ -90,7 +99,7 @@ export class AuthService {
         where: { cinNumber: normalizedCinNumber },
       });
       if (existingCin) {
-        throw new ConflictException('Ce numéro CIN est déjà utilisé.');
+        throw new ConflictException('Données en conflit');
       }
     }
 
@@ -105,7 +114,6 @@ export class AuthService {
     // 9. Transaction atomique : Créer User + ProProfile
     try {
       const user = await this.prisma.$transaction(async (tx) => {
-        // A. Créer le User avec cityId et addressLine
         const newUser = await tx.user.create({
           data: {
             email: email,
@@ -120,17 +128,16 @@ export class AuthService {
           },
         });
 
-        // B. Si PRO, créer le profil avec KYC PENDING
         if (dto.role === 'PRO') {
           await tx.proProfile.create({
             data: {
               userId: newUser.id,
               cityId: dto.cityId,
-              whatsapp: phone, // Copie automatique
+              whatsapp: phone,
               cinNumber: dto.cinNumber?.trim().toUpperCase() || null,
               kycCinFrontUrl: frontUrl,
               kycCinBackUrl: backUrl,
-              kycStatus: 'PENDING', // HARD GATE : PENDING dès l'inscription
+              kycStatus: 'PENDING',
             },
           });
         }
@@ -138,36 +145,28 @@ export class AuthService {
         return newUser;
       });
 
-      // 9. Générer le token directement (Auto-login)
+      // 10. Auto-login avec dual tokens
       return this.loginAfterRegister(user);
     } catch (error: any) {
       // Rollback : Supprimer les fichiers uploadés si la transaction échoue
       if (cinFrontFile) {
-        await fs.unlink(cinFrontFile.path).catch(() => {
-          // Ignore si fichier déjà supprimé
-        });
+        await fs.unlink(cinFrontFile.path).catch(() => {});
       }
       if (cinBackFile) {
-        await fs.unlink(cinBackFile.path).catch(() => {
-          // Ignore si fichier déjà supprimé
-        });
+        await fs.unlink(cinBackFile.path).catch(() => {});
       }
 
-      // Relancer l'erreur
       if (error.code === 'P2002') {
-        if (error.meta?.target?.includes('cinNumber')) {
-          throw new ConflictException('Ce numéro CIN est déjà utilisé');
-        }
         throw new ConflictException('Données en conflit');
       }
       throw error;
     }
   }
 
-  /**
-   * LOGIN
-   * Connexion avec Email OU Téléphone
-   */
+  // ═══════════════════════════════════════════════════════════════
+  //  LOGIN
+  // ═══════════════════════════════════════════════════════════════
+
   async login(dto: LoginInput) {
     if (!dto.login || typeof dto.login !== 'string') {
       throw new UnauthorizedException('Identifiants invalides');
@@ -175,7 +174,6 @@ export class AuthService {
 
     const loginValue = dto.login.trim();
 
-    // 1. Chercher par Email OU Phone avec relations complètes
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [{ email: loginValue.toLowerCase() }, { phone: loginValue }],
@@ -190,41 +188,163 @@ export class AuthService {
         role: true,
         cityId: true,
         addressLine: true,
-        city: {
+        city: { select: { id: true, name: true } },
+        proProfile: { select: { userId: true, isPremium: true, kycStatus: true } },
+      },
+    });
+
+    const DUMMY_HASH = '$2b$10$invalidinvalidinvalidinvalidinval';
+    const isPasswordValid = await bcrypt.compare(
+      dto.password,
+      user?.password || DUMMY_HASH,
+    );
+
+    if (!user || !isPasswordValid) {
+      throw new UnauthorizedException('Identifiants invalides');
+    }
+
+    return this.createAuthPayload(user);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  REFRESH TOKEN
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Échange un refresh token valide contre une nouvelle paire access+refresh.
+   * L'ancien refresh token est révoqué (rotation).
+   */
+  async refreshTokens(rawRefreshToken: string) {
+    if (!rawRefreshToken || typeof rawRefreshToken !== 'string') {
+      throw new UnauthorizedException('Refresh token invalide');
+    }
+
+    const tokenHash = this.hashToken(rawRefreshToken);
+
+    const stored = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+      include: {
+        user: {
           select: {
             id: true,
-            name: true,
-          },
-        },
-        proProfile: {
-          select: {
-            userId: true,
-            isPremium: true,
-            kycStatus: true, // Ajout du kycStatus pour le frontend
+            email: true,
+            phone: true,
+            firstName: true,
+            lastName: true,
+            role: true,
+            cityId: true,
+            addressLine: true,
+            city: { select: { id: true, name: true } },
+            proProfile: { select: { userId: true, isPremium: true, kycStatus: true } },
           },
         },
       },
     });
 
-    // 2. Vérifier User et Password
-    if (!user || !user.password) {
-      throw new UnauthorizedException('Identifiants incorrects.');
+    const REFRESH_ERROR = 'Refresh token invalide';
+
+    if (!stored) {
+      throw new UnauthorizedException(REFRESH_ERROR);
     }
 
-    const isPasswordValid = await bcrypt.compare(dto.password, user.password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Identifiants incorrects.');
+    // Token déjà révoqué → possible replay attack
+    // Révoquer TOUTE la famille de tokens de cet utilisateur par sécurité
+    if (stored.revoked) {
+      const lastWarn = this.replayWarnings.get(stored.userId) || 0;
+      if (Date.now() - lastWarn > AuthService.REPLAY_COOLDOWN_MS) {
+        this.logger.warn(
+          `Reuse of revoked refresh token detected for user ${stored.userId}. Revoking all tokens.`,
+        );
+        this.replayWarnings.set(stored.userId, Date.now());
+      }
+      await this.revokeAllUserTokens(stored.userId);
+      throw new UnauthorizedException(REFRESH_ERROR);
     }
 
-    // 3. Générer le Token et retourner le user public
-    return this.createAuthPayload(user);
+    // Token expiré
+    if (stored.expiresAt < new Date()) {
+      await this.prisma.refreshToken.update({
+        where: { id: stored.id },
+        data: { revoked: true },
+      });
+      throw new UnauthorizedException(REFRESH_ERROR);
+    }
+
+    // Rotation : révoquer l'ancien, émettre un nouveau couple
+    await this.prisma.refreshToken.update({
+      where: { id: stored.id },
+      data: { revoked: true },
+    });
+
+    return this.createAuthPayload(stored.user);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  LOGOUT (révocation)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Révoque un refresh token spécifique (déconnexion d'un device).
+   */
+  async logout(rawRefreshToken: string): Promise<void> {
+    if (!rawRefreshToken || typeof rawRefreshToken !== 'string') {
+      return;
+    }
+
+    const tokenHash = this.hashToken(rawRefreshToken);
+
+    const stored = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+      select: { userId: true },
+    });
+
+    if (stored) {
+      await this.revokeAllUserTokens(stored.userId);
+    }
   }
 
   /**
-   * Helper interne pour connecter après inscription
+   * Révoque TOUS les refresh tokens d'un utilisateur (déconnexion globale).
    */
+  async revokeAllUserTokens(userId: string): Promise<void> {
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revoked: false },
+      data: { revoked: true },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  VALIDATE USER (utilisé par JwtStrategy)
+  // ═══════════════════════════════════════════════════════════════
+
+  async validateUser(userId: string): Promise<PublicUser | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        phone: true,
+        firstName: true,
+        lastName: true,
+        role: true,
+        status: true,
+        cityId: true,
+        addressLine: true,
+        city: { select: { id: true, name: true } },
+        proProfile: { select: { userId: true, isPremium: true, kycStatus: true } },
+      },
+    });
+
+    if (!user || user.status !== 'ACTIVE') return null;
+
+    return this.toPublicUser(user);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  HELPERS INTERNES
+  // ═══════════════════════════════════════════════════════════════
+
   private async loginAfterRegister(user: any) {
-    // Recharger le user avec toutes les relations
     const fullUser = await this.prisma.user.findUnique({
       where: { id: user.id },
       select: {
@@ -236,19 +356,8 @@ export class AuthService {
         role: true,
         cityId: true,
         addressLine: true,
-        city: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        proProfile: {
-          select: {
-            userId: true,
-            isPremium: true,
-            kycStatus: true,
-          },
-        },
+        city: { select: { id: true, name: true } },
+        proProfile: { select: { userId: true, isPremium: true, kycStatus: true } },
       },
     });
 
@@ -256,66 +365,38 @@ export class AuthService {
   }
 
   /**
-   * Helper pour construire la réponse Auth (Token + Public User)
+   * Génère access token (JWT court) + refresh token (opaque, stocké en DB).
    */
-  private createAuthPayload(user: any) {
-    const payload = { sub: user.id, email: user.email, role: user.role };
+  private async createAuthPayload(user: any) {
+    // Payload JWT minimal : uniquement le sub (userId).
+    // Le rôle est TOUJOURS rechargé depuis la DB par JwtStrategy.validate().
+    // Ne jamais inclure de PII ni de rôle dans le token.
+    const jwtPayload = { sub: user.id };
 
-    // Construction sécurisée du PublicUser (sans password)
-    const publicUser: PublicUser = {
-      id: user.id,
-      email: user.email ?? null,
-      phone: user.phone,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role as 'CLIENT' | 'PRO' | 'ADMIN',
-      cityId: user.cityId ?? null,
-      addressLine: user.addressLine ?? null,
-      city: user.city ? { id: user.city.id, name: user.city.name } : null,
-      isPremium: user.proProfile?.isPremium ?? false,
-      kycStatus: user.proProfile?.kycStatus ?? undefined, // Ajout du kycStatus
-    };
+    const accessToken = this.jwtService.sign(jwtPayload);
+
+    // Refresh token : 64 bytes aléatoires, seul le hash est stocké en DB
+    const rawRefreshToken = crypto.randomBytes(64).toString('hex');
+    const tokenHash = this.hashToken(rawRefreshToken);
+
+    await this.prisma.refreshToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt: new Date(Date.now() + this.refreshExpiresMs),
+      },
+    });
+
+    const publicUser = this.toPublicUser(user);
 
     return {
-      accessToken: this.jwtService.sign(payload),
+      accessToken,
+      refreshToken: rawRefreshToken,
       user: publicUser,
     };
   }
 
-  /**
-   * VALIDATE USER
-   * Utilisé par la stratégie JWT
-   */
-  async validateUser(userId: string): Promise<PublicUser | null> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        phone: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        cityId: true,
-        addressLine: true,
-        city: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        proProfile: {
-          select: {
-            userId: true,
-            isPremium: true,
-            kycStatus: true,
-          },
-        },
-      },
-    });
-
-    if (!user) return null;
-
+  private toPublicUser(user: any): PublicUser {
     return {
       id: user.id,
       email: user.email ?? null,
@@ -329,5 +410,37 @@ export class AuthService {
       isPremium: user.proProfile?.isPremium ?? false,
       kycStatus: user.proProfile?.kycStatus ?? undefined,
     };
+  }
+
+  /**
+   * SHA-256 du refresh token (on ne stocke jamais le token brut en DB).
+   */
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  /**
+   * Parse une durée style "7d", "24h", "15m" en millisecondes.
+   */
+  private parseDurationToMs(duration: string): number {
+    const match = duration.match(/^(\d+)(ms|s|m|h|d)$/);
+    if (!match) {
+      throw new Error(
+        `Invalid duration format: "${duration}". Expected format: <number><unit> (e.g. 15m, 7d, 24h).`,
+      );
+    }
+
+    const value = parseInt(match[1], 10);
+    const unit = match[2];
+
+    const multipliers: Record<string, number> = {
+      ms: 1,
+      s: 1000,
+      m: 60 * 1000,
+      h: 60 * 60 * 1000,
+      d: 24 * 60 * 60 * 1000,
+    };
+
+    return value * multipliers[unit];
   }
 }

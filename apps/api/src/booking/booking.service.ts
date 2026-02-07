@@ -256,14 +256,17 @@ export class BookingService {
    * @param userRole - Rôle de l'utilisateur (CLIENT ou PRO)
    * @returns Array de bookings avec relations
    */
-  async getMyBookings(userId: string, userRole: string) {
+  async getMyBookings(userId: string, userRole: string, page: number = 1, limit: number = 20) {
     // Filtrage selon le rôle
     const where = userRole === 'CLIENT'
       ? { clientId: userId }
       : { proId: userId };
 
+    const skip = (page - 1) * limit;
     const bookings = await this.prisma.booking.findMany({
       where,
+      skip,
+      take: limit,
       orderBy: { timeSlot: 'desc' },
       select: {
         id: true,
