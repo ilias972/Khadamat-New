@@ -1,14 +1,12 @@
 import { Module } from '@nestjs/common';
+import { CacheModule } from '@nestjs/cache-manager';
 import { CatalogController } from './catalog.controller';
 import { CatalogService } from './catalog.service';
 
-/**
- * CatalogModule
- *
- * Module PUBLIC pour la découverte du marketplace.
- * Endpoints accessibles sans authentification.
- */
 @Module({
+  imports: [
+    CacheModule.register(),
+  ],
   controllers: [CatalogController],
   providers: [CatalogService],
 })

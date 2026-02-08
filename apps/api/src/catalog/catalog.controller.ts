@@ -15,6 +15,11 @@ class OptionalJwtGuard extends AuthGuard('jwt') {
   }
 }
 
+function isUUID(value: string): boolean {
+  return /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(value)
+    || /^c[a-z0-9]{24}$/i.test(value); // cuid format
+}
+
 @ApiTags('Public Catalog')
 @Controller('public')
 export class CatalogController {
@@ -49,7 +54,40 @@ export class CatalogController {
     if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
       throw new BadRequestException('Paramètres de pagination invalides');
     }
+    if (cityId && !isUUID(cityId)) {
+      throw new BadRequestException('cityId invalide');
+    }
+    if (categoryId && !isUUID(categoryId)) {
+      throw new BadRequestException('categoryId invalide');
+    }
     return this.catalogService.getPros({ cityId, categoryId }, page, limit);
+  }
+
+  @Get('pros/v2')
+  @ApiOperation({ summary: 'Rechercher des professionnels v2 (pagination + tri monétisation)' })
+  @ApiQuery({ name: 'cityId', required: false })
+  @ApiQuery({ name: 'categoryId', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiResponse({ status: 200, description: 'Liste paginée avec total' })
+  getProsV2(
+    @Query('cityId') cityId?: string,
+    @Query('categoryId') categoryId?: string,
+    @Query('page') rawPage?: string,
+    @Query('limit') rawLimit?: string,
+  ): Promise<{ data: PublicProCard[]; total: number; page: number; limit: number }> {
+    const page = rawPage ? Number(rawPage) : 1;
+    const limit = rawLimit ? Number(rawLimit) : 20;
+    if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
+      throw new BadRequestException('Paramètres de pagination invalides');
+    }
+    if (cityId && !isUUID(cityId)) {
+      throw new BadRequestException('cityId invalide');
+    }
+    if (categoryId && !isUUID(categoryId)) {
+      throw new BadRequestException('categoryId invalide');
+    }
+    return this.catalogService.getProsV2({ cityId, categoryId }, page, limit);
   }
 
   @Get('pros/:id')

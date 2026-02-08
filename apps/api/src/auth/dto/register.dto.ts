@@ -45,9 +45,13 @@ export class RegisterDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(200, { message: "L'adresse ne peut pas dépasser 200 caractères" })
   addressLine?: string;
 
   @IsOptional()
   @IsString()
+  @Matches(/^[A-Za-z]{1,2}\d{5,6}$/, {
+    message: 'Format CIN invalide (ex: BJ453975)',
+  })
   cinNumber?: string;
 }

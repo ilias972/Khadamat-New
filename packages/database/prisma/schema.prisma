@@ -158,6 +158,8 @@ model User {
   reportsAsClient   Report[]       @relation("ReportsAsClient")
   reviewsAsClient   Review[]       @relation("ReviewsAsClient")
   refreshTokens     RefreshToken[]
+
+  @@index([email])
 }
 
 model ProProfile {
@@ -540,4 +542,24 @@ model KycAccessLog {
 
   @@index([userId])
   @@index([createdAt])
+}
+
+enum NewsletterStatus {
+  PENDING
+  ACTIVE
+  UNSUBSCRIBED
+}
+
+model NewsletterSubscriber {
+  id             String           @id @default(uuid())
+  email          String           @unique
+  status         NewsletterStatus @default(PENDING)
+  token          String
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime         @default(now())
+  tokenCreatedAt DateTime         @default(now())
+  confirmedAt    DateTime?
+
+  @@index([token])
 }

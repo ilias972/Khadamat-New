@@ -6,6 +6,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { RefreshTokenCleanupService } from './refresh-token-cleanup.service';
+import { FailedLoginService } from './failed-login.service';
 
 @Module({
   imports: [
@@ -32,7 +33,7 @@ import { RefreshTokenCleanupService } from './refresh-token-cleanup.service';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, RefreshTokenCleanupService],
-  exports: [AuthService],
+  providers: [AuthService, JwtStrategy, RefreshTokenCleanupService, FailedLoginService],
+  exports: [AuthService, FailedLoginService],
 })
 export class AuthModule {}

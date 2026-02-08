@@ -13,7 +13,10 @@
       "Bash(pnpm approve-builds:*)",
       "Bash(npx:*)",
       "Bash(node -e \"\nconst fs = require\\(''fs''\\);\nconst rc = JSON.parse\\(fs.readFileSync\\(''.npmrc'', ''utf8''\\).split\\(''\\\\n''\\).reduce\\(\\(a,l\\) => {\n  if\\(l.includes\\(''=''\\)\\) { const [k,v] = l.split\\(''='',2\\); a[k.trim\\(\\)] = v.trim\\(\\); }\n  return a;\n}, ''''\\) || ''{}''\\);\n\")",
-      "Bash(pnpm install:*)"
+      "Bash(pnpm install:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)",
+      "Bash(curl:*)"
     ]
   }
 }

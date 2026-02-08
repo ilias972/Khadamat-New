@@ -27,7 +27,8 @@
       "@prisma/engines",
       "prisma",
       "esbuild",
-      "sharp"
+      "sharp",
+      "puppeteer"
     ]
   }
 }

@@ -19,6 +19,7 @@ import * as fs from 'fs';
 import sharp from 'sharp';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { multerConfig } from '../kyc/multer.config';
@@ -88,6 +89,7 @@ export class AuthController {
    * Inscription ATOMIQUE d'un nouveau Client ou Pro
    */
   @Post('register')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseInterceptors(
     FileFieldsInterceptor(
       [
@@ -104,6 +106,7 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Données invalides ou fichiers manquants (PRO)' })
   async register(
     @Request() req,
+    @Res({ passthrough: true }) res: Response,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
     body: RegisterDto,
     @UploadedFiles()
@@ -217,15 +220,20 @@ export class AuthController {
       cinNumber: body.cinNumber || undefined,
     };
 
-    return this.authService.register(dto, cinFrontFile, cinBackFile);
+    const result = await this.authService.register(dto, cinFrontFile, cinBackFile);
+
+    // Cookies only — tokens never in body
+    this.setAuthCookies(res, result);
+    return { user: result.user };
   }
 
   /**
    * POST /api/auth/login
    * Connexion avec email OU phone + password
-   * Retourne { accessToken, refreshToken, user }
+   * Retourne { user } — tokens en cookies httpOnly uniquement
    */
   @Post('login')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Connexion avec email ou téléphone' })
   @ApiResponse({ status: 200, description: 'Connexion réussie' })
@@ -237,16 +245,16 @@ export class AuthController {
     dto: LoginDto,
   ) {
     const result = await this.authService.login(dto);
+
+    // Cookies only — tokens never in body
     this.setAuthCookies(res, result);
-    return result;
+    return { user: result.user };
   }
 
   /**
    * POST /api/auth/refresh
    * Échange un refresh token contre une nouvelle paire access+refresh.
    * L'ancien refresh est automatiquement révoqué (rotation).
-   *
-   * Body : { refreshToken: string }
    */
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
@@ -266,15 +274,15 @@ export class AuthController {
     }
 
     const result = await this.authService.refreshTokens(token);
+
+    // Cookies only — tokens never in body
     this.setAuthCookies(res, result);
-    return result;
+    return { user: result.user };
   }
 
   /**
    * POST /api/auth/logout
    * Révoque le refresh token (déconnexion).
-   *
-   * Body : { refreshToken: string }
    */
   @Post('logout')
   @HttpCode(HttpStatus.OK)

@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../database/prisma.service';
+import { FailedLoginService } from './failed-login.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
@@ -26,6 +27,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    private readonly failedLogin: FailedLoginService,
   ) {
     // Convertir JWT_REFRESH_EXPIRES en ms (défaut 7 jours)
     this.refreshExpiresMs = this.parseDurationToMs(
@@ -145,7 +147,7 @@ export class AuthService {
         return newUser;
       });
 
-      // 10. Auto-login avec dual tokens
+      // 10. Auto-login avec dual tokens (cookies only)
       return this.loginAfterRegister(user);
     } catch (error: any) {
       // Rollback : Supprimer les fichiers uploadés si la transaction échoue
@@ -174,6 +176,13 @@ export class AuthService {
 
     const loginValue = dto.login.trim();
 
+    // Check lockout BEFORE any DB query or bcrypt
+    const lockSeconds = this.failedLogin.isLocked(loginValue);
+    if (lockSeconds > 0) {
+      this.logger.warn(`Login attempt blocked: account locked (remaining: ${lockSeconds}s)`);
+      throw new UnauthorizedException('Trop de tentatives. Réessayez plus tard.');
+    }
+
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [{ email: loginValue.toLowerCase() }, { phone: loginValue }],
@@ -186,6 +195,7 @@ export class AuthService {
         firstName: true,
         lastName: true,
         role: true,
+        status: true,
         cityId: true,
         addressLine: true,
         city: { select: { id: true, name: true } },
@@ -199,9 +209,15 @@ export class AuthService {
       user?.password || DUMMY_HASH,
     );
 
-    if (!user || !isPasswordValid) {
+    if (!user || !isPasswordValid || user.status !== 'ACTIVE') {
+      // Record failure using the login identifier
+      this.failedLogin.recordFailure(loginValue);
+      this.logger.warn(`Failed login attempt for identifier`);
       throw new UnauthorizedException('Identifiants invalides');
     }
+
+    // Success: reset failed attempts
+    this.failedLogin.resetAttempts(loginValue);
 
     return this.createAuthPayload(user);
   }
@@ -247,7 +263,7 @@ export class AuthService {
       throw new UnauthorizedException(REFRESH_ERROR);
     }
 
-    // Token déjà révoqué → possible replay attack
+    // Token déjà révoqué -> possible replay attack
     // Révoquer TOUTE la famille de tokens de cet utilisateur par sécurité
     if (stored.revoked) {
       const lastWarn = this.replayWarnings.get(stored.userId) || 0;
@@ -366,13 +382,10 @@ export class AuthService {
 
   /**
    * Génère access token (JWT court) + refresh token (opaque, stocké en DB).
+   * Retourne tokens séparément pour que le controller les mette en cookies.
    */
-  private async createAuthPayload(user: any) {
-    // Payload JWT minimal : uniquement le sub (userId).
-    // Le rôle est TOUJOURS rechargé depuis la DB par JwtStrategy.validate().
-    // Ne jamais inclure de PII ni de rôle dans le token.
+  async createAuthPayload(user: any) {
     const jwtPayload = { sub: user.id };
-
     const accessToken = this.jwtService.sign(jwtPayload);
 
     // Refresh token : 64 bytes aléatoires, seul le hash est stocké en DB

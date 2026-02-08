@@ -17,6 +17,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { PaymentModule } from './payment/payment.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { KycModule } from './kyc/kyc.module';
+import { NewsletterModule } from './newsletter/newsletter.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { KycModule } from './kyc/kyc.module';
     PaymentModule,
     NotificationsModule,
     KycModule,
+    NewsletterModule,
   ],
   controllers: [HealthController],
   providers: [
