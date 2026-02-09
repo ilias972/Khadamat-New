@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store/authStore';
 import { getJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
 import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -56,7 +55,6 @@ interface DashboardStats {
 
 export default function DashboardOverviewPage() {
   const router = useRouter();
-  const { accessToken } = useAuthStore();
   const [dashboard, setDashboard] = useState<ProDashboard | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,10 +64,8 @@ export default function DashboardOverviewPage() {
   // Fetch Dashboard
   useEffect(() => {
     const fetchDashboard = async () => {
-      if (!accessToken) return;
-
       try {
-        const data = await getJSON<ProDashboard>('/pro/me', accessToken);
+        const data = await getJSON<ProDashboard>('/pro/me');
         setDashboard(data);
 
         // Si non premium, rediriger vers /dashboard/bookings
@@ -88,16 +84,16 @@ export default function DashboardOverviewPage() {
     };
 
     fetchDashboard();
-  }, [accessToken, router]);
+  }, [router]);
 
   // Fetch Stats (uniquement si Premium)
   useEffect(() => {
     const fetchStats = async () => {
-      if (!accessToken || !dashboard || !dashboard.profile.isPremium) return;
+      if (!dashboard || !dashboard.profile.isPremium) return;
 
       try {
         setLoadingStats(true);
-        const data = await getJSON<DashboardStats>('/dashboard/stats', accessToken);
+        const data = await getJSON<DashboardStats>('/dashboard/stats');
         setStats(data);
       } catch (err) {
         console.error('Error fetching stats:', err);
@@ -107,7 +103,7 @@ export default function DashboardOverviewPage() {
     };
 
     fetchStats();
-  }, [accessToken, dashboard]);
+  }, [dashboard]);
 
   // Préparer les données pour le graphique donut (Conversion Rate)
   const conversionData = stats ? [

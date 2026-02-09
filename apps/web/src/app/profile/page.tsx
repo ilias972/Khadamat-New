@@ -17,7 +17,7 @@ import { getJSON, patchJSON } from '@/lib/api';
  */
 export default function ProfilePage() {
   const router = useRouter();
-  const { user, isAuthenticated, accessToken, logout, setUser } = useAuthStore();
+  const { user, isAuthenticated, logout, setUser } = useAuthStore();
   const [mounted, setMounted] = useState(false);
 
   // Formulaire de modification
@@ -75,8 +75,6 @@ export default function ProfilePage() {
 
   // Sauvegarder les modifications
   const handleSave = async () => {
-    if (!accessToken) return;
-
     try {
       setIsSaving(true);
       setSuccessMessage('');
@@ -88,7 +86,7 @@ export default function ProfilePage() {
         addressLine: addressLine.trim(),
       };
 
-      const updatedUser = await patchJSON('/users/me', data, accessToken);
+      const updatedUser = await patchJSON('/users/me', data);
 
       // Mettre à jour les données utilisateur dans le store
       setUser(updatedUser);

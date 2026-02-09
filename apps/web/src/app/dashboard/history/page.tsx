@@ -19,7 +19,7 @@ import type { BookingDashboardItem } from '@khadamat/contracts';
  */
 export default function DashboardHistoryPage() {
   const router = useRouter();
-  const { user, isAuthenticated, accessToken } = useAuthStore();
+  const { user, isAuthenticated } = useAuthStore();
   const [mounted, setMounted] = useState(false);
   const [bookings, setBookings] = useState<BookingDashboardItem[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
@@ -41,12 +41,12 @@ export default function DashboardHistoryPage() {
 
   // Fetch Bookings
   useEffect(() => {
-    if (!mounted || !isAuthenticated || !accessToken) return;
+    if (!mounted || !isAuthenticated) return;
 
     const fetchBookings = async () => {
       try {
         setLoadingBookings(true);
-        const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+        const data = await getJSON<BookingDashboardItem[]>('/bookings');
         setBookings(data);
       } catch (error) {
         console.error('Error fetching bookings:', error);
@@ -57,7 +57,7 @@ export default function DashboardHistoryPage() {
     };
 
     fetchBookings();
-  }, [mounted, isAuthenticated, accessToken]);
+  }, [mounted, isAuthenticated]);
 
   // Ne rien afficher avant hydratation
   if (!mounted) {

@@ -128,7 +128,7 @@ model User {
   status    UserStatus  @default(ACTIVE)
 
   phone     String      @unique
-  email     String?
+  email     String?     @unique
   password  String
   firstName String
   lastName  String
@@ -159,7 +159,6 @@ model User {
   reviewsAsClient   Review[]       @relation("ReviewsAsClient")
   refreshTokens     RefreshToken[]
 
-  @@index([email])
 }
 
 model ProProfile {
@@ -276,7 +275,9 @@ model Booking {
 
 
   @@index([clientId, cityId, categoryId, timeSlot])
+  @@index([clientId])
   @@index([proId, timeSlot])
+  @@index([proId])
 }
 
 model BookingEvent {

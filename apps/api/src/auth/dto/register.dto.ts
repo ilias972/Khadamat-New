@@ -6,7 +6,6 @@ import {
   Matches,
   IsIn,
   IsOptional,
-  IsUUID,
 } from 'class-validator';
 
 export class RegisterDto {
@@ -40,7 +39,8 @@ export class RegisterDto {
   @MaxLength(50)
   lastName: string;
 
-  @IsUUID('4', { message: 'cityId doit être un UUID valide' })
+  @IsString({ message: 'cityId est requis' })
+  @MinLength(1, { message: 'cityId est requis' })
   cityId: string;
 
   @IsOptional()

@@ -31,7 +31,7 @@ interface Category {
 
 export default function PlansPage() {
   const router = useRouter();
-  const { user, accessToken, isAuthenticated } = useAuthStore();
+  const { user, isAuthenticated } = useAuthStore();
 
   // Premium plan state
   const [isAnnual, setIsAnnual] = useState(false);
@@ -47,7 +47,7 @@ export default function PlansPage() {
 
   // Redirect if not authenticated or not PRO
   useEffect(() => {
-    if (!isAuthenticated || !accessToken) {
+    if (!isAuthenticated) {
       router.push('/auth/login');
       return;
     }
@@ -55,7 +55,7 @@ export default function PlansPage() {
     if (user?.role !== 'PRO') {
       router.push('/');
     }
-  }, [isAuthenticated, accessToken, user, router]);
+  }, [isAuthenticated, user, router]);
 
   // Load cities and categories
   useEffect(() => {

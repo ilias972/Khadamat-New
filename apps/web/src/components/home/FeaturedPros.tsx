@@ -2,8 +2,11 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { Star, BadgeCheck, Rocket, Crown, Users } from 'lucide-react';
+import { Star, ShieldCheck, Users, AlertCircle, RefreshCw } from 'lucide-react';
 import { getJSON } from '@/lib/api';
+import SectionHeader from './SectionHeader';
+import EmptyState from './EmptyState';
+import VerifiedBadge from './VerifiedBadge';
 
 /** Extended type — optional fields degrade gracefully if API doesn't return them */
 interface FeaturedPro {
@@ -14,29 +17,18 @@ interface FeaturedPro {
   isVerified: boolean;
   services: { name: string; priceFormatted: string; categoryId: string }[];
   isPremium?: boolean;
-  isBoosted?: boolean;
   rating?: number;
   reviewCount?: number;
 }
 
-function sortPros(pros: FeaturedPro[]): FeaturedPro[] {
-  // 1. KYC approved only
-  const valid = pros.filter((p) => p.isVerified);
-
-  // 2. Sort: Premium > Boost > rating > reviewCount
-  return valid.sort((a, b) => {
-    if (a.isPremium && !b.isPremium) return -1;
-    if (!a.isPremium && b.isPremium) return 1;
-
-    if (a.isBoosted && !b.isBoosted) return -1;
-    if (!a.isBoosted && b.isBoosted) return 1;
-
-    const ratingDiff = (b.rating ?? 0) - (a.rating ?? 0);
-    if (ratingDiff !== 0) return ratingDiff;
-
-    return (b.reviewCount ?? 0) - (a.reviewCount ?? 0);
-  });
+interface ProsV2Response {
+  data: FeaturedPro[];
+  total: number;
+  page: number;
+  limit: number;
 }
+
+type SectionState = 'loading' | 'ready' | 'empty' | 'error';
 
 function ProCardSkeleton() {
   return (
@@ -56,8 +48,11 @@ function ProCardSkeleton() {
 }
 
 export default function FeaturedPros() {
-  const [pros, setPros] = useState<FeaturedPro[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<{ pros: FeaturedPro[]; total: number }>({
+    pros: [],
+    total: 0,
+  });
+  const [state, setState] = useState<SectionState>('loading');
   const [cityId, setCityId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -76,24 +71,23 @@ export default function FeaturedPros() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    setLoading(true);
+    setState('loading');
     try {
       const params = new URLSearchParams();
       if (city) params.set('cityId', city);
-      params.set('limit', '20');
-      const qs = params.toString();
+      params.set('page', '1');
+      params.set('limit', '4');
 
-      const data = await getJSON<FeaturedPro[]>(`/public/pros?${qs}`);
+      const res = await getJSON<ProsV2Response>(`/public/pros/v2?${params.toString()}`);
 
       if (!controller.signal.aborted) {
-        const sorted = sortPros(data);
-        setPros(sorted.slice(0, 4));
-        setLoading(false);
+        setData({ pros: res.data, total: res.total });
+        setState(res.data.length > 0 ? 'ready' : 'empty');
       }
     } catch {
       if (!controller.signal.aborted) {
-        setPros([]);
-        setLoading(false);
+        setData({ pros: [], total: 0 });
+        setState('error');
       }
     }
   }, []);
@@ -104,27 +98,17 @@ export default function FeaturedPros() {
   }, [cityId, fetchPros]);
 
   return (
-    <section aria-labelledby="featured-pros-title" className="py-24 bg-background">
+    <section aria-labelledby="featured-pros-title" className="py-24 bg-surface">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="text-center mb-16">
-          <span className="inline-block text-primary-600 font-bold tracking-wide uppercase text-xs bg-primary-50 px-3 py-1 rounded-full mb-4">
-            <Users className="inline w-3.5 h-3.5 mr-1 -mt-0.5" aria-hidden="true" />
-            Sélection
-          </span>
-          <h2
-            id="featured-pros-title"
-            className="text-3xl sm:text-4xl font-extrabold text-text-primary mb-4"
-          >
-            Pros de la semaine
-          </h2>
-          <p className="text-text-secondary text-lg max-w-xl mx-auto leading-relaxed">
-            Sélectionnés pour leur qualité, leur réactivité et leur sérieux.
-          </p>
-        </div>
+        <SectionHeader
+          id="featured-pros-title"
+          badge="Sélection"
+          title="Pros de la semaine"
+          subtitle="Sélectionnés pour leur qualité, leur réactivité et leur sérieux."
+        />
 
         {/* Loading */}
-        {loading && (
+        {state === 'loading' && (
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {Array.from({ length: 4 }).map((_, i) => (
               <ProCardSkeleton key={i} />
@@ -132,22 +116,37 @@ export default function FeaturedPros() {
           </div>
         )}
 
-        {/* Empty state */}
-        {!loading && pros.length === 0 && (
-          <div className="text-center py-12">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-primary-50 flex items-center justify-center">
-              <Users className="w-7 h-7 text-primary-400" aria-hidden="true" />
+        {/* Error */}
+        {state === 'error' && (
+          <div className="py-12 text-center">
+            <div className="flex items-center justify-center gap-2 text-error-600 mb-4">
+              <AlertCircle className="w-5 h-5" aria-hidden="true" />
+              <span className="font-medium">Impossible de charger les pros</span>
             </div>
-            <p className="text-text-secondary text-lg font-medium">
-              De nouveaux pros arrivent bientôt dans votre ville.
-            </p>
+            <button
+              type="button"
+              onClick={() => fetchPros(cityId)}
+              className="inline-flex items-center gap-2 px-6 py-3 bg-primary-500 hover:bg-primary-600 text-white rounded-xl font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-primary-500 focus-visible:outline-offset-2"
+            >
+              <RefreshCw className="w-4 h-4" aria-hidden="true" />
+              Réessayer
+            </button>
           </div>
         )}
 
+        {/* Empty state */}
+        {state === 'empty' && (
+          <EmptyState
+            icon={<Users className="w-7 h-7" aria-hidden="true" />}
+            title="Aucun pro pour le moment"
+            message="De nouveaux pros arrivent bientôt dans votre ville."
+          />
+        )}
+
         {/* Pro cards */}
-        {!loading && pros.length > 0 && (
+        {state === 'ready' && (
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            {pros.map((pro) => (
+            {data.pros.map((pro) => (
               <article
                 key={pro.id}
                 className="bg-surface rounded-2xl border border-border p-6 shadow-card hover:shadow-card-hover transition-shadow duration-300 motion-reduce:transition-none flex flex-col"
@@ -164,12 +163,7 @@ export default function FeaturedPros() {
                       <h3 className="font-bold text-text-primary truncate">
                         {pro.firstName} {pro.lastName}
                       </h3>
-                      {pro.isVerified && (
-                        <BadgeCheck
-                          className="w-4 h-4 text-primary-500 flex-shrink-0"
-                          aria-label="Identité vérifiée"
-                        />
-                      )}
+                      {pro.isVerified && <VerifiedBadge small />}
                     </div>
                     <p className="text-xs text-text-muted truncate">{pro.city}</p>
                   </div>
@@ -184,16 +178,15 @@ export default function FeaturedPros() {
 
                 {/* Badges */}
                 <div className="flex flex-wrap gap-1.5 mb-3">
-                  {pro.isPremium && (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold bg-primary-50 text-primary-700 px-2 py-0.5 rounded-full">
-                      <Crown className="w-3 h-3" aria-hidden="true" />
-                      Premium
+                  {pro.isVerified && (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold bg-success-50 text-success-700 px-2 py-0.5 rounded-full">
+                      <ShieldCheck className="w-3 h-3" aria-hidden="true" />
+                      Vérifié
                     </span>
                   )}
-                  {pro.isBoosted && (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold bg-primary-50 text-primary-600 px-2 py-0.5 rounded-full">
-                      <Rocket className="w-3 h-3" aria-hidden="true" />
-                      Boost
+                  {pro.isPremium && (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold bg-primary-50 text-primary-700 px-2 py-0.5 rounded-full">
+                      Abonné
                     </span>
                   )}
                 </div>

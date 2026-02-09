@@ -22,7 +22,7 @@ type TabType = 'pending' | 'confirmed' | 'cancelled';
  */
 export default function ProBookingsPage() {
   const router = useRouter();
-  const { user, isAuthenticated, accessToken } = useAuthStore();
+  const { user, isAuthenticated } = useAuthStore();
   const [mounted, setMounted] = useState(false);
   const [bookings, setBookings] = useState<BookingDashboardItem[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
@@ -51,12 +51,12 @@ export default function ProBookingsPage() {
 
   // Fetch Bookings
   useEffect(() => {
-    if (!mounted || !isAuthenticated || !accessToken) return;
+    if (!mounted || !isAuthenticated) return;
 
     const fetchBookings = async () => {
       try {
         setLoadingBookings(true);
-        const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+        const data = await getJSON<BookingDashboardItem[]>('/bookings');
         setBookings(data);
       } catch (error) {
         console.error('Error fetching bookings:', error);
@@ -67,18 +67,16 @@ export default function ProBookingsPage() {
     };
 
     fetchBookings();
-  }, [mounted, isAuthenticated, accessToken]);
+  }, [mounted, isAuthenticated]);
 
   // Update booking status
   const handleUpdateStatus = async (bookingId: string, status: 'CONFIRMED' | 'DECLINED') => {
-    if (!accessToken) return;
-
     try {
       setUpdatingBooking(bookingId);
-      await patchJSON(`/bookings/${bookingId}/status`, { status }, accessToken);
+      await patchJSON(`/bookings/${bookingId}/status`, { status });
 
       // Refresh bookings list
-      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+      const data = await getJSON<BookingDashboardItem[]>('/bookings');
       setBookings(data);
     } catch (err) {
       if (err instanceof APIError) {
@@ -100,18 +98,17 @@ export default function ProBookingsPage() {
 
   // Update booking duration (PRO modifies PENDING booking)
   const handleUpdateDuration = async () => {
-    if (!accessToken || !selectedBookingForDuration) return;
+    if (!selectedBookingForDuration) return;
 
     try {
       setUpdatingBooking(selectedBookingForDuration);
       await patchJSON(
         `/bookings/${selectedBookingForDuration}/duration`,
         { duration: selectedDuration },
-        accessToken,
       );
 
       // Refresh bookings list
-      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+      const data = await getJSON<BookingDashboardItem[]>('/bookings');
       setBookings(data);
       alert('Durée modifiée ! Le client doit maintenant valider.');
       setShowDurationModal(false);
@@ -128,18 +125,16 @@ export default function ProBookingsPage() {
 
   // Complete booking (PRO marks CONFIRMED as COMPLETED)
   const handleCompleteBooking = async (bookingId: string) => {
-    if (!accessToken) return;
-
     if (!confirm('Marquer cette mission comme terminée ?')) {
       return;
     }
 
     try {
       setUpdatingBooking(bookingId);
-      await patchJSON(`/bookings/${bookingId}/complete`, {}, accessToken);
+      await patchJSON(`/bookings/${bookingId}/complete`, {});
 
       // Refresh bookings list
-      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+      const data = await getJSON<BookingDashboardItem[]>('/bookings');
       setBookings(data);
       alert('Mission marquée comme terminée !');
     } catch (err) {

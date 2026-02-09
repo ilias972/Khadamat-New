@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { Loader2, CheckCircle, Copy, Phone, Mail, CreditCard } from 'lucide-react';
 import { postJSON } from '@/lib/api';
-import { useAuthStore } from '@/store/authStore';
 import { useToastStore } from '@/store/toastStore';
 
 export type PlanType = 'PREMIUM_MONTHLY' | 'PREMIUM_ANNUAL' | 'BOOST';
@@ -59,16 +58,9 @@ export function PaymentButton({
   const [isLoading, setIsLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [paymentData, setPaymentData] = useState<PaymentResponse | null>(null);
-  const { accessToken } = useAuthStore();
   const { addToast } = useToastStore();
 
   const handlePayment = async () => {
-    // 1. Vérifier l'authentification
-    if (!accessToken) {
-      addToast('Vous devez être connecté pour effectuer un paiement', 'error');
-      return;
-    }
-
     setIsLoading(true);
 
     try {
@@ -89,7 +81,6 @@ export function PaymentButton({
       const response = await postJSON<PaymentResponse>(
         '/payment/checkout',
         payload,
-        accessToken,
       );
 
       console.log('✅ Payment request created:', response.order.reference);

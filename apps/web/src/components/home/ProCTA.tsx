@@ -18,7 +18,7 @@ export default function ProCTA() {
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <Link
-            href="/auth/register"
+            href="/auth/register?role=PRO"
             className="w-full sm:w-auto px-8 py-4 bg-primary-500 hover:bg-primary-600 text-white rounded-xl font-bold text-lg transition-all shadow-orange hover:shadow-orange-lg focus-visible:outline-2 focus-visible:outline-primary-500 focus-visible:outline-offset-2"
           >
             Devenir Prestataire

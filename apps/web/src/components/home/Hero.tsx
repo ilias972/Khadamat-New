@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
-import { Search, MapPin, AlertCircle, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Search, MapPin, AlertCircle, RefreshCw, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { getJSON } from '@/lib/api';
 import HeroSkeleton from './HeroSkeleton';
@@ -20,12 +20,29 @@ interface Category {
   slug: string;
 }
 
+const STATS = { pros: 500, missions: 1200, users: 10000 } as const;
+
 type HeroState = 'loading' | 'ready' | 'error';
+
+/** Simple fuzzy match: checks if all query chars appear in target in order */
+function fuzzyMatch(query: string, target: string): boolean {
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  let qi = 0;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) qi++;
+  }
+  return qi === q.length;
+}
 
 export default function Hero() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const shouldReduceMotion = useReducedMotion();
   const formRef = useRef<HTMLFormElement>(null);
+  const comboboxRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listboxRef = useRef<HTMLUListElement>(null);
 
   const [cities, setCities] = useState<City[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -33,6 +50,10 @@ export default function Hero() {
 
   const [cityId, setCityId] = useState('');
   const [categoryId, setCategoryId] = useState('');
+  // Autosuggest state
+  const [query, setQuery] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
 
   const fetchData = useCallback(async () => {
     setHeroState('loading');
@@ -53,6 +74,33 @@ export default function Hero() {
     fetchData();
   }, [fetchData]);
 
+  // Deep link: read ?q= and ?city= from URL on mount
+  useEffect(() => {
+    if (heroState !== 'ready') return;
+
+    const urlCity = searchParams.get('city');
+    const urlQuery = searchParams.get('q');
+
+    if (urlCity) {
+      const found = cities.find(
+        (c) => c.slug === urlCity || c.id === urlCity || c.name.toLowerCase() === urlCity.toLowerCase(),
+      );
+      if (found) setCityId(found.id);
+    }
+
+    if (urlQuery) {
+      const found = categories.find(
+        (c) => c.slug === urlQuery || c.name.toLowerCase() === urlQuery.toLowerCase(),
+      );
+      if (found) {
+        setCategoryId(found.id);
+        setQuery(found.name);
+      } else {
+        setQuery(urlQuery);
+      }
+    }
+  }, [heroState, searchParams, cities, categories]);
+
   // Broadcast city selection to sibling components (e.g. FeaturedPros)
   useEffect(() => {
     window.dispatchEvent(
@@ -60,7 +108,91 @@ export default function Hero() {
     );
   }, [cityId]);
 
+  // Filtered suggestions
+  const suggestions = useMemo(() => {
+    if (!query.trim()) return categories;
+    return categories.filter((cat) => fuzzyMatch(query, cat.name));
+  }, [query, categories]);
+
+  // Close combobox on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (comboboxRef.current && !comboboxRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   const isReady = cityId !== '' && categoryId !== '';
+
+  const selectCategory = useCallback(
+    (cat: Category) => {
+      setCategoryId(cat.id);
+      setQuery(cat.name);
+      setIsOpen(false);
+      setActiveIndex(-1);
+    },
+    [],
+  );
+
+  const clearCategory = useCallback(() => {
+    setCategoryId('');
+    setQuery('');
+    setActiveIndex(-1);
+    inputRef.current?.focus();
+  }, []);
+
+  const handleInputChange = useCallback((value: string) => {
+    setQuery(value);
+    setCategoryId('');
+    setIsOpen(true);
+    setActiveIndex(-1);
+  }, []);
+
+  const handleComboboxKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!isOpen && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+        e.preventDefault();
+        setIsOpen(true);
+        return;
+      }
+
+      if (!isOpen) return;
+
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          setActiveIndex((prev) => Math.min(prev + 1, suggestions.length - 1));
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          setActiveIndex((prev) => Math.max(prev - 1, -1));
+          break;
+        case 'Enter':
+          e.preventDefault();
+          if (activeIndex >= 0 && suggestions[activeIndex]) {
+            selectCategory(suggestions[activeIndex]);
+          }
+          break;
+        case 'Escape':
+          e.preventDefault();
+          setIsOpen(false);
+          setActiveIndex(-1);
+          break;
+      }
+    },
+    [isOpen, activeIndex, suggestions, selectCategory],
+  );
+
+  // Scroll active option into view
+  useEffect(() => {
+    if (activeIndex >= 0 && listboxRef.current) {
+      const activeEl = listboxRef.current.children[activeIndex] as HTMLElement;
+      activeEl?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [activeIndex]);
 
   const handleSubmit = useCallback(
     (e?: React.FormEvent) => {
@@ -89,6 +221,8 @@ export default function Hero() {
         initial: { opacity: 0, y: 16 },
         animate: { opacity: 1, y: 0 },
       };
+
+  const listboxId = 'hero-service-listbox';
 
   return (
     <>
@@ -227,8 +361,11 @@ export default function Hero() {
                   </div>
                 </div>
 
-                {/* Category select */}
-                <div className="relative flex-1 w-full md:w-auto px-6 py-3 group">
+                {/* Service combobox */}
+                <div
+                  ref={comboboxRef}
+                  className="relative flex-1 w-full md:w-auto px-6 py-3 group"
+                >
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-primary-50 group-focus-within:bg-primary-100 flex items-center justify-center shrink-0 transition-colors">
                       <Search className="w-5 h-5 text-primary-500" aria-hidden="true" />
@@ -240,22 +377,78 @@ export default function Hero() {
                       >
                         Service
                       </label>
-                      <select
-                        id="home-service"
-                        value={categoryId}
-                        onChange={(e) => setCategoryId(e.target.value)}
-                        className="w-full bg-transparent font-medium text-text-primary focus:outline-none text-sm sm:text-base appearance-none cursor-pointer"
-                        aria-label="Sélectionner un service"
-                      >
-                        <option value="">Choisir un service</option>
-                        {categories.map((cat) => (
-                          <option key={cat.id} value={cat.id}>
-                            {cat.name}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative flex items-center">
+                        <input
+                          ref={inputRef}
+                          id="home-service"
+                          type="text"
+                          value={query}
+                          onChange={(e) => handleInputChange(e.target.value)}
+                          onFocus={() => setIsOpen(true)}
+                          onKeyDown={handleComboboxKeyDown}
+                          placeholder="Ex: plomberie, ménage…"
+                          autoComplete="off"
+                          role="combobox"
+                          aria-expanded={isOpen}
+                          aria-controls={listboxId}
+                          aria-activedescendant={
+                            activeIndex >= 0 ? `hero-option-${activeIndex}` : undefined
+                          }
+                          aria-autocomplete="list"
+                          className="w-full bg-transparent font-medium text-text-primary focus:outline-none text-sm sm:text-base"
+                        />
+                        {query && (
+                          <button
+                            type="button"
+                            onClick={clearCategory}
+                            className="absolute right-0 p-1 text-text-muted hover:text-text-primary transition-colors"
+                            aria-label="Effacer le service"
+                            tabIndex={-1}
+                          >
+                            <X className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
+
+                  {/* Dropdown suggestions */}
+                  {isOpen && suggestions.length > 0 && (
+                    <ul
+                      ref={listboxRef}
+                      id={listboxId}
+                      role="listbox"
+                      aria-label="Services disponibles"
+                      className="absolute left-0 right-0 top-full mt-2 bg-surface border border-border rounded-2xl shadow-card-hover max-h-60 overflow-y-auto z-50"
+                    >
+                      {suggestions.map((cat, i) => (
+                        <li
+                          key={cat.id}
+                          id={`hero-option-${i}`}
+                          role="option"
+                          aria-selected={i === activeIndex}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectCategory(cat);
+                          }}
+                          onMouseEnter={() => setActiveIndex(i)}
+                          className={`px-5 py-3 text-sm cursor-pointer transition-colors first:rounded-t-2xl last:rounded-b-2xl ${
+                            i === activeIndex
+                              ? 'bg-primary-50 text-primary-700 font-semibold'
+                              : 'text-text-primary hover:bg-primary-50/50'
+                          } ${categoryId === cat.id ? 'font-semibold' : ''}`}
+                        >
+                          {cat.name}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {isOpen && query.trim() && suggestions.length === 0 && (
+                    <div className="absolute left-0 right-0 top-full mt-2 bg-surface border border-border rounded-2xl shadow-card-hover z-50 px-5 py-4 text-sm text-text-muted text-center">
+                      Aucun service trouvé pour &ldquo;{query}&rdquo;
+                    </div>
+                  )}
                 </div>
 
                 {/* Desktop submit button */}
@@ -276,41 +469,38 @@ export default function Hero() {
                   </button>
                 </div>
 
-                {/* Mobile inline submit (visible only on mobile, in-form) */}
-                <div className="w-full md:hidden p-1">
-                  <button
-                    type="submit"
-                    disabled={!isReady}
-                    title={
-                      !isReady
-                        ? 'Sélectionnez une ville et un service'
-                        : 'Trouver un professionnel'
-                    }
-                    aria-label="Trouver un professionnel"
-                    className="w-full min-h-[44px] bg-primary-500 hover:bg-primary-600 text-white rounded-[1.5rem] px-6 py-3.5 font-bold text-base shadow-orange transition-all duration-200 flex items-center justify-center gap-2 active:scale-[0.98] motion-reduce:transform-none disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-primary-500 focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2"
-                  >
-                    <Search className="w-5 h-5" aria-hidden="true" />
-                    Trouver un professionnel
-                  </button>
-                </div>
               </form>
             )}
           </motion.div>
 
-          {/* Dynamic subtitle */}
+          {/* Stats (hardcoded MVP) */}
           <motion.div
             {...fadeUp}
             transition={{ duration: 0.4, delay: shouldReduceMotion ? 0 : 0.3 }}
-            className="mt-8 text-sm text-text-secondary min-h-[1.5rem]"
+            className="mt-8"
           >
-            {cityId ? (
-              <p>Des professionnels vérifiés dans votre ville</p>
-            ) : (
+            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-text-secondary">
               <p>
-                + de <strong className="text-text-primary font-bold">500</strong> pros
-                actifs sur Khadamat
+                <strong className="text-text-primary font-bold">
+                  +{STATS.pros.toLocaleString('fr-FR')}
+                </strong>{' '}
+                pros actifs
               </p>
-            )}
+              <span className="hidden sm:inline text-border-muted" aria-hidden="true">•</span>
+              <p>
+                <strong className="text-text-primary font-bold">
+                  +{STATS.missions.toLocaleString('fr-FR')}
+                </strong>{' '}
+                missions réalisées
+              </p>
+              <span className="hidden sm:inline text-border-muted" aria-hidden="true">•</span>
+              <p>
+                <strong className="text-text-primary font-bold">
+                  +{STATS.users.toLocaleString('fr-FR')}
+                </strong>{' '}
+                utilisateurs
+              </p>
+            </div>
           </motion.div>
 
           {/* Social proof */}
@@ -331,7 +521,9 @@ export default function Hero() {
             </div>
             <p>
               Rejoint par{' '}
-              <strong className="text-text-primary font-bold">+10 000 utilisateurs</strong>{' '}
+              <strong className="text-text-primary font-bold">
+                +{STATS.users.toLocaleString('fr-FR')} utilisateurs
+              </strong>{' '}
               satisfaits
             </p>
           </motion.div>

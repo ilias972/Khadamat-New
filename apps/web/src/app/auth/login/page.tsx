@@ -33,7 +33,7 @@ export default function LoginPage() {
 
     try {
       const response = await postJSON<AuthResponse>('/auth/login', formData);
-      setAuth(response.user, response.accessToken);
+      setAuth(response.user);
 
       // Redirect based on role
       if (response.user.role === 'PRO') {

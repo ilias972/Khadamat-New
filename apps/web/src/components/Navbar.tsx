@@ -93,8 +93,8 @@ export default function Navbar() {
     return () => document.removeEventListener('keydown', handleTab);
   }, [isMobileMenuOpen]);
 
-  const handleLogout = useCallback(() => {
-    logout();
+  const handleLogout = useCallback(async () => {
+    await logout();
     setIsDropdownOpen(false);
     setIsMobileMenuOpen(false);
     router.push('/');

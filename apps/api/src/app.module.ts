@@ -23,7 +23,7 @@ import { NewsletterModule } from './newsletter/newsletter.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env',
+      envFilePath: ['.env', '../../.env.database'],
     }),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),

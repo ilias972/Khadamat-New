@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Search, CalendarCheck, ThumbsUp } from 'lucide-react';
 import type { ReactNode } from 'react';
+import SectionHeader from './SectionHeader';
 
 interface Step {
   number: string;
@@ -22,14 +23,14 @@ const steps: Step[] = [
     number: '02',
     title: 'Réservez',
     description: 'Contactez-le et planifiez votre intervention.',
-    details: ['Choix du créneau', 'Messagerie directe', 'Devis transparent'],
+    details: ['Choix du créneau', 'Mise en relation directe avec le professionnel', 'Devis transparent'],
     icon: <CalendarCheck className="w-6 h-6" aria-hidden="true" />,
   },
   {
     number: '03',
     title: 'Profitez',
     description: 'Recevez un service de qualité en toute sérénité.',
-    details: ['Paiement sécurisé', 'Suivi en temps réel', 'Évaluation après service'],
+    details: ['Devis gratuit et prix convenu avec le pro', 'Coordination simple par téléphone', 'Évaluation après service'],
     icon: <ThumbsUp className="w-6 h-6" aria-hidden="true" />,
   },
 ];
@@ -42,21 +43,12 @@ export default function HowItWorks() {
       className="scroll-mt-24 py-24 bg-surface"
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="text-center mb-16">
-          <span className="inline-block text-primary-600 font-bold tracking-wide uppercase text-xs bg-primary-50 px-3 py-1 rounded-full mb-4">
-            Mode d&apos;emploi
-          </span>
-          <h2
-            id="how-title"
-            className="text-3xl sm:text-4xl font-extrabold text-text-primary mb-4"
-          >
-            Comment ça marche&nbsp;?
-          </h2>
-          <p className="text-text-secondary text-lg max-w-xl mx-auto leading-relaxed">
-            Trois étapes simples pour trouver et réserver un professionnel de confiance.
-          </p>
-        </div>
+        <SectionHeader
+          id="how-title"
+          badge="Mode d'emploi"
+          title="Comment ça marche ?"
+          subtitle="Trois étapes simples pour trouver et réserver un professionnel de confiance."
+        />
 
         {/* Steps */}
         <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">

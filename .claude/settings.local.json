@@ -16,7 +16,9 @@
       "Bash(pnpm install:*)",
       "Bash(lsof:*)",
       "Bash(xargs kill:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(psql:*)",
+      "Bash(python3:*)"
     ]
   }
 }

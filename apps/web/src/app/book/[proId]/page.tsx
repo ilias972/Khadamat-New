@@ -34,7 +34,7 @@ export default function BookingPage() {
   const proId = Array.isArray(proIdRaw) ? proIdRaw[0] : proIdRaw;
 
   const categoryId = searchParams.get('categoryId');
-  const { user, isAuthenticated, accessToken, logout } = useAuthStore();
+  const { user, isAuthenticated, logout } = useAuthStore();
 
   const [mounted, setMounted] = useState(false);
   const [pro, setPro] = useState<ProData | null>(null);
@@ -128,7 +128,7 @@ export default function BookingPage() {
 
   // Handle booking submission
   const handleBooking = async () => {
-    if (!selectedSlot || !categoryId || !accessToken) return;
+    if (!selectedSlot || !categoryId) return;
 
     try {
       setSubmitting(true);
@@ -142,7 +142,6 @@ export default function BookingPage() {
           date: selectedDate,
           time: selectedSlot,
         },
-        accessToken,
       );
 
       setSuccessMessage('Réservation envoyée !');

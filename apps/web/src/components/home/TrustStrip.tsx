@@ -11,7 +11,7 @@ export default function TrustStrip() {
               <ShieldCheck className="w-6 h-6 text-success-600" aria-hidden="true" />
             </div>
             <div>
-              <h3 className="font-bold text-lg text-text-primary">Profils 100% Vérifiés</h3>
+              <h3 className="font-bold text-lg text-text-primary">Profils vérifiés par Khadamat</h3>
               <p className="text-text-secondary text-sm mt-1 leading-relaxed">
                 Chaque professionnel passe par une vérification d&apos;identité rigoureuse (CIN, Domicile) avant d&apos;apparaître ici.
               </p>
@@ -23,9 +23,9 @@ export default function TrustStrip() {
               <Star className="w-6 h-6 text-primary-500" aria-hidden="true" />
             </div>
             <div>
-              <h3 className="font-bold text-lg text-text-primary">Satisfaction Garantie</h3>
+              <h3 className="font-bold text-lg text-text-primary">Avis vérifiés</h3>
               <p className="text-text-secondary text-sm mt-1 leading-relaxed">
-                Consultez les avis réels. Seules les prestations réservées et payées sur la plateforme peuvent être notées.
+                Consultez les avis réels laissés par des clients après chaque prestation.
               </p>
             </div>
           </div>

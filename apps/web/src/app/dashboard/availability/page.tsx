@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useAuthStore } from '@/store/authStore';
 import { getJSON, putJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
 import { timeToMinutes, minutesToTime, DAYS_OF_WEEK } from '@/lib/timeHelpers';
@@ -33,7 +32,6 @@ interface AvailabilityFormSlot {
 }
 
 export default function AvailabilityPage() {
-  const { accessToken } = useAuthStore();
   const [availability, setAvailability] = useState<AvailabilityFormSlot[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -43,12 +41,9 @@ export default function AvailabilityPage() {
   // Charger les disponibilités existantes
   useEffect(() => {
     const fetchData = async () => {
-      if (!accessToken) return;
-
       try {
         const dashboardData = await getJSON<{ availability: AvailabilitySlot[] }>(
           '/pro/me',
-          accessToken,
         );
 
         // Initialiser le formulaire avec les disponibilités existantes
@@ -88,7 +83,7 @@ export default function AvailabilityPage() {
     };
 
     fetchData();
-  }, [accessToken]);
+  }, []);
 
   const handleToggleDay = (dayOfWeek: number) => {
     setAvailability((prev) =>
@@ -130,13 +125,12 @@ export default function AvailabilityPage() {
           isActive: slot.isActive,
         }));
 
-      await putJSON('/pro/availability', payload, accessToken || undefined);
+      await putJSON('/pro/availability', payload);
       setSuccess('Disponibilités mises à jour avec succès !');
 
       // Recharger les disponibilités
       const dashboardData = await getJSON<{ availability: AvailabilitySlot[] }>(
         '/pro/me',
-        accessToken || undefined,
       );
 
       // Mettre à jour le formulaire avec les nouvelles données

@@ -37,7 +37,7 @@ export default function LoginForm() {
       const response = await postJSON<AuthResponse>('/auth/login', formData);
 
       // Success : stocker auth et rediriger
-      setAuth(response.user, response.accessToken);
+      setAuth(response.user);
       router.push('/');
     } catch (err) {
       if (err instanceof APIError) {

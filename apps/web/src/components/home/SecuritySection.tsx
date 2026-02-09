@@ -1,4 +1,5 @@
 import { ShieldCheck, UserCheck, Star, CheckCircle2 } from 'lucide-react';
+import VerifiedBadge from './VerifiedBadge';
 
 export default function SecuritySection() {
   return (
@@ -45,10 +46,7 @@ export default function SecuritySection() {
                 <div className="w-12 h-8 bg-primary-100 rounded flex items-center justify-center">
                   <span className="text-primary-500 font-bold text-xs tracking-widest">PRO</span>
                 </div>
-                <div className="flex gap-1 items-center">
-                  <span className="w-2 h-2 bg-success-500 rounded-full animate-pulse" />
-                  <span className="text-xs text-success-600 font-medium">Vérifié</span>
-                </div>
+                <VerifiedBadge small />
               </div>
 
               <div className="flex items-center gap-5 mb-8">
@@ -93,5 +91,5 @@ const steps = [
 const verifications = [
   { label: 'Identité (CIN)', status: 'Validée' },
   { label: 'Téléphone', status: 'Vérifié' },
-  { label: 'Casier Judiciaire', status: 'Vérifié' },
+  { label: 'Profil validé par Khadamat', status: 'Confirmé' },
 ];

@@ -22,7 +22,7 @@ type TabType = 'pending' | 'waiting' | 'confirmed' | 'history';
  */
 export default function ClientBookingsPage() {
   const router = useRouter();
-  const { user, isAuthenticated, accessToken } = useAuthStore();
+  const { user, isAuthenticated } = useAuthStore();
   const [mounted, setMounted] = useState(false);
   const [bookings, setBookings] = useState<BookingDashboardItem[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
@@ -46,12 +46,12 @@ export default function ClientBookingsPage() {
 
   // Fetch Bookings
   useEffect(() => {
-    if (!mounted || !isAuthenticated || !accessToken) return;
+    if (!mounted || !isAuthenticated) return;
 
     const fetchBookings = async () => {
       try {
         setLoadingBookings(true);
-        const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+        const data = await getJSON<BookingDashboardItem[]>('/bookings');
         setBookings(data);
       } catch (error) {
         console.error('Error fetching bookings:', error);
@@ -62,18 +62,16 @@ export default function ClientBookingsPage() {
     };
 
     fetchBookings();
-  }, [mounted, isAuthenticated, accessToken]);
+  }, [mounted, isAuthenticated]);
 
   // Respond to modification (CLIENT accepts/refuses duration change)
   const handleRespondToModification = async (bookingId: string, accept: boolean) => {
-    if (!accessToken) return;
-
     try {
       setUpdatingBooking(bookingId);
-      await patchJSON(`/bookings/${bookingId}/respond`, { accept }, accessToken);
+      await patchJSON(`/bookings/${bookingId}/respond`, { accept });
 
       // Refresh bookings list
-      const data = await getJSON<BookingDashboardItem[]>('/bookings', accessToken);
+      const data = await getJSON<BookingDashboardItem[]>('/bookings');
       setBookings(data);
 
       if (accept) {

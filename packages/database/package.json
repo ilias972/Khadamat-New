@@ -5,11 +5,12 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
-    "generate": "prisma generate",
-    "migrate": "prisma migrate dev",
-    "studio": "prisma studio",
+    "generate": "dotenv -e ../../.env.database -- prisma generate",
+    "migrate": "dotenv -e ../../.env.database -- prisma migrate dev",
+    "db:push": "dotenv -e ../../.env.database -- prisma db push",
+    "studio": "dotenv -e ../../.env.database -- prisma studio",
     "validate": "prisma validate",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "dotenv -e ../../.env.database -- tsx prisma/seed.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

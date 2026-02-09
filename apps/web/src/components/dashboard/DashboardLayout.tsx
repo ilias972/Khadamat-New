@@ -27,7 +27,7 @@ interface DashboardLayoutProps {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, isAuthenticated, accessToken, logout } = useAuthStore();
+  const { user, isAuthenticated, logout } = useAuthStore();
   const [isLoading, setIsLoading] = useState(true);
   const [isPremium, setIsPremium] = useState(false);
 
@@ -43,7 +43,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       return;
     }
 
-    // 🔒 PRISON UX : REJECTED pros must stay on /dashboard/kyc
+    // PRISON UX : REJECTED pros must stay on /dashboard/kyc
     if (user?.kycStatus === 'REJECTED' && pathname !== '/dashboard/kyc') {
       router.replace('/dashboard/kyc');
       return;
@@ -51,10 +51,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
     // Fetch profile to get isPremium
     const fetchProfile = async () => {
-      if (!accessToken) return;
-
       try {
-        const data = await getJSON<{ profile: { isPremium: boolean } }>('/pro/me', accessToken);
+        const data = await getJSON<{ profile: { isPremium: boolean } }>('/pro/me');
         setIsPremium(data.profile.isPremium);
       } catch (error) {
         console.error('Error fetching profile:', error);
@@ -64,10 +62,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     };
 
     fetchProfile();
-  }, [isAuthenticated, user, router, accessToken, pathname]);
+  }, [isAuthenticated, user, router, pathname]);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     router.push('/');
   };
 

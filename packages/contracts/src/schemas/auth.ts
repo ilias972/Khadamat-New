@@ -95,8 +95,6 @@ export const PublicUserSchema = z.object({
 export type PublicUser = z.infer<typeof PublicUserSchema>;
 
 export const AuthResponseSchema = z.object({
-  accessToken: z.string(),
-  refreshToken: z.string().optional(), // Présent sur login/register/refresh
   user: PublicUserSchema,
 });
 

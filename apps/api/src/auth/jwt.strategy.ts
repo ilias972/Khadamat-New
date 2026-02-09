@@ -1,9 +1,20 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import type { PublicUser } from '@khadamat/contracts';
+
+/**
+ * Extract accessToken from httpOnly cookie.
+ * Matches the cookie set by AuthController.setAuthCookies().
+ */
+function extractFromCookie(req: any): string | null {
+  const raw = req?.headers?.cookie;
+  if (!raw || typeof raw !== 'string') return null;
+  const match = raw.split(';').find((c: string) => c.trim().startsWith('accessToken='));
+  return match ? match.split('=').slice(1).join('=').trim() : null;
+}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -22,7 +33,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: extractFromCookie,
       ignoreExpiration: false,
       secretOrKey: secret,
     });

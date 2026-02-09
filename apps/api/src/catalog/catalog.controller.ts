@@ -15,9 +15,8 @@ class OptionalJwtGuard extends AuthGuard('jwt') {
   }
 }
 
-function isUUID(value: string): boolean {
-  return /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(value)
-    || /^c[a-z0-9]{24}$/i.test(value); // cuid format
+function isEntityId(value: string): boolean {
+  return /^(city|cat)_[a-z]+_\d{3}$/i.test(value);
 }
 
 @ApiTags('Public Catalog')
@@ -54,10 +53,10 @@ export class CatalogController {
     if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
       throw new BadRequestException('Paramètres de pagination invalides');
     }
-    if (cityId && !isUUID(cityId)) {
+    if (cityId && !isEntityId(cityId)) {
       throw new BadRequestException('cityId invalide');
     }
-    if (categoryId && !isUUID(categoryId)) {
+    if (categoryId && !isEntityId(categoryId)) {
       throw new BadRequestException('categoryId invalide');
     }
     return this.catalogService.getPros({ cityId, categoryId }, page, limit);
@@ -81,10 +80,10 @@ export class CatalogController {
     if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
       throw new BadRequestException('Paramètres de pagination invalides');
     }
-    if (cityId && !isUUID(cityId)) {
+    if (cityId && !isEntityId(cityId)) {
       throw new BadRequestException('cityId invalide');
     }
-    if (categoryId && !isUUID(categoryId)) {
+    if (categoryId && !isEntityId(categoryId)) {
       throw new BadRequestException('categoryId invalide');
     }
     return this.catalogService.getProsV2({ cityId, categoryId }, page, limit);

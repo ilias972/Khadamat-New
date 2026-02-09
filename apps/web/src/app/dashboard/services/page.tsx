@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useAuthStore } from '@/store/authStore';
 import { getJSON, putJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
 
@@ -43,7 +42,6 @@ interface ServiceFormData {
 }
 
 export default function ServicesPage() {
-  const { accessToken } = useAuthStore();
   const [categories, setCategories] = useState<Category[]>([]);
   const [existingServices, setExistingServices] = useState<ProService[]>([]);
   const [servicesForm, setServicesForm] = useState<Record<string, ServiceFormData>>({});
@@ -55,12 +53,10 @@ export default function ServicesPage() {
   // Charger catégories et services existants
   useEffect(() => {
     const fetchData = async () => {
-      if (!accessToken) return;
-
       try {
         const [categoriesData, dashboardData] = await Promise.all([
           getJSON<Category[]>('/public/categories'),
-          getJSON<{ services: ProService[] }>('/pro/me', accessToken),
+          getJSON<{ services: ProService[] }>('/pro/me'),
         ]);
 
         setCategories(categoriesData);
@@ -107,7 +103,7 @@ export default function ServicesPage() {
     };
 
     fetchData();
-  }, [accessToken]);
+  }, []);
 
   const handleToggleService = (categoryId: string) => {
     setServicesForm((prev) => ({
@@ -157,13 +153,12 @@ export default function ServicesPage() {
           isActive: service.isActive,
         }));
 
-      await putJSON('/pro/services', payload, accessToken || undefined);
+      await putJSON('/pro/services', payload);
       setSuccess('Services mis à jour avec succès !');
 
       // Recharger les services
       const dashboardData = await getJSON<{ services: ProService[] }>(
         '/pro/me',
-        accessToken || undefined,
       );
       setExistingServices(dashboardData.services);
     } catch (err) {

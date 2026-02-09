@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
-import { getJSON, postJSON, APIError } from '@/lib/api';
+import { getJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
 
 /**
@@ -28,7 +28,7 @@ interface KycStatus {
 
 export default function KycPage() {
   const router = useRouter();
-  const { user, accessToken } = useAuthStore();
+  const { user } = useAuthStore();
 
   // Redirect if not PRO
   useEffect(() => {
@@ -52,10 +52,8 @@ export default function KycPage() {
   // Fetch KYC status
   useEffect(() => {
     const fetchStatus = async () => {
-      if (!accessToken) return;
-
       try {
-        const status = await getJSON<KycStatus>('/kyc/status', accessToken);
+        const status = await getJSON<KycStatus>('/kyc/status');
         setKycStatus(status);
       } catch (err) {
         if (err instanceof APIError) {
@@ -69,7 +67,7 @@ export default function KycPage() {
     };
 
     fetchStatus();
-  }, [accessToken]);
+  }, []);
 
 
   // Submit KYC (multipart avec resubmit si REJECTED)
@@ -97,9 +95,8 @@ export default function KycPage() {
 
       const response = await fetch(`${apiUrl}${endpoint}`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+        credentials: 'include',
+        headers: { 'X-CSRF-PROTECTION': '1' },
         body: formData,
       });
 
@@ -115,7 +112,7 @@ export default function KycPage() {
       );
 
       // Refresh status
-      const updatedStatus = await getJSON<KycStatus>('/kyc/status', accessToken || undefined);
+      const updatedStatus = await getJSON<KycStatus>('/kyc/status');
       setKycStatus(updatedStatus);
 
       // Reset form
@@ -236,8 +233,29 @@ export default function KycPage() {
           </div>
         )}
 
-        {/* Formulaire de soumission (si pas APPROVED) */}
-        {kycStatus && kycStatus.kycStatus !== 'APPROVED' && (
+        {/* PENDING — dossier en cours de vérification */}
+        {kycStatus && kycStatus.kycStatus === 'PENDING' && (
+          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-8 text-center">
+            <div className="flex justify-center mb-4">
+              <div className="w-16 h-16 rounded-full bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center">
+                <svg className="w-8 h-8 text-yellow-600 dark:text-yellow-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+              </div>
+            </div>
+            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-2">
+              Dossier en cours de vérification
+            </h2>
+            <p className="text-zinc-600 dark:text-zinc-400 max-w-md mx-auto">
+              Votre dossier KYC a bien été soumis. Notre équipe le vérifie sous 24 à 48 heures.
+              Vous recevrez une notification dès que la vérification sera terminée.
+            </p>
+          </div>
+        )}
+
+        {/* Formulaire de soumission (NOT_SUBMITTED ou REJECTED uniquement) */}
+        {kycStatus && kycStatus.kycStatus !== 'APPROVED' && kycStatus.kycStatus !== 'PENDING' && (
           <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-6">
               {kycStatus.kycStatus === 'REJECTED'

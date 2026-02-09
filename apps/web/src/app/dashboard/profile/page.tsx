@@ -45,7 +45,7 @@ interface DashboardResponse {
 }
 
 export default function ProfilePage() {
-  const { accessToken, setUser, user: currentUser } = useAuthStore();
+  const { setUser, user: currentUser } = useAuthStore();
   const [profile, setProfile] = useState<ProProfile | null>(null);
   const [dashboardUser, setDashboardUser] = useState<UserSummary | null>(null);
   const [cities, setCities] = useState<City[]>([]);
@@ -63,11 +63,9 @@ export default function ProfilePage() {
   // 1. Chargement
   useEffect(() => {
     const fetchData = async () => {
-      if (!accessToken) return;
-
       try {
         const [dashboardData, citiesData] = await Promise.all([
-          getJSON<DashboardResponse>('/pro/me', accessToken),
+          getJSON<DashboardResponse>('/pro/me'),
           getJSON<City[]>('/public/cities'),
         ]);
 
@@ -95,7 +93,7 @@ export default function ProfilePage() {
     };
 
     fetchData();
-  }, [accessToken]);
+  }, []);
 
   // 2. Sauvegarde
   const handleSubmit = async (e: React.FormEvent) => {
@@ -109,7 +107,6 @@ export default function ProfilePage() {
       const response = await patchJSON<DashboardResponse>(
         '/pro/profile',
         formData,
-        accessToken || undefined,
       );
 
       // Mettre à jour le profil local

@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Star, ChevronLeft, ChevronRight, BadgeCheck } from 'lucide-react';
+import { Star, ChevronLeft, ChevronRight } from 'lucide-react';
+import SectionHeader from './SectionHeader';
+import VerifiedBadge from './VerifiedBadge';
 
 interface Testimonial {
   id: string;
@@ -45,7 +47,7 @@ const testimonials: Testimonial[] = [
   {
     id: '4',
     name: 'Amine R.',
-    city: 'Tanger',
+    city: 'Casablanca',
     rating: 5,
     text: 'Panne électrique un samedi soir, j\'ai trouvé un électricien disponible via Khadamat. Intervention rapide et sécurisée. Très rassurant.',
     service: 'Électricité',
@@ -54,7 +56,7 @@ const testimonials: Testimonial[] = [
   {
     id: '5',
     name: 'Nadia M.',
-    city: 'Fès',
+    city: 'Rabat-Salé',
     rating: 5,
     text: 'Le peintre a refait tout le salon en deux jours. Finitions nickel, il a même protégé les meubles lui-même. Franchement pro.',
     service: 'Peinture',
@@ -63,7 +65,7 @@ const testimonials: Testimonial[] = [
   {
     id: '6',
     name: 'Karim H.',
-    city: 'Agadir',
+    city: 'Marrakech',
     rating: 4,
     text: 'Bon bricoleur pour monter des meubles et fixer des étagères. Travail soigné et tarif correct. Le fait qu\'il soit vérifié m\'a mis en confiance.',
     service: 'Bricolage',
@@ -89,8 +91,11 @@ function StarRating({ rating }: { rating: number }) {
   );
 }
 
+const AUTOPLAY_MS = 6000;
+
 export default function Testimonials() {
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
   const trackRef = useRef<HTMLDivElement>(null);
   const touchStartX = useRef(0);
   const touchDeltaX = useRef(0);
@@ -128,6 +133,15 @@ export default function Testimonials() {
 
   const prev = useCallback(() => scrollTo(currentIndex - 1), [currentIndex, scrollTo]);
   const next = useCallback(() => scrollTo(currentIndex + 1), [currentIndex, scrollTo]);
+
+  // Autoplay — 6s interval, pause on hover, respect reduced motion
+  useEffect(() => {
+    if (isPaused || prefersReducedMotion) return;
+    const timer = setInterval(() => {
+      setCurrentIndex((prev) => (prev >= maxIndex ? 0 : prev + 1));
+    }, AUTOPLAY_MS);
+    return () => clearInterval(timer);
+  }, [isPaused, prefersReducedMotion, maxIndex]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback(
@@ -169,24 +183,18 @@ export default function Testimonials() {
     <section
       aria-labelledby="testimonials-title"
       role="region"
-      className="py-24 bg-surface"
+      className="py-24 bg-background"
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-6 mb-12">
-          <div>
-            <span className="inline-block text-primary-600 font-bold tracking-wide uppercase text-xs bg-primary-50 px-3 py-1 rounded-full mb-4">
-              Avis clients
-            </span>
-            <h2
+          <div className="text-left">
+            <SectionHeader
               id="testimonials-title"
-              className="text-3xl sm:text-4xl font-extrabold text-text-primary mb-2"
-            >
-              Ce que disent nos utilisateurs
-            </h2>
-            <p className="text-text-secondary text-lg leading-relaxed max-w-xl">
-              Des avis authentiques de clients ayant fait appel à nos professionnels.
-            </p>
+              badge="Avis clients"
+              title="Ils ont trouvé un pro de confiance"
+              subtitle="Des milliers de missions réussies partout au Maroc"
+            />
           </div>
 
           {/* Navigation arrows */}
@@ -215,6 +223,10 @@ export default function Testimonials() {
         {/* Carousel */}
         <div
           className="overflow-hidden"
+          onMouseEnter={() => setIsPaused(true)}
+          onMouseLeave={() => setIsPaused(false)}
+          onFocus={() => setIsPaused(true)}
+          onBlur={() => setIsPaused(false)}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
@@ -239,7 +251,7 @@ export default function Testimonials() {
                 className="flex-shrink-0 px-3"
                 style={{ width: `${100 / visibleCount}%` }}
               >
-                <div className="bg-background rounded-2xl border border-border p-6 shadow-card h-full flex flex-col">
+                <div className="bg-surface rounded-2xl border border-border p-6 shadow-card h-full flex flex-col">
                   {/* Header */}
                   <div className="flex items-center gap-3 mb-4">
                     <div className="w-11 h-11 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center flex-shrink-0">
@@ -252,10 +264,7 @@ export default function Testimonials() {
                         <span className="font-semibold text-text-primary text-sm truncate">
                           {t.name}
                         </span>
-                        <BadgeCheck
-                          className="w-4 h-4 text-primary-500 flex-shrink-0"
-                          aria-label="Client vérifié"
-                        />
+                        <VerifiedBadge small />
                       </div>
                       <span className="text-xs text-text-muted">{t.city}</span>
                     </div>

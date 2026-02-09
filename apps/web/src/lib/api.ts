@@ -1,15 +1,17 @@
 /**
  * API Helpers
  *
- * Fonctions utilitaires pour communiquer avec l'API backend
- * ⚠️ Utilise NEXT_PUBLIC_API_URL (défini dans .env.local)
+ * Fonctions utilitaires pour communiquer avec l'API backend.
+ * - Cookies httpOnly pour l'authentification (credentials: 'include')
+ * - Header CSRF sur chaque requête authentifiée
+ * - Auto-refresh transparent sur 401
+ * - Cache mémoire pour endpoints quasi-statiques
  */
 
 const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
-/**
- * Classe d'erreur personnalisée pour les erreurs API
- */
+/* ─── Classe d'erreur API ─── */
+
 export class APIError extends Error {
   constructor(
     message: string,
@@ -21,162 +23,172 @@ export class APIError extends Error {
   }
 }
 
-/**
- * POST JSON
- * Envoie une requête POST avec un body JSON
- *
- * @param endpoint - Endpoint relatif (ex: '/auth/login')
- * @param body - Corps de la requête
- * @param token - Token JWT optionnel (pour routes protégées)
- */
-export async function postJSON<T = any>(
-  endpoint: string,
-  body: any,
-  token?: string,
-): Promise<T> {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
+/* ─── Memory cache pour endpoints statiques ─── */
+
+interface CacheEntry<T> {
+  data: T;
+  ts: number;
+}
+
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+const memoryCache: Record<string, CacheEntry<unknown>> = {};
+
+function getCached<T>(key: string): T | null {
+  const entry = memoryCache[key];
+  if (entry && Date.now() - entry.ts < CACHE_TTL) {
+    return entry.data as T;
+  }
+  return null;
+}
+
+function setCache<T>(key: string, data: T): void {
+  memoryCache[key] = { data, ts: Date.now() };
+}
+
+/** Endpoints éligibles au cache mémoire */
+const CACHEABLE_ENDPOINTS = ['/public/cities', '/public/categories'];
+
+/** Endpoints publics — pas de credentials ni CSRF (évite preflight CORS inutile) */
+const PUBLIC_ENDPOINTS = ['/public/cities', '/public/categories', '/public/pros', '/public/stats'];
+
+/* ─── Refresh logic ─── */
+
+let refreshPromise: Promise<boolean> | null = null;
+
+async function tryRefresh(): Promise<boolean> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${baseUrl}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'X-CSRF-PROTECTION': '1' },
+      });
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
+/* ─── Base fetcher ─── */
+
+const RETRY_HEADER = 'x-retry';
+
+interface FetchOptions extends Omit<RequestInit, 'headers'> {
+  headers?: Record<string, string>;
+}
+
+function isPublicUrl(url: string): boolean {
+  return PUBLIC_ENDPOINTS.some((ep) => url.includes(ep));
+}
+
+async function baseFetch(
+  url: string,
+  options: FetchOptions = {},
+): Promise<Response> {
+  const isPublic = isPublicUrl(url);
+
+  const mergedHeaders: Record<string, string> = {
+    ...(isPublic ? {} : { 'Content-Type': 'application/json', 'X-CSRF-PROTECTION': '1' }),
+    ...(options.headers || {}),
   };
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(url, {
+    ...options,
+    credentials: isPublic ? 'omit' : 'include',
+    headers: mergedHeaders,
+  });
+
+  // Auto-refresh sur 401 (une seule tentative, jamais sur endpoints publics)
+  if (!isPublic && res.status === 401 && !mergedHeaders[RETRY_HEADER]) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      return baseFetch(url, {
+        ...options,
+        headers: { ...mergedHeaders, [RETRY_HEADER]: '1' },
+      });
+    }
   }
 
+  return res;
+}
+
+/* ─── Helpers pour extraire les erreurs ─── */
+
+async function parseResponse<T>(response: Response): Promise<T> {
+  const data = await response.json();
+
+  if (!response.ok) {
+    const message = data.message || `Erreur ${response.status}`;
+    throw new APIError(
+      Array.isArray(message) ? message.join(', ') : message,
+      response.status,
+      data,
+    );
+  }
+
+  return data;
+}
+
+/* ─── Fonctions publiques ─── */
+
+export async function getJSON<T = any>(endpoint: string): Promise<T> {
+  if (CACHEABLE_ENDPOINTS.includes(endpoint)) {
+    const cached = getCached<T>(endpoint);
+    if (cached) return cached;
+  }
+
+  const response = await baseFetch(`${baseUrl}${endpoint}`, { method: 'GET' });
+  const data = await parseResponse<T>(response);
+
+  if (CACHEABLE_ENDPOINTS.includes(endpoint)) {
+    setCache(endpoint, data);
+  }
+
+  return data;
+}
+
+export async function postJSON<T = any>(endpoint: string, body: any): Promise<T> {
+  const response = await baseFetch(`${baseUrl}${endpoint}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return parseResponse<T>(response);
+}
+
+export async function patchJSON<T = any>(endpoint: string, body: any): Promise<T> {
+  const response = await baseFetch(`${baseUrl}${endpoint}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+  return parseResponse<T>(response);
+}
+
+export async function putJSON<T = any>(endpoint: string, body: any): Promise<T> {
+  const response = await baseFetch(`${baseUrl}${endpoint}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return parseResponse<T>(response);
+}
+
+/**
+ * POST FormData (multipart) — for file uploads.
+ * Does NOT set Content-Type (browser sets multipart boundary automatically).
+ */
+export async function postFormData<T = any>(endpoint: string, formData: FormData): Promise<T> {
   const response = await fetch(`${baseUrl}${endpoint}`, {
     method: 'POST',
-    headers,
-    body: JSON.stringify(body),
+    credentials: 'include',
+    headers: { 'X-CSRF-PROTECTION': '1' },
+    body: formData,
   });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    // Extraire le message d'erreur du backend
-    const message = data.message || `Erreur ${response.status}`;
-    throw new APIError(
-      Array.isArray(message) ? message.join(', ') : message,
-      response.status,
-      data,
-    );
-  }
-
-  return data;
-}
-
-/**
- * PATCH JSON
- * Envoie une requête PATCH avec un body JSON
- *
- * @param endpoint - Endpoint relatif (ex: '/pro/profile')
- * @param body - Corps de la requête
- * @param token - Token JWT optionnel (pour routes protégées)
- */
-export async function patchJSON<T = any>(
-  endpoint: string,
-  body: any,
-  token?: string,
-): Promise<T> {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${baseUrl}${endpoint}`, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify(body),
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    const message = data.message || `Erreur ${response.status}`;
-    throw new APIError(
-      Array.isArray(message) ? message.join(', ') : message,
-      response.status,
-      data,
-    );
-  }
-
-  return data;
-}
-
-/**
- * PUT JSON
- * Envoie une requête PUT avec un body JSON
- *
- * @param endpoint - Endpoint relatif (ex: '/pro/services')
- * @param body - Corps de la requête
- * @param token - Token JWT optionnel (pour routes protégées)
- */
-export async function putJSON<T = any>(
-  endpoint: string,
-  body: any,
-  token?: string,
-): Promise<T> {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${baseUrl}${endpoint}`, {
-    method: 'PUT',
-    headers,
-    body: JSON.stringify(body),
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    const message = data.message || `Erreur ${response.status}`;
-    throw new APIError(
-      Array.isArray(message) ? message.join(', ') : message,
-      response.status,
-      data,
-    );
-  }
-
-  return data;
-}
-
-/**
- * GET JSON
- * Envoie une requête GET
- *
- * @param endpoint - Endpoint relatif (ex: '/auth/me')
- * @param token - Token JWT optionnel (pour routes protégées)
- */
-export async function getJSON<T = any>(
-  endpoint: string,
-  token?: string,
-): Promise<T> {
-  const headers: HeadersInit = {};
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${baseUrl}${endpoint}`, {
-    method: 'GET',
-    headers,
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    const message = data.message || `Erreur ${response.status}`;
-    throw new APIError(
-      Array.isArray(message) ? message.join(', ') : message,
-      response.status,
-      data,
-    );
-  }
-
-  return data;
+  return parseResponse<T>(response);
 }

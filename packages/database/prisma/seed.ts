@@ -1,7 +1,11 @@
 import { Client } from 'pg';
 import * as bcrypt from 'bcryptjs';
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://khadamat_user:password@localhost:5432/khadamat';
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.error('DATABASE_URL is not set. Run via: pnpm seed (uses dotenv-cli)');
+  process.exit(1);
+}
 
 async function main() {
   const client = new Client({ connectionString: DATABASE_URL });

@@ -50,8 +50,8 @@ export class AuthService {
 
     // 1. Vérifier si l'email existe déjà (si fourni)
     if (email) {
-      const existingEmail = await this.prisma.user.findFirst({
-        where: { email: email },
+      const existingEmail = await this.prisma.user.findUnique({
+        where: { email },
       });
       if (existingEmail) {
         throw new ConflictException('Données en conflit');

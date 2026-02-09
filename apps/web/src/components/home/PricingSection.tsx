@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import { Check, Crown, Rocket } from 'lucide-react';
+import SectionHeader from './SectionHeader';
 
 const premiumBenefits = [
   'Badge Premium visible',
@@ -27,21 +28,12 @@ export default function PricingSection() {
   return (
     <section aria-labelledby="pricing-title" className="py-24 bg-background">
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="text-center mb-16">
-          <span className="inline-block text-primary-600 font-bold tracking-wide uppercase text-xs bg-primary-50 px-3 py-1 rounded-full mb-4">
-            Pour les professionnels
-          </span>
-          <h2
-            id="pricing-title"
-            className="text-3xl sm:text-4xl font-extrabold text-text-primary mb-4"
-          >
-            Passez au niveau supérieur
-          </h2>
-          <p className="text-text-secondary text-lg max-w-2xl mx-auto leading-relaxed">
-            Premium et Boost renforcent votre crédibilité et votre visibilité auprès des clients.
-          </p>
-        </div>
+        <SectionHeader
+          id="pricing-title"
+          badge="Pour les professionnels"
+          title="Passez au niveau supérieur"
+          subtitle="Premium et Boost renforcent votre crédibilité et votre visibilité auprès des clients."
+        />
 
         {/* Cards */}
         <div className="grid gap-8 md:grid-cols-2">
@@ -104,7 +96,7 @@ export default function PricingSection() {
             </ul>
 
             <Link
-              href="/pro/boost"
+              href="/plans"
               className="block w-full text-center px-6 py-3.5 border-2 border-primary-500 text-primary-600 hover:bg-primary-50 rounded-xl font-semibold transition-all duration-200 focus-visible:outline-2 focus-visible:outline-primary-500 focus-visible:outline-offset-2"
             >
               Booster mon profil

@@ -1,66 +1,47 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type { PublicUser } from '@khadamat/contracts';
-
-/**
- * AuthStore
- *
- * Store Zustand pour gérer l'authentification
- * Persisté dans localStorage pour maintenir la session après refresh
- *
- * ⚠️ "use client" OBLIGATOIRE car utilise localStorage
- */
+import { getJSON, postJSON } from '@/lib/api';
 
 interface AuthState {
   user: PublicUser | null;
-  accessToken: string | null;
   isAuthenticated: boolean;
+  loading: boolean;
 }
 
 interface AuthActions {
-  setAuth: (user: PublicUser, accessToken: string) => void;
+  init: () => Promise<void>;
+  setAuth: (user: PublicUser) => void;
   setUser: (user: PublicUser) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
-export const useAuthStore = create<AuthState & AuthActions>()(
-  persist(
-    (set) => ({
-      // State
-      user: null,
-      accessToken: null,
-      isAuthenticated: false,
+export const useAuthStore = create<AuthState & AuthActions>()((set, get) => ({
+  user: null,
+  isAuthenticated: false,
+  loading: true,
 
-      // Actions
-      setAuth: (user, accessToken) =>
-        set({
-          user,
-          accessToken,
-          isAuthenticated: true,
-        }),
+  init: async () => {
+    try {
+      const user = await getJSON<PublicUser>('/auth/me');
+      set({ user, isAuthenticated: true, loading: false });
+    } catch {
+      set({ user: null, isAuthenticated: false, loading: false });
+    }
+  },
 
-      setUser: (user) =>
-        set({
-          user,
-        }),
+  setAuth: (user) =>
+    set({ user, isAuthenticated: true, loading: false }),
 
-      logout: () =>
-        set({
-          user: null,
-          accessToken: null,
-          isAuthenticated: false,
-        }),
-    }),
-    {
-      name: 'khadamat-auth', // Clé localStorage
-      // Sérialisation sélective : on ne persiste que user et accessToken
-      partialize: (state) => ({
-        user: state.user,
-        accessToken: state.accessToken,
-        isAuthenticated: !!state.accessToken,
-      }),
-    },
-  ),
-);
+  setUser: (user) => set({ user }),
+
+  logout: async () => {
+    try {
+      await postJSON('/auth/logout', {});
+    } catch {
+      // Best-effort — cookie may already be expired
+    }
+    set({ user: null, isAuthenticated: false, loading: false });
+  },
+}));

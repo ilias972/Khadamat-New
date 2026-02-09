@@ -59,7 +59,7 @@ export default function CitySelect({
 
   const baseClassName =
     className ||
-    'w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50';
+    'w-full h-12 px-4 bg-slate-50 border-2 border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all appearance-none cursor-pointer';
 
   if (error) {
     return (
