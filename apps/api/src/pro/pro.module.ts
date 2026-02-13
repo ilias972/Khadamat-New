@@ -1,23 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ProController } from './pro.controller';
 import { ProService } from './pro.service';
+import { SubscriptionExpirationService } from './subscription-expiration.service';
 import { DatabaseModule } from '../database/database.module';
+import { CatalogResolverModule } from '../catalog/catalog-resolver.module';
 
-/**
- * ProModule
- *
- * Module pour la gestion du profil et de la configuration des Professionnels.
- *
- * Endpoints :
- * - GET /api/pro/me
- * - PATCH /api/pro/profile
- * - PUT /api/pro/services
- * - PUT /api/pro/availability
- */
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, CatalogResolverModule],
   controllers: [ProController],
-  providers: [ProService],
+  providers: [ProService, SubscriptionExpirationService],
   exports: [ProService],
 })
 export class ProModule {}

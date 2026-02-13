@@ -10,10 +10,9 @@ import { getJSON, patchJSON } from '@/lib/api';
 /**
  * Profile Page
  *
- * Page "Mon Compte" accessible à tous les utilisateurs connectés (CLIENT et PRO).
- * Permet de modifier les informations personnelles (Nom, Prénom, Adresse).
- *
- * ⚠️ "use client" OBLIGATOIRE (hooks)
+ * Page "Mon Compte" accessible à tous les utilisateurs connectés.
+ * - CLIENT : modifier infos perso, avatarUrl optionnelle, nb missions
+ * - PRO : redirigé vers /dashboard/profile
  */
 export default function ProfilePage() {
   const router = useRouter();
@@ -26,8 +25,12 @@ export default function ProfilePage() {
   const [lastName, setLastName] = useState('');
   const [cityId, setCityId] = useState('');
   const [addressLine, setAddressLine] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+
+  // Stats client
+  const [bookingsCount, setBookingsCount] = useState<number>(0);
 
   // Liste des villes
   const [cities, setCities] = useState<Array<{ id: string; name: string }>>([]);
@@ -38,12 +41,19 @@ export default function ProfilePage() {
     setMounted(true);
   }, []);
 
-  // Auth Guard (seulement après hydratation)
+  // Auth Guard + PRO redirect
   useEffect(() => {
-    if (mounted && !isAuthenticated) {
+    if (!mounted) return;
+    if (!isAuthenticated) {
       router.push('/auth/login');
+      return;
     }
-  }, [mounted, isAuthenticated, router]);
+    // C.0 : PRO → redirect vers /dashboard/profile
+    if (user?.role === 'PRO') {
+      router.replace('/dashboard/profile');
+      return;
+    }
+  }, [mounted, isAuthenticated, user, router]);
 
   // Fetch cities
   useEffect(() => {
@@ -59,9 +69,22 @@ export default function ProfilePage() {
         setLoadingCities(false);
       }
     };
-
     fetchCities();
   }, []);
+
+  // Fetch client bookings count
+  useEffect(() => {
+    if (!isAuthenticated || user?.role !== 'CLIENT') return;
+    const fetchStats = async () => {
+      try {
+        const data = await getJSON<{ bookings: any[]; total: number }>('/bookings?status=COMPLETED&limit=1');
+        setBookingsCount(data.total ?? 0);
+      } catch {
+        // silent — stats non critiques
+      }
+    };
+    fetchStats();
+  }, [isAuthenticated, user]);
 
   // Initialiser le formulaire avec les données de l'utilisateur
   useEffect(() => {
@@ -70,6 +93,7 @@ export default function ProfilePage() {
       setLastName(user.lastName || '');
       setCityId(user.cityId || '');
       setAddressLine(user.addressLine || '');
+      setAvatarUrl((user as any).avatarUrl || '');
     }
   }, [user]);
 
@@ -79,12 +103,19 @@ export default function ProfilePage() {
       setIsSaving(true);
       setSuccessMessage('');
 
-      const data = {
+      const data: Record<string, any> = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         cityId: cityId || undefined,
         addressLine: addressLine.trim(),
       };
+
+      // avatarUrl optionnelle (vide = supprimer)
+      if (avatarUrl.trim()) {
+        data.avatarUrl = avatarUrl.trim();
+      } else {
+        data.avatarUrl = null;
+      }
 
       const updatedUser = await patchJSON('/users/me', data);
 
@@ -110,6 +141,7 @@ export default function ProfilePage() {
       setLastName(user.lastName || '');
       setCityId(user.cityId || '');
       setAddressLine(user.addressLine || '');
+      setAvatarUrl((user as any).avatarUrl || '');
     }
     setIsEditing(false);
   };
@@ -125,7 +157,7 @@ export default function ProfilePage() {
   }
 
   // Loader pendant redirection
-  if (!isAuthenticated) {
+  if (!isAuthenticated || user?.role === 'PRO') {
     return (
       <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900 flex items-center justify-center">
         <div className="text-center">
@@ -136,13 +168,7 @@ export default function ProfilePage() {
     );
   }
 
-  // Badge rôle
-  const getRoleBadge = (role: string) => {
-    if (role === 'PRO') {
-      return 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-100';
-    }
-    return 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-100';
-  };
+  const currentAvatarUrl = (user as any)?.avatarUrl || '';
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
@@ -152,11 +178,15 @@ export default function ProfilePage() {
         {/* Header avec Avatar */}
         <div className="text-center mb-8">
           {/* Avatar */}
-          <div className="w-24 h-24 bg-zinc-900 dark:bg-zinc-50 rounded-full flex items-center justify-center mx-auto mb-4">
-            <span className="text-4xl font-bold text-zinc-50 dark:text-zinc-900">
-              {user?.firstName?.charAt(0).toUpperCase()}
-              {user?.lastName?.charAt(0).toUpperCase()}
-            </span>
+          <div className="w-24 h-24 bg-zinc-200 dark:bg-zinc-700 rounded-full flex items-center justify-center mx-auto mb-4 overflow-hidden">
+            {currentAvatarUrl ? (
+              <img src={currentAvatarUrl} alt={user?.firstName || ''} className="w-full h-full object-cover" />
+            ) : (
+              <span className="text-4xl font-bold text-zinc-600 dark:text-zinc-400">
+                {user?.firstName?.charAt(0).toUpperCase()}
+                {user?.lastName?.charAt(0).toUpperCase()}
+              </span>
+            )}
           </div>
 
           <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
@@ -168,47 +198,34 @@ export default function ProfilePage() {
         </div>
 
         <div className="space-y-6">
-          {/* Lien Dashboard PRO */}
-          {user?.role === 'PRO' && (
-            <div className="bg-gradient-to-r from-blue-600 to-blue-500 dark:from-blue-700 dark:to-blue-600 rounded-lg p-6 text-center">
-              <div className="flex items-center justify-center gap-3 mb-4">
-                <span className="text-3xl">📊</span>
-                <h2 className="text-xl font-bold text-white">
-                  Tableau de bord Pro
-                </h2>
+          {/* Stats client */}
+          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+            <div className="flex items-center gap-6">
+              <div className="text-center flex-1">
+                <p className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">{bookingsCount}</p>
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">Missions terminées</p>
               </div>
-              <p className="text-blue-100 mb-4">
-                Gérez vos services, horaires et configuration professionnelle
-              </p>
-              <Link
-                href="/dashboard"
-                className="inline-block px-6 py-3 bg-white text-blue-600 rounded-lg hover:bg-blue-50 transition font-medium"
-              >
-                Accéder au tableau de bord →
-              </Link>
             </div>
-          )}
+          </div>
 
-          {/* Lien Mes Réservations (CLIENT) */}
-          {user?.role === 'CLIENT' && (
-            <div className="bg-gradient-to-r from-green-600 to-teal-600 dark:from-green-700 dark:to-teal-700 rounded-lg p-6 text-center">
-              <div className="flex items-center justify-center gap-3 mb-4">
-                <span className="text-3xl">📅</span>
-                <h2 className="text-xl font-bold text-white">
-                  Mes Réservations
-                </h2>
-              </div>
-              <p className="text-green-100 mb-4">
-                Consultez et gérez toutes vos réservations
-              </p>
-              <Link
-                href="/client/bookings"
-                className="inline-block px-6 py-3 bg-white text-green-600 rounded-lg hover:bg-green-50 transition font-medium"
-              >
-                Voir mes réservations →
-              </Link>
+          {/* Lien Mes Réservations */}
+          <div className="bg-gradient-to-r from-green-600 to-teal-600 dark:from-green-700 dark:to-teal-700 rounded-lg p-6 text-center">
+            <div className="flex items-center justify-center gap-3 mb-4">
+              <span className="text-3xl">📅</span>
+              <h2 className="text-xl font-bold text-white">
+                Mes Réservations
+              </h2>
             </div>
-          )}
+            <p className="text-green-100 mb-4">
+              Consultez et gérez toutes vos réservations
+            </p>
+            <Link
+              href="/client/bookings"
+              className="inline-block px-6 py-3 bg-white text-green-600 rounded-lg hover:bg-green-50 transition font-medium"
+            >
+              Voir mes réservations
+            </Link>
+          </div>
 
           {/* Carte Informations Personnelles */}
           <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
@@ -221,6 +238,7 @@ export default function ProfilePage() {
                 <button
                   onClick={() => setIsEditing(true)}
                   className="px-4 py-2 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium"
+                  aria-label="Modifier les informations personnelles"
                 >
                   Modifier
                 </button>
@@ -231,72 +249,66 @@ export default function ProfilePage() {
             {successMessage && (
               <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
                 <p className="text-green-800 dark:text-green-200 text-sm font-medium">
-                  ✅ {successMessage}
+                  {successMessage}
                 </p>
               </div>
             )}
 
             {!isEditing ? (
               <div className="space-y-4">
-                {/* Prénom */}
+                {/* Photo */}
                 <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
                   <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Prénom
+                    Photo de profil
                   </span>
                   <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                    {user?.firstName}
+                    {currentAvatarUrl ? (
+                      <span className="text-green-600 dark:text-green-400">Définie</span>
+                    ) : (
+                      <span className="text-zinc-500 dark:text-zinc-400 italic">Non renseignée</span>
+                    )}
                   </span>
+                </div>
+
+                {/* Prénom */}
+                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Prénom</span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">{user?.firstName}</span>
                 </div>
 
                 {/* Nom */}
                 <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Nom
-                  </span>
-                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                    {user?.lastName}
-                  </span>
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Nom</span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">{user?.lastName}</span>
                 </div>
 
                 {/* Ville */}
                 <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Ville
-                  </span>
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Ville</span>
                   <span className="font-medium text-zinc-900 dark:text-zinc-50">
                     {user?.cityId ? (
                       cities.find((c) => c.id === user.cityId)?.name || 'Chargement...'
                     ) : (
-                      <span className="text-zinc-500 dark:text-zinc-400 italic">
-                        Non renseigné
-                      </span>
+                      <span className="text-zinc-500 dark:text-zinc-400 italic">Non renseigné</span>
                     )}
                   </span>
                 </div>
 
                 {/* Adresse */}
                 <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Adresse précise
-                  </span>
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Adresse précise</span>
                   <span className="font-medium text-zinc-900 dark:text-zinc-50">
                     {user?.addressLine || (
-                      <span className="text-zinc-500 dark:text-zinc-400 italic">
-                        Non renseigné
-                      </span>
+                      <span className="text-zinc-500 dark:text-zinc-400 italic">Non renseigné</span>
                     )}
                   </span>
                 </div>
 
                 {/* Rôle */}
                 <div className="flex items-center justify-between py-3">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Rôle
-                  </span>
-                  <span
-                    className={`px-3 py-1 rounded-full text-sm font-medium ${getRoleBadge(user?.role || '')}`}
-                  >
-                    {user?.role === 'PRO' ? 'Professionnel' : 'Client'}
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Rôle</span>
+                  <span className="px-3 py-1 rounded-full text-sm font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-100">
+                    Client
                   </span>
                 </div>
               </div>
@@ -308,12 +320,38 @@ export default function ProfilePage() {
                 }}
                 className="space-y-4"
               >
+                {/* Photo de profil URL */}
+                <div>
+                  <label htmlFor="profile-avatar" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                    Photo de profil (URL, optionnelle)
+                  </label>
+                  <input
+                    id="profile-avatar"
+                    type="url"
+                    value={avatarUrl}
+                    onChange={(e) => setAvatarUrl(e.target.value)}
+                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+                    placeholder="https://exemple.com/ma-photo.jpg"
+                  />
+                  {avatarUrl && (
+                    <div className="mt-2">
+                      <img
+                        src={avatarUrl}
+                        alt="Aperçu"
+                        className="w-16 h-16 rounded-full object-cover border border-zinc-300 dark:border-zinc-700"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    </div>
+                  )}
+                </div>
+
                 {/* Prénom */}
                 <div>
-                  <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-firstname" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
                     Prénom
                   </label>
                   <input
+                    id="profile-firstname"
                     type="text"
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
@@ -324,10 +362,11 @@ export default function ProfilePage() {
 
                 {/* Nom */}
                 <div>
-                  <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-lastname" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
                     Nom
                   </label>
                   <input
+                    id="profile-lastname"
                     type="text"
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
@@ -338,10 +377,11 @@ export default function ProfilePage() {
 
                 {/* Ville */}
                 <div>
-                  <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-city" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
                     Ville
                   </label>
                   <select
+                    id="profile-city"
                     value={cityId}
                     onChange={(e) => setCityId(e.target.value)}
                     required
@@ -359,10 +399,11 @@ export default function ProfilePage() {
 
                 {/* Adresse précise */}
                 <div>
-                  <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-address" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
                     Adresse précise
                   </label>
                   <input
+                    id="profile-address"
                     type="text"
                     value={addressLine}
                     onChange={(e) => setAddressLine(e.target.value)}
@@ -394,7 +435,6 @@ export default function ProfilePage() {
             )}
           </div>
 
-
           {/* Zone Danger */}
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
             <h2 className="text-xl font-bold text-red-900 dark:text-red-100 mb-4 flex items-center gap-2">
@@ -414,6 +454,7 @@ export default function ProfilePage() {
               <button
                 onClick={handleLogout}
                 className="px-6 py-2 bg-red-600 dark:bg-red-500 text-white rounded-lg hover:bg-red-700 dark:hover:bg-red-600 transition font-medium"
+                aria-label="Se déconnecter"
               >
                 Se déconnecter
               </button>

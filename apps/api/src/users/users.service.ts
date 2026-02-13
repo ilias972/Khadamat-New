@@ -20,6 +20,9 @@ export class UpdateProfileDto {
   @IsOptional()
   @Length(5, 200)
   addressLine?: string;
+
+  @IsOptional()
+  avatarUrl?: string;
 }
 
 @Injectable()
@@ -41,6 +44,7 @@ export class UsersService {
     if (dto.addressLine !== undefined) dataToUpdate.addressLine = dto.addressLine.trim();
     if (dto.firstName !== undefined) dataToUpdate.firstName = dto.firstName.trim();
     if (dto.lastName !== undefined) dataToUpdate.lastName = dto.lastName.trim();
+    if (dto.avatarUrl !== undefined) dataToUpdate.avatarUrl = dto.avatarUrl;
 
     return this.prisma.user.update({
       where: { id: userId },
@@ -54,6 +58,7 @@ export class UsersService {
         role: true,
         cityId: true,
         addressLine: true,
+        avatarUrl: true,
         city: {
           select: {
             id: true,

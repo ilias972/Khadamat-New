@@ -70,10 +70,11 @@ export class AuthService {
     if (!dto.cityId) {
       throw new BadRequestException('La ville est obligatoire.');
     }
-    const cityExists = await this.prisma.city.findUnique({
-      where: { id: dto.cityId },
+    const city = await this.prisma.city.findUnique({
+      where: { publicId: dto.cityId },
+      select: { id: true },
     });
-    if (!cityExists) {
+    if (!city) {
       throw new BadRequestException('Ville invalide.');
     }
 
@@ -94,11 +95,12 @@ export class AuthService {
       }
     }
 
-    // 6. Vérifier l'unicité du CIN si PRO
+    // 6. Vérifier l'unicité du CIN si PRO (via cinHash)
+    let cinHash: string | null = null;
     if (dto.role === 'PRO' && dto.cinNumber) {
-      const normalizedCinNumber = dto.cinNumber.trim().toUpperCase();
-      const existingCin = await this.prisma.proProfile.findUnique({
-        where: { cinNumber: normalizedCinNumber },
+      cinHash = this.hashCin(dto.cinNumber);
+      const existingCin = await this.prisma.proProfile.findFirst({
+        where: { cinHash },
       });
       if (existingCin) {
         throw new ConflictException('Données en conflit');
@@ -108,16 +110,17 @@ export class AuthService {
     // 7. Hasher le mot de passe
     const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-    // 8. Générer les URLs publiques pour les fichiers (si PRO)
-    const baseUrl = this.config.get<string>('PUBLIC_URL') || 'http://localhost:3001';
-    const frontUrl = cinFrontFile ? `${baseUrl}/uploads/kyc/${cinFrontFile.filename}` : null;
-    const backUrl = cinBackFile ? `${baseUrl}/uploads/kyc/${cinBackFile.filename}` : null;
+    // 8. Storage keys pour les fichiers KYC (privé, jamais d'URL publique)
+    const frontKey = cinFrontFile ? cinFrontFile.filename : null;
+    const backKey = cinBackFile ? cinBackFile.filename : null;
 
     // 9. Transaction atomique : Créer User + ProProfile
     try {
       const user = await this.prisma.$transaction(async (tx) => {
+        const userPublicId = `usr_${crypto.randomBytes(16).toString('hex')}`;
         const newUser = await tx.user.create({
           data: {
+            publicId: userPublicId,
             email: email,
             phone: phone,
             password: hashedPassword,
@@ -125,20 +128,22 @@ export class AuthService {
             lastName: dto.lastName.trim(),
             role: dto.role,
             status: 'ACTIVE',
-            cityId: dto.cityId,
+            cityId: city.id,
             addressLine: dto.addressLine?.trim() || null,
           },
         });
 
         if (dto.role === 'PRO') {
+          const proPublicId = `pro_${crypto.randomBytes(16).toString('hex')}`;
           await tx.proProfile.create({
             data: {
               userId: newUser.id,
-              cityId: dto.cityId,
+              publicId: proPublicId,
+              cityId: city.id,
               whatsapp: phone,
-              cinNumber: dto.cinNumber?.trim().toUpperCase() || null,
-              kycCinFrontUrl: frontUrl,
-              kycCinBackUrl: backUrl,
+              cinHash: cinHash,
+              kycCinFrontKey: frontKey,
+              kycCinBackKey: backKey,
               kycStatus: 'PENDING',
             },
           });
@@ -189,6 +194,7 @@ export class AuthService {
       },
       select: {
         id: true,
+        publicId: true,
         email: true,
         phone: true,
         password: true,
@@ -198,8 +204,8 @@ export class AuthService {
         status: true,
         cityId: true,
         addressLine: true,
-        city: { select: { id: true, name: true } },
-        proProfile: { select: { userId: true, isPremium: true, kycStatus: true } },
+        city: { select: { id: true, publicId: true, name: true } },
+        proProfile: { select: { userId: true, publicId: true, isPremium: true, kycStatus: true } },
       },
     });
 
@@ -243,6 +249,7 @@ export class AuthService {
         user: {
           select: {
             id: true,
+            publicId: true,
             email: true,
             phone: true,
             firstName: true,
@@ -250,8 +257,8 @@ export class AuthService {
             role: true,
             cityId: true,
             addressLine: true,
-            city: { select: { id: true, name: true } },
-            proProfile: { select: { userId: true, isPremium: true, kycStatus: true } },
+            city: { select: { id: true, publicId: true, name: true } },
+            proProfile: { select: { userId: true, publicId: true, isPremium: true, kycStatus: true } },
           },
         },
       },
@@ -333,11 +340,12 @@ export class AuthService {
   //  VALIDATE USER (utilisé par JwtStrategy)
   // ═══════════════════════════════════════════════════════════════
 
-  async validateUser(userId: string): Promise<PublicUser | null> {
+  async validateUser(userId: string): Promise<(PublicUser & { publicId: string }) | null> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
+        publicId: true,
         email: true,
         phone: true,
         firstName: true,
@@ -346,14 +354,18 @@ export class AuthService {
         status: true,
         cityId: true,
         addressLine: true,
-        city: { select: { id: true, name: true } },
-        proProfile: { select: { userId: true, isPremium: true, kycStatus: true } },
+        avatarUrl: true,
+        city: { select: { id: true, publicId: true, name: true } },
+        proProfile: { select: { userId: true, publicId: true, isPremium: true, kycStatus: true } },
       },
     });
 
     if (!user || user.status !== 'ACTIVE') return null;
 
-    return this.toPublicUser(user);
+    const publicUser = this.toPublicUser(user);
+    // Attach internal DB id so controllers/services can use req.user.id for DB queries,
+    // while publicId holds the usr_xxx value for API responses.
+    return { ...publicUser, id: user.id, publicId: publicUser.id };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -365,6 +377,7 @@ export class AuthService {
       where: { id: user.id },
       select: {
         id: true,
+        publicId: true,
         email: true,
         phone: true,
         firstName: true,
@@ -372,8 +385,9 @@ export class AuthService {
         role: true,
         cityId: true,
         addressLine: true,
-        city: { select: { id: true, name: true } },
-        proProfile: { select: { userId: true, isPremium: true, kycStatus: true } },
+        avatarUrl: true,
+        city: { select: { id: true, publicId: true, name: true } },
+        proProfile: { select: { userId: true, publicId: true, isPremium: true, kycStatus: true } },
       },
     });
 
@@ -411,15 +425,16 @@ export class AuthService {
 
   private toPublicUser(user: any): PublicUser {
     return {
-      id: user.id,
+      id: user.publicId ?? user.id,
       email: user.email ?? null,
       phone: user.phone,
       firstName: user.firstName,
       lastName: user.lastName,
       role: user.role as 'CLIENT' | 'PRO' | 'ADMIN',
-      cityId: user.cityId ?? null,
+      cityId: user.city?.publicId ?? user.cityId ?? null,
       addressLine: user.addressLine ?? null,
-      city: user.city ? { id: user.city.id, name: user.city.name } : null,
+      avatarUrl: user.avatarUrl ?? null,
+      city: user.city ? { id: user.city.publicId ?? user.city.id, name: user.city.name } : null,
       isPremium: user.proProfile?.isPremium ?? false,
       kycStatus: user.proProfile?.kycStatus ?? undefined,
     };
@@ -430,6 +445,15 @@ export class AuthService {
    */
   private hashToken(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  /**
+   * Hash CIN number with salt using SHA-256 (same logic as KycService).
+   */
+  private hashCin(cinNumber: string): string {
+    const salt = this.config.get<string>('CIN_HASH_SALT') || 'khadamat-cin-default-salt';
+    const normalized = cinNumber.trim().toUpperCase();
+    return crypto.createHash('sha256').update(normalized + salt).digest('hex');
   }
 
   /**

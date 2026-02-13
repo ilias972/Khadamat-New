@@ -164,6 +164,8 @@ export default function BookingPage() {
           alert('Veuillez renseigner votre adresse dans votre profil');
           router.push('/profile');
           return;
+        } else if (error.statusCode === 403) {
+          setBookingError('Ce professionnel n\'est pas disponible à la réservation.');
         } else {
           setBookingError(error.message || 'Erreur lors de la réservation');
         }

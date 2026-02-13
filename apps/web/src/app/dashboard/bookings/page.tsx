@@ -8,7 +8,7 @@ import BookingStatusBadge from '@/components/BookingStatusBadge';
 import { getJSON, patchJSON, APIError } from '@/lib/api';
 import type { BookingDashboardItem } from '@khadamat/contracts';
 
-type TabType = 'pending' | 'confirmed' | 'cancelled';
+type TabType = 'pending' | 'waiting' | 'confirmed' | 'cancelled';
 
 /**
  * PRO Bookings Page
@@ -123,6 +123,42 @@ export default function ProBookingsPage() {
     }
   };
 
+  // Cancel booking (PRO cancels CONFIRMED booking with reason)
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [selectedBookingForCancel, setSelectedBookingForCancel] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+
+  const openCancelModal = (bookingId: string) => {
+    setSelectedBookingForCancel(bookingId);
+    setCancelReason('');
+    setShowCancelModal(true);
+  };
+
+  const handleCancelBooking = async () => {
+    if (!selectedBookingForCancel) return;
+    if (cancelReason.trim().length < 5) {
+      alert('Le motif doit contenir au moins 5 caractères');
+      return;
+    }
+
+    try {
+      setUpdatingBooking(selectedBookingForCancel);
+      await patchJSON(`/bookings/${selectedBookingForCancel}/cancel`, { reason: cancelReason });
+
+      const data = await getJSON<BookingDashboardItem[]>('/bookings');
+      setBookings(data);
+      setShowCancelModal(false);
+    } catch (err) {
+      if (err instanceof APIError) {
+        alert(err.message);
+      } else {
+        alert('Erreur lors de l\'annulation');
+      }
+    } finally {
+      setUpdatingBooking(null);
+    }
+  };
+
   // Complete booking (PRO marks CONFIRMED as COMPLETED)
   const handleCompleteBooking = async (bookingId: string) => {
     if (!confirm('Marquer cette mission comme terminée ?')) {
@@ -172,16 +208,21 @@ export default function ProBookingsPage() {
     if (activeTab === 'pending') {
       return booking.status === 'PENDING';
     }
+    if (activeTab === 'waiting') {
+      return booking.status === 'WAITING_FOR_CLIENT';
+    }
     if (activeTab === 'confirmed') {
       return booking.status === 'CONFIRMED';
     }
-    // cancelled: DECLINED, CANCELLED*
+    // cancelled: DECLINED, CANCELLED*, EXPIRED
     return [
       'DECLINED',
       'CANCELLED_BY_CLIENT',
       'CANCELLED_BY_CLIENT_LATE',
       'CANCELLED_BY_PRO',
       'CANCELLED_AUTO_FIRST_CONFIRMED',
+      'CANCELLED_AUTO_OVERLAP',
+      'EXPIRED',
     ].includes(booking.status);
   });
 
@@ -215,6 +256,19 @@ export default function ProBookingsPage() {
               </span>
             </button>
             <button
+              onClick={() => setActiveTab('waiting')}
+              className={`flex-1 px-6 py-4 text-center font-medium transition ${
+                activeTab === 'waiting'
+                  ? 'bg-zinc-100 dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 border-b-2 border-zinc-900 dark:border-zinc-50'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700/50'
+              }`}
+            >
+              En attente client
+              <span className="ml-2 px-2 py-0.5 bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-200 rounded-full text-xs">
+                {bookings.filter((b) => b.status === 'WAITING_FOR_CLIENT').length}
+              </span>
+            </button>
+            <button
               onClick={() => setActiveTab('confirmed')}
               className={`flex-1 px-6 py-4 text-center font-medium transition ${
                 activeTab === 'confirmed'
@@ -245,6 +299,8 @@ export default function ProBookingsPage() {
                       'CANCELLED_BY_CLIENT_LATE',
                       'CANCELLED_BY_PRO',
                       'CANCELLED_AUTO_FIRST_CONFIRMED',
+                      'CANCELLED_AUTO_OVERLAP',
+                      'EXPIRED',
                     ].includes(b.status),
                   ).length
                 }
@@ -341,14 +397,23 @@ export default function ProBookingsPage() {
                   )}
 
                   {/* Actions CONFIRMED */}
-                  {booking.status === 'CONFIRMED' && new Date(booking.timeSlot) < new Date() && (
-                    <div className="flex gap-2 ml-4">
+                  {booking.status === 'CONFIRMED' && (
+                    <div className="flex flex-col gap-2 ml-4">
+                      {new Date(booking.timeSlot) < new Date() && (
+                        <button
+                          onClick={() => handleCompleteBooking(booking.id)}
+                          disabled={updatingBooking === booking.id}
+                          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        >
+                          Terminer la mission
+                        </button>
+                      )}
                       <button
-                        onClick={() => handleCompleteBooking(booking.id)}
+                        onClick={() => openCancelModal(booking.id)}
                         disabled={updatingBooking === booking.id}
-                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                       >
-                        ✅ Terminer la mission
+                        Annuler
                       </button>
                     </div>
                   )}
@@ -358,6 +423,51 @@ export default function ProBookingsPage() {
           )}
         </div>
       </div>
+
+      {/* Modale Annulation PRO */}
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-zinc-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 mb-4">
+              Annuler la réservation
+            </h2>
+
+            <div className="mb-6">
+              <label htmlFor="cancel-reason" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                Motif d'annulation
+              </label>
+              <textarea
+                id="cancel-reason"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="Expliquez la raison de l'annulation (min 5 caractères)"
+                rows={3}
+                maxLength={200}
+                className="w-full px-4 py-3 border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent resize-none"
+              />
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                {cancelReason.length}/200 caractères
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCancelModal(false)}
+                className="flex-1 px-4 py-2 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 transition font-medium"
+              >
+                Retour
+              </button>
+              <button
+                onClick={handleCancelBooking}
+                disabled={updatingBooking !== null || cancelReason.trim().length < 5}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {updatingBooking ? 'Annulation...' : 'Confirmer l\'annulation'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modale Modifier Durée */}
       {showDurationModal && (

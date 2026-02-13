@@ -8,7 +8,18 @@
  * - Cache mémoire pour endpoints quasi-statiques
  */
 
-const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+export function getApiBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return (
+      process.env.API_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      'http://localhost:3001/api'
+    );
+  }
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+}
+
+const baseUrl = getApiBaseUrl();
 
 /* ─── Classe d'erreur API ─── */
 
@@ -175,6 +186,13 @@ export async function putJSON<T = any>(endpoint: string, body: any): Promise<T> 
   const response = await baseFetch(`${baseUrl}${endpoint}`, {
     method: 'PUT',
     body: JSON.stringify(body),
+  });
+  return parseResponse<T>(response);
+}
+
+export async function deleteJSON<T = any>(endpoint: string): Promise<T> {
+  const response = await baseFetch(`${baseUrl}${endpoint}`, {
+    method: 'DELETE',
   });
   return parseResponse<T>(response);
 }

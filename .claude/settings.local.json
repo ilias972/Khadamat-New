@@ -18,7 +18,19 @@
       "Bash(xargs kill:*)",
       "Bash(curl:*)",
       "Bash(psql:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(pnpm exec prisma generate:*)",
+      "Bash(pnpm turbo build:*)",
+      "Bash(pnpm exec prisma migrate:*)",
+      "Bash(node prisma/seed.js:*)",
+      "Bash(pnpm exec prisma:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm exec playwright install:*)",
+      "Bash(E2E_WEB_BASE_URL=http://localhost:3000 E2E_API_BASE_URL=http://localhost:3001 E2E_CLIENT_PHONE=0612345678 E2E_CLIENT_PASSWORD=Password1234 E2E_PRO_PHONE=0651111111 E2E_PRO_PASSWORD=Password1234 pnpm:*)",
+      "Bash(pkill:*)",
+      "Bash(pnpm dev)",
+      "Bash(pnpm exec playwright test:*)",
+      "Bash(pnpm --filter @khadamat/database exec prisma db seed:*)"
     ]
   }
 }

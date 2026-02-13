@@ -31,9 +31,11 @@ import {
   GetSlotsSchema,
   CreateBookingSchema,
   UpdateBookingStatusSchema,
+  CancelBookingSchema,
   type GetSlotsInput,
   type CreateBookingInput,
   type UpdateBookingStatusInput,
+  type CancelBookingInput,
 } from '@khadamat/contracts';
 
 /**
@@ -224,5 +226,22 @@ export class BookingController {
     @Request() req,
   ) {
     return this.bookingService.completeBooking(id, req.user.id, req.user.role);
+  }
+
+  /**
+   * PATCH /api/bookings/:id/cancel
+   *
+   * Permet au CLIENT ou au PRO d'annuler une réservation CONFIRMED.
+   * - CLIENT : pas de reason requise, status basé sur seuil 24h
+   * - PRO : reason obligatoire (5-200 chars), status = CANCELLED_BY_PRO
+   */
+  @Patch('bookings/:id/cancel')
+  @UseGuards(JwtAuthGuard)
+  async cancelBooking(
+    @Param('id') id: string,
+    @Request() req,
+    @Body(new ZodValidationPipe(CancelBookingSchema)) dto: CancelBookingInput,
+  ) {
+    return this.bookingService.cancelBooking(id, req.user.id, req.user.role, dto);
   }
 }

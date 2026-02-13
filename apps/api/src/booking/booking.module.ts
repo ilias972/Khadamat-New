@@ -1,27 +1,14 @@
 import { Module } from '@nestjs/common';
 import { BookingController } from './booking.controller';
 import { BookingService } from './booking.service';
+import { BookingExpirationService } from './booking-expiration.service';
 import { DatabaseModule } from '../database/database.module';
+import { CatalogResolverModule } from '../catalog/catalog-resolver.module';
 
-/**
- * BookingModule
- *
- * Module pour la gestion des réservations.
- * Fournit les endpoints pour récupérer les créneaux disponibles et créer des réservations.
- *
- * Imports :
- * - DatabaseModule : Pour accéder à PrismaService
- *
- * Controllers :
- * - BookingController : Endpoints GET /public/slots et POST /bookings
- *
- * Providers :
- * - BookingService : Logique métier pour le calcul de disponibilité et la création de réservations
- */
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, CatalogResolverModule],
   controllers: [BookingController],
-  providers: [BookingService],
+  providers: [BookingService, BookingExpirationService],
   exports: [BookingService],
 })
 export class BookingModule {}

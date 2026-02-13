@@ -41,6 +41,7 @@ export class RegisterDto {
 
   @IsString({ message: 'cityId est requis' })
   @MinLength(1, { message: 'cityId est requis' })
+  @Matches(/^city_[a-z]+_\d{3}$/, { message: 'cityId invalide' })
   cityId: string;
 
   @IsOptional()
