@@ -64,6 +64,27 @@ export default function ClientBookingsPage() {
     fetchBookings();
   }, [mounted, isAuthenticated]);
 
+  // Cancel booking (CLIENT cancels CONFIRMED booking)
+  const handleCancelBooking = async (bookingId: string) => {
+    if (!confirm('Voulez-vous vraiment annuler cette réservation ?')) return;
+
+    try {
+      setUpdatingBooking(bookingId);
+      await patchJSON(`/bookings/${bookingId}/cancel`, {});
+
+      const data = await getJSON<BookingDashboardItem[]>('/bookings');
+      setBookings(data);
+    } catch (err) {
+      if (err instanceof APIError) {
+        alert(err.message);
+      } else {
+        alert('Erreur lors de l\'annulation');
+      }
+    } finally {
+      setUpdatingBooking(null);
+    }
+  };
+
   // Respond to modification (CLIENT accepts/refuses duration change)
   const handleRespondToModification = async (bookingId: string, accept: boolean) => {
     try {
@@ -286,14 +307,27 @@ export default function ClientBookingsPage() {
                         disabled={updatingBooking === booking.id}
                         className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                       >
-                        ✅ Accepter
+                        Accepter
                       </button>
                       <button
                         onClick={() => handleRespondToModification(booking.id, false)}
                         disabled={updatingBooking === booking.id}
                         className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                       >
-                        ❌ Refuser
+                        Refuser
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Actions CONFIRMED - Annuler */}
+                  {booking.status === 'CONFIRMED' && (
+                    <div className="flex gap-2 ml-4">
+                      <button
+                        onClick={() => handleCancelBooking(booking.id)}
+                        disabled={updatingBooking === booking.id}
+                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        Annuler
                       </button>
                     </div>
                   )}

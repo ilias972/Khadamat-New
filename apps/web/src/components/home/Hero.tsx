@@ -20,8 +20,6 @@ interface Category {
   slug: string;
 }
 
-const STATS = { pros: 500, missions: 1200, users: 10000 } as const;
-
 type HeroState = 'loading' | 'ready' | 'error';
 
 /** Simple fuzzy match: checks if all query chars appear in target in order */
@@ -74,11 +72,12 @@ export default function Hero() {
     fetchData();
   }, [fetchData]);
 
-  // Deep link: read ?q= and ?city= from URL on mount
+  // Deep link: read ?cityId/categoryId (preferred), fallback to ?city/q
   useEffect(() => {
     if (heroState !== 'ready') return;
 
-    const urlCity = searchParams.get('city');
+    const urlCity = searchParams.get('cityId') ?? searchParams.get('city');
+    const urlCategoryId = searchParams.get('categoryId');
     const urlQuery = searchParams.get('q');
 
     if (urlCity) {
@@ -88,7 +87,15 @@ export default function Hero() {
       if (found) setCityId(found.id);
     }
 
-    if (urlQuery) {
+    if (urlCategoryId) {
+      const found = categories.find(
+        (c) => c.id === urlCategoryId || c.slug === urlCategoryId || c.name.toLowerCase() === urlCategoryId.toLowerCase(),
+      );
+      if (found) {
+        setCategoryId(found.id);
+        setQuery(found.name);
+      }
+    } else if (urlQuery) {
       const found = categories.find(
         (c) => c.slug === urlQuery || c.name.toLowerCase() === urlQuery.toLowerCase(),
       );
@@ -153,7 +160,7 @@ export default function Hero() {
 
   const handleComboboxKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (!isOpen && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+      if (!isOpen && e.key === 'ArrowDown') {
         e.preventDefault();
         setIsOpen(true);
         return;
@@ -171,8 +178,8 @@ export default function Hero() {
           setActiveIndex((prev) => Math.max(prev - 1, -1));
           break;
         case 'Enter':
-          e.preventDefault();
           if (activeIndex >= 0 && suggestions[activeIndex]) {
+            e.preventDefault();
             selectCategory(suggestions[activeIndex]);
           }
           break;
@@ -473,41 +480,11 @@ export default function Hero() {
             )}
           </motion.div>
 
-          {/* Stats (hardcoded MVP) */}
-          <motion.div
-            {...fadeUp}
-            transition={{ duration: 0.4, delay: shouldReduceMotion ? 0 : 0.3 }}
-            className="mt-8"
-          >
-            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-text-secondary">
-              <p>
-                <strong className="text-text-primary font-bold">
-                  +{STATS.pros.toLocaleString('fr-FR')}
-                </strong>{' '}
-                pros actifs
-              </p>
-              <span className="hidden sm:inline text-border-muted" aria-hidden="true">•</span>
-              <p>
-                <strong className="text-text-primary font-bold">
-                  +{STATS.missions.toLocaleString('fr-FR')}
-                </strong>{' '}
-                missions réalisées
-              </p>
-              <span className="hidden sm:inline text-border-muted" aria-hidden="true">•</span>
-              <p>
-                <strong className="text-text-primary font-bold">
-                  +{STATS.users.toLocaleString('fr-FR')}
-                </strong>{' '}
-                utilisateurs
-              </p>
-            </div>
-          </motion.div>
-
           {/* Social proof */}
           <motion.div
             {...fadeUp}
-            transition={{ duration: 0.4, delay: shouldReduceMotion ? 0 : 0.35 }}
-            className="mt-6 flex items-center gap-4 text-sm text-text-secondary"
+            transition={{ duration: 0.4, delay: shouldReduceMotion ? 0 : 0.3 }}
+            className="mt-8 flex items-center gap-4 text-sm text-text-secondary"
           >
             <div className="flex -space-x-3" aria-hidden="true">
               {['A', 'M', 'S', 'K'].map((letter, i) => (
@@ -520,11 +497,7 @@ export default function Hero() {
               ))}
             </div>
             <p>
-              Rejoint par{' '}
-              <strong className="text-text-primary font-bold">
-                +{STATS.users.toLocaleString('fr-FR')} utilisateurs
-              </strong>{' '}
-              satisfaits
+              Rejoint par des utilisateurs satisfaits
             </p>
           </motion.div>
         </div>

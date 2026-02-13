@@ -1,6 +1,7 @@
 import Header from '../../components/Header';
 import ProCard from '../../components/ProCard';
 import type { PublicProCard } from '@khadamat/contracts';
+import { getApiBaseUrl } from '@/lib/api';
 
 interface ProsPageProps {
   searchParams: Promise<{
@@ -17,7 +18,7 @@ interface ProsPageProps {
  */
 export default async function ProsPage({ searchParams }: ProsPageProps) {
   const params = await searchParams;
-  const apiUrl = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
+  const apiUrl = getApiBaseUrl();
 
   // Construction de l'URL avec query params
   const queryParams = new URLSearchParams();

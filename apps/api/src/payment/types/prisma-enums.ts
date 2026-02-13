@@ -19,3 +19,15 @@ export enum BoostStatus {
   ACTIVE = 'ACTIVE',
   EXPIRED = 'EXPIRED',
 }
+
+export enum PaymentOrderPlanType {
+  PREMIUM_MONTHLY = 'PREMIUM_MONTHLY',
+  PREMIUM_ANNUAL = 'PREMIUM_ANNUAL',
+  BOOST = 'BOOST',
+}
+
+export enum PaymentOrderStatus {
+  PENDING = 'PENDING',
+  PAID = 'PAID',
+  FAILED = 'FAILED',
+}

@@ -3,7 +3,10 @@ import {
   Get,
   Patch,
   Put,
+  Post,
+  Delete,
   Body,
+  Param,
   Request,
   UseGuards,
 } from '@nestjs/common';
@@ -21,69 +24,41 @@ import {
   type UpdateAvailabilityInput,
 } from '@khadamat/contracts';
 
-/**
- * ProController
- *
- * Controller pour les endpoints de gestion du profil Pro.
- * Tous les endpoints sont protégés par JwtAuthGuard et RolesGuard (PRO uniquement).
- *
- * Routes :
- * - GET /api/pro/me : Récupérer le dashboard
- * - PATCH /api/pro/profile : Mettre à jour le profil (WhatsApp, ville)
- * - PUT /api/pro/services : Mettre à jour les services (UPSERT)
- * - PUT /api/pro/availability : Mettre à jour les disponibilités (REPLACE ALL)
- */
 @Controller('pro')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('PRO')
 export class ProController {
   constructor(private readonly proService: ProService) {}
 
-  /**
-   * GET /api/pro/me
-   *
-   * Récupère le dashboard complet du PRO :
-   * - user : Informations utilisateur
-   * - profile : Profil Pro (ville, whatsapp, KYC, etc.)
-   * - services : Services proposés
-   * - availability : Disponibilités hebdomadaires
-   */
   @Get('me')
   async getMyDashboard(@Request() req) {
     return this.proService.getMyDashboard(req.user.id);
   }
 
-  /**
-   * PATCH /api/pro/profile
-   *
-   * Met à jour le profil du PRO.
-   * - whatsapp : Numéro WhatsApp (requis, format 06XXXXXXXX ou 07XXXXXXXX)
-   * - cityId : Ville (optionnel, permet de corriger une erreur d'inscription)
-   */
   @Patch('profile')
   async updateProfile(
     @Request() req,
-    @Body(new ZodValidationPipe(UpdateProProfileSchema))
-    dto: UpdateProProfileInput,
+    @Body() dto: any,
   ) {
-    return this.proService.updateProfile(req.user.id, dto);
+    // Validate base fields via Zod
+    const baseFields: any = {};
+    if (dto.phone !== undefined) baseFields.phone = dto.phone;
+    if (dto.cityId !== undefined) baseFields.cityId = dto.cityId;
+    if (dto.whatsapp !== undefined) baseFields.whatsapp = dto.whatsapp;
+
+    // Only validate base fields if any are present
+    if (Object.keys(baseFields).length > 0) {
+      UpdateProProfileSchema.parse(baseFields);
+    }
+
+    // Pass all fields including bio and avatarUrl
+    return this.proService.updateProfile(req.user.id, {
+      ...baseFields,
+      bio: dto.bio,
+      avatarUrl: dto.avatarUrl,
+    });
   }
 
-  /**
-   * PUT /api/pro/services
-   *
-   * Met à jour les services proposés par le PRO.
-   * Stratégie UPSERT : Pour chaque service, on fait un upsert basé sur [proUserId, categoryId].
-   *
-   * Body : Array de services
-   * Chaque service contient :
-   * - categoryId : ID de la catégorie
-   * - pricingType : "FIXED" ou "RANGE"
-   * - fixedPriceMad : Prix fixe (requis si FIXED)
-   * - minPriceMad : Prix minimum (requis si RANGE)
-   * - maxPriceMad : Prix maximum (requis si RANGE)
-   * - isActive : Service actif ou non
-   */
   @Put('services')
   async updateServices(
     @Request() req,
@@ -93,19 +68,6 @@ export class ProController {
     return this.proService.updateServices(req.user.id, dto);
   }
 
-  /**
-   * PUT /api/pro/availability
-   *
-   * Met à jour les disponibilités hebdomadaires du PRO.
-   * Stratégie REPLACE ALL : Supprime toutes les disponibilités existantes et recrée les nouvelles.
-   *
-   * Body : Array de créneaux
-   * Chaque créneau contient :
-   * - dayOfWeek : Jour de la semaine (0=Dimanche, 1=Lundi, ..., 6=Samedi)
-   * - startMin : Heure de début en minutes depuis 00:00 (ex: 9h00 = 540)
-   * - endMin : Heure de fin en minutes depuis 00:00 (ex: 18h00 = 1080)
-   * - isActive : Créneau actif ou non
-   */
   @Put('availability')
   async updateAvailability(
     @Request() req,
@@ -113,5 +75,25 @@ export class ProController {
     dto: UpdateAvailabilityInput,
   ) {
     return this.proService.updateAvailability(req.user.id, dto);
+  }
+
+  // ── Portfolio ──
+
+  @Get('portfolio')
+  async getPortfolio(@Request() req) {
+    return this.proService.getPortfolio(req.user.id);
+  }
+
+  @Post('portfolio')
+  async addPortfolioImage(@Request() req, @Body() body: { url: string }) {
+    if (!body.url || typeof body.url !== 'string' || body.url.trim().length === 0) {
+      throw new Error('URL requise');
+    }
+    return this.proService.addPortfolioImage(req.user.id, body.url.trim());
+  }
+
+  @Delete('portfolio/:id')
+  async deletePortfolioImage(@Request() req, @Param('id') id: string) {
+    return this.proService.deletePortfolioImage(req.user.id, id);
   }
 }

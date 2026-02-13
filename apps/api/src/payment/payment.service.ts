@@ -7,15 +7,17 @@ import {
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
+import { CatalogResolverService } from '../catalog/catalog-resolver.service';
 import {
   SubscriptionPlan,
   SubscriptionStatus,
   BoostStatus,
+  PaymentOrderPlanType,
+  PaymentOrderStatus,
 } from './types/prisma-enums';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
 import {
   PAYMENT_PLANS,
-  PAYMENT_STATUS,
   BOOST_COOLDOWN_DAYS,
   BOOST_ACTIVE_DAYS,
   PlanType,
@@ -32,7 +34,10 @@ import {
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private catalogResolver: CatalogResolverService,
+  ) {}
 
   /**
    * Crée une demande de paiement (PENDING).
@@ -51,16 +56,21 @@ export class PaymentService {
 
     // 2. Logique Métier (Boost, Premium, Cooldown...)
     const now = new Date();
-    const plan = PAYMENT_PLANS[dto.planType];
+    const plan = PAYMENT_PLANS[dto.planType as PlanType];
 
     if (!plan) {
       throw new BadRequestException(`Plan invalide: ${dto.planType}`);
     }
 
-    if (dto.planType === 'BOOST') {
+    let resolvedCityId: string | null = null;
+    let resolvedCategoryId: string | null = null;
+
+    if (dto.planType === PaymentOrderPlanType.BOOST) {
       if (!dto.cityId || !dto.categoryId) {
         throw new BadRequestException('cityId et categoryId requis pour BOOST');
       }
+      resolvedCityId = await this.catalogResolver.resolveCityId(dto.cityId);
+      resolvedCategoryId = await this.catalogResolver.resolveCategoryId(dto.categoryId);
       if (proProfile.isPremium && proProfile.premiumActiveUntil && proProfile.premiumActiveUntil > now) {
         throw new BadRequestException('Exclusivité: Premium déjà actif, Boost non disponible');
       }
@@ -101,10 +111,10 @@ export class PaymentService {
         proUserId: userId,
         planType: dto.planType,
         amountCents,
-        status: PAYMENT_STATUS.PENDING,
+        status: PaymentOrderStatus.PENDING,
         provider: 'MANUAL',
-        cityId: dto.cityId || null,
-        categoryId: dto.categoryId || null,
+        cityId: resolvedCityId,
+        categoryId: resolvedCategoryId,
       },
     });
 
@@ -152,7 +162,7 @@ export class PaymentService {
       throw new NotFoundException(`Commande non trouvée: ${oid}`);
     }
 
-    if (order.status === PAYMENT_STATUS.PAID) {
+    if (order.status === PaymentOrderStatus.PAID) {
       throw new BadRequestException('Ce paiement a déjà été validé');
     }
 
@@ -160,7 +170,7 @@ export class PaymentService {
     const updatedOrder = await this.prisma.paymentOrder.update({
       where: { oid },
       data: {
-        status: PAYMENT_STATUS.PAID,
+        status: PaymentOrderStatus.PAID,
         paidAt: new Date(),
         adminNotes: adminNotes || 'Validé manuellement',
       },
@@ -189,14 +199,14 @@ export class PaymentService {
       throw new NotFoundException(`Commande non trouvée: ${oid}`);
     }
 
-    if (order.status !== PAYMENT_STATUS.PENDING) {
+    if (order.status !== PaymentOrderStatus.PENDING) {
       throw new BadRequestException('Seuls les paiements en attente peuvent être rejetés');
     }
 
     await this.prisma.paymentOrder.update({
       where: { oid },
       data: {
-        status: PAYMENT_STATUS.FAILED,
+        status: PaymentOrderStatus.FAILED,
         adminNotes: reason || 'Rejeté par admin',
       },
     });
@@ -215,7 +225,7 @@ export class PaymentService {
   async getPendingPayments(page: number = 1, limit: number = 20) {
     const skip = (page - 1) * limit;
     return this.prisma.paymentOrder.findMany({
-      where: { status: PAYMENT_STATUS.PENDING },
+      where: { status: PaymentOrderStatus.PENDING },
       skip,
       take: limit,
       orderBy: { createdAt: 'desc' },
@@ -261,7 +271,7 @@ export class PaymentService {
 
     await this.prisma.$transaction(async (tx) => {
       // Logique BOOST
-      if (order.planType === 'BOOST') {
+      if (order.planType === PaymentOrderPlanType.BOOST) {
         const startsAt = now;
         const endsAt = new Date(now.getTime() + BOOST_ACTIVE_DAYS * 24 * 60 * 60 * 1000);
 
@@ -291,7 +301,7 @@ export class PaymentService {
         });
 
         const subscriptionPlan =
-          order.planType === 'PREMIUM_MONTHLY'
+          order.planType === PaymentOrderPlanType.PREMIUM_MONTHLY
             ? SubscriptionPlan.PREMIUM_MONTHLY_NO_COMMIT
             : SubscriptionPlan.PREMIUM_ANNUAL_COMMIT;
 
@@ -300,9 +310,9 @@ export class PaymentService {
           status: SubscriptionStatus.ACTIVE,
           priceMad: Math.round(plan.priceMad),
           startedAt: now,
-          commitmentStartsAt: order.planType === 'PREMIUM_ANNUAL' ? now : undefined,
-          commitmentEndsAt: order.planType === 'PREMIUM_ANNUAL' ? endsAt : undefined,
-          endDate: endsAt,
+          commitmentStartsAt: order.planType === PaymentOrderPlanType.PREMIUM_ANNUAL ? now : undefined,
+          commitmentEndsAt: order.planType === PaymentOrderPlanType.PREMIUM_ANNUAL ? endsAt : undefined,
+          endedAt: endsAt,
         };
 
         if (existingSubscription) {
@@ -329,4 +339,5 @@ export class PaymentService {
 
     this.logger.log(`🚀 Plan activé: ${order.planType} pour User ${order.proUserId}`);
   }
+
 }

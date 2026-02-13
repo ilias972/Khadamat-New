@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../database/prisma.service';
-import type { GetSlotsInput, CreateBookingInput, UpdateBookingStatusInput } from '@khadamat/contracts';
+import { CatalogResolverService } from '../catalog/catalog-resolver.service';
+import type { GetSlotsInput, CreateBookingInput, UpdateBookingStatusInput, CancelBookingInput } from '@khadamat/contracts';
 import { BookingEventTypes, BookingEventPayload } from '../notifications/events/booking-events.types';
 
 /**
@@ -15,6 +16,7 @@ export class BookingService {
   constructor(
     private prisma: PrismaService,
     private eventEmitter: EventEmitter2,
+    private catalogResolver: CatalogResolverService,
   ) {}
 
   /**
@@ -32,7 +34,9 @@ export class BookingService {
    * @returns Array de strings (ex: ["09:00", "10:00", "11:00"])
    */
   async getAvailableSlots(dto: GetSlotsInput): Promise<string[]> {
-    const { proId, date, categoryId } = dto;
+    const proId = await this.resolveProId(dto.proId);
+    const { date } = dto;
+    const categoryId = await this.catalogResolver.resolveCategoryId(dto.categoryId);
 
     // 1. VALIDATION SERVICE
     // Vérifie que le Pro a un service actif pour ce categoryId
@@ -161,6 +165,9 @@ export class BookingService {
       throw new ForbiddenException('Seuls les clients peuvent créer des réservations');
     }
 
+    // Resolve proId (accepts publicId or cuid)
+    const resolvedProId = await this.resolveProId(dto.proId);
+
     // 1. Récupération User
     const user = await this.prisma.user.findUnique({
       where: { id: clientUserId },
@@ -174,12 +181,17 @@ export class BookingService {
       throw new BadRequestException('ADDRESS_REQUIRED');
     }
 
-    // 3. Récupération Pro (ville)
+    // 3. Récupération Pro (ville + KYC)
     const proProfile = await this.prisma.proProfile.findUnique({
-      where: { userId: dto.proId },
-      select: { cityId: true },
+      where: { userId: resolvedProId },
+      select: { cityId: true, kycStatus: true },
     });
     if (!proProfile) throw new NotFoundException('Professionnel non trouvé');
+
+    // 3b. KYC gate — seuls les pros APPROVED sont réservables
+    if (proProfile.kycStatus !== 'APPROVED') {
+      throw new ForbiddenException('Ce professionnel n\'est pas disponible à la réservation');
+    }
 
     // 4. City match
     if (user.cityId !== proProfile.cityId) {
@@ -192,9 +204,11 @@ export class BookingService {
     const [hour, minute] = dto.time.split(':').map(Number);
     const timeSlot = new Date(year, month - 1, day, hour, minute);
 
+    const categoryId = await this.catalogResolver.resolveCategoryId(dto.categoryId);
+
     // 6. DOUBLE CHECK DISPONIBILITÉ
     const availableSlots = await this.getAvailableSlots({
-      proId: dto.proId,
+      proId: resolvedProId,
       date: dto.date,
       categoryId: dto.categoryId,
     });
@@ -208,8 +222,8 @@ export class BookingService {
     const booking = await this.prisma.booking.create({
       data: {
         clientId: clientUserId,
-        proId: dto.proId,
-        categoryId: dto.categoryId,
+        proId: resolvedProId,
+        categoryId: categoryId,
         cityId: proProfile.cityId,
         timeSlot: timeSlot,
         status: 'PENDING',
@@ -230,10 +244,16 @@ export class BookingService {
       },
     });
 
-    // 8. ÉMETTRE ÉVÉNEMENT (aucune logique d'email/push ici)
+    // 8. PERSISTER ÉVÉNEMENT EN DB
+    await this.createBookingEvent(
+      this.prisma, booking.id, 'CREATED', clientUserId, 'CLIENT',
+      { categoryId: dto.categoryId, timeSlot: timeSlot.toISOString() },
+    );
+
+    // 9. ÉMETTRE ÉVÉNEMENT (aucune logique d'email/push ici)
     const eventPayload: BookingEventPayload = {
       bookingId: booking.id,
-      proId: dto.proId,
+      proId: resolvedProId,
       clientId: clientUserId,
       metadata: {
         categoryId: dto.categoryId,
@@ -367,6 +387,11 @@ export class BookingService {
         select: { id: true, status: true, timeSlot: true, proId: true },
       });
 
+      // PERSISTER ÉVÉNEMENT EN DB
+      await this.createBookingEvent(
+        this.prisma, booking.id, 'DECLINED', userId, 'PRO',
+      );
+
       // ÉMETTRE ÉVÉNEMENT ANNULATION
       const eventPayload: BookingEventPayload = {
         bookingId: booking.id,
@@ -438,6 +463,9 @@ export class BookingService {
         select: { id: true, status: true, timeSlot: true, proId: true, duration: true },
       });
 
+      // PERSISTER ÉVÉNEMENT CONFIRMED
+      await this.createBookingEvent(tx, bookingId, 'CONFIRMED', userId, 'PRO');
+
       // 8. NETTOYAGE - Annuler les réservations concurrentes
       const competingBookings = await tx.booking.findMany({
         where: {
@@ -454,8 +482,9 @@ export class BookingService {
         if (this.overlaps(targetStart, targetEnd, competing.timeSlot, competingEnd)) {
           await tx.booking.update({
             where: { id: competing.id },
-            data: { status: 'CANCELLED_AUTO_OVERLAP' },
+            data: { status: 'CANCELLED_AUTO_OVERLAP', cancelledAt: new Date() },
           });
+          await this.createBookingEvent(tx, competing.id, 'CANCELLED', null, null, { reason: 'auto_overlap' });
         }
       }
 
@@ -656,6 +685,12 @@ export class BookingService {
         select: { id: true, status: true, timeSlot: true, proId: true },
       });
 
+      // PERSISTER ÉVÉNEMENT EN DB
+      await this.createBookingEvent(
+        this.prisma, booking.id, 'DECLINED', userId, 'CLIENT',
+        { reason: 'Modification refusée par le client' },
+      );
+
       // ÉMETTRE ÉVÉNEMENT ANNULATION
       const eventPayload: BookingEventPayload = {
         bookingId: booking.id,
@@ -728,6 +763,9 @@ export class BookingService {
         select: { id: true, status: true, timeSlot: true, proId: true, duration: true },
       });
 
+      // PERSISTER ÉVÉNEMENT CONFIRMED (client accepte modification)
+      await this.createBookingEvent(tx, bookingId, 'CONFIRMED', userId, 'CLIENT', { modificationAccepted: true });
+
       // 8. NETTOYAGE - Annuler les réservations concurrentes
       const competingBookings = await tx.booking.findMany({
         where: {
@@ -744,8 +782,9 @@ export class BookingService {
         if (this.overlaps(targetStart, targetEnd, competing.timeSlot, competingEnd)) {
           await tx.booking.update({
             where: { id: competing.id },
-            data: { status: 'CANCELLED_AUTO_OVERLAP' },
+            data: { status: 'CANCELLED_AUTO_OVERLAP', cancelledAt: new Date() },
           });
+          await this.createBookingEvent(tx, competing.id, 'CANCELLED', null, null, { reason: 'auto_overlap' });
         }
       }
 
@@ -850,7 +889,119 @@ export class BookingService {
       },
     });
 
+    await this.createBookingEvent(this.prisma, bookingId, 'COMPLETED', userId, 'PRO');
+
     return updatedBooking;
+  }
+
+  /**
+   * cancelBooking
+   *
+   * Permet au CLIENT ou au PRO d'annuler une réservation CONFIRMED.
+   *
+   * CLIENT :
+   * - Si timeSlot > now + 24h → CANCELLED_BY_CLIENT
+   * - Si timeSlot <= now + 24h → CANCELLED_BY_CLIENT_LATE
+   * - Pas de reason requise
+   *
+   * PRO :
+   * - Status → CANCELLED_BY_PRO
+   * - reason obligatoire (5-200 chars)
+   */
+  async cancelBooking(
+    bookingId: string,
+    userId: string,
+    userRole: string,
+    dto: CancelBookingInput,
+  ) {
+    const booking = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+      select: { id: true, clientId: true, proId: true, status: true, timeSlot: true },
+    });
+
+    if (!booking) throw new NotFoundException('Réservation introuvable');
+
+    if (booking.status !== 'CONFIRMED') {
+      throw new BadRequestException('Seules les réservations confirmées peuvent être annulées');
+    }
+
+    const now = new Date();
+
+    if (userRole === 'CLIENT') {
+      if (booking.clientId !== userId) {
+        throw new ForbiddenException('Vous ne pouvez annuler que vos propres réservations');
+      }
+
+      const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const status = booking.timeSlot > twentyFourHoursFromNow
+        ? 'CANCELLED_BY_CLIENT'
+        : 'CANCELLED_BY_CLIENT_LATE';
+
+      const updated = await this.prisma.booking.update({
+        where: { id: bookingId },
+        data: { status, cancelledAt: now },
+        select: { id: true, status: true, timeSlot: true },
+      });
+
+      await this.createBookingEvent(this.prisma, bookingId, 'CANCELLED', userId, 'CLIENT', { status });
+
+      this.eventEmitter.emit(BookingEventTypes.CANCELLED, {
+        bookingId: booking.id,
+        proId: booking.proId,
+        clientId: booking.clientId,
+        reason: 'Annulation par le client',
+      } as BookingEventPayload);
+
+      return updated;
+    }
+
+    if (userRole === 'PRO') {
+      if (booking.proId !== userId) {
+        throw new ForbiddenException('Vous ne pouvez annuler que vos propres réservations');
+      }
+
+      if (!dto.reason || dto.reason.trim().length < 5) {
+        throw new BadRequestException('Le motif d\'annulation est obligatoire pour les professionnels (min 5 caractères)');
+      }
+
+      const updated = await this.prisma.booking.update({
+        where: { id: bookingId },
+        data: { status: 'CANCELLED_BY_PRO', cancelledAt: now, cancelReason: dto.reason },
+        select: { id: true, status: true, timeSlot: true },
+      });
+
+      await this.createBookingEvent(this.prisma, bookingId, 'CANCELLED', userId, 'PRO', { reason: dto.reason });
+
+      this.eventEmitter.emit(BookingEventTypes.CANCELLED, {
+        bookingId: booking.id,
+        proId: booking.proId,
+        clientId: booking.clientId,
+        reason: dto.reason,
+      } as BookingEventPayload);
+
+      return updated;
+    }
+
+    throw new ForbiddenException('Rôle non autorisé pour cette action');
+  }
+
+  /**
+   * resolveProId
+   * Accepts either a ProProfile.publicId (pro_<hex32>) or a User.id (cuid).
+   * Returns the internal userId (cuid) for use as FK.
+   */
+  private async resolveProId(input: string): Promise<string> {
+    if (/^pro_[0-9a-f]{32}$/.test(input)) {
+      const profile = await this.prisma.proProfile.findUnique({
+        where: { publicId: input },
+        select: { userId: true },
+      });
+      if (!profile) {
+        throw new NotFoundException('Professionnel non trouvé');
+      }
+      return profile.userId;
+    }
+    return input;
   }
 
   /**
@@ -952,4 +1103,29 @@ export class BookingService {
       console.error('Erreur automation back-to-back:', error);
     }
   }
+
+  /**
+   * createBookingEvent
+   * Persiste un événement dans la table BookingEvent.
+   * @param tx - Transaction Prisma ou PrismaService
+   */
+  private async createBookingEvent(
+    tx: any,
+    bookingId: string,
+    type: string,
+    actorUserId?: string,
+    actorRole?: string,
+    metadata?: Record<string, any>,
+  ) {
+    await tx.bookingEvent.create({
+      data: {
+        bookingId,
+        type,
+        actorUserId: actorUserId || null,
+        actorRole: actorRole || null,
+        metadata: metadata || null,
+      },
+    });
+  }
+
 }

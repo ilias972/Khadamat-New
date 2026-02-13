@@ -315,6 +315,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Profil utilisateur' })
   @ApiResponse({ status: 401, description: 'Non authentifié' })
   async getMe(@Request() req: any): Promise<PublicUser> {
-    return req.user;
+    const { publicId, ...rest } = req.user;
+    return { ...rest, id: publicId ?? rest.id };
   }
 }

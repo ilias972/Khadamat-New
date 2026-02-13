@@ -1,17 +1,19 @@
-import { IsString, IsIn, IsOptional } from 'class-validator';
-import { PlanType, PAYMENT_PLANS } from '../utils/payment.constants';
+import { IsString, IsIn, IsOptional, Matches } from 'class-validator';
+import { PaymentOrderPlanType } from '../types/prisma-enums';
 
 export class InitiatePaymentDto {
   @IsString()
-  @IsIn(['PREMIUM_MONTHLY', 'PREMIUM_ANNUAL', 'BOOST'])
-  planType: PlanType;
+  @IsIn([PaymentOrderPlanType.PREMIUM_MONTHLY, PaymentOrderPlanType.PREMIUM_ANNUAL, PaymentOrderPlanType.BOOST])
+  planType: PaymentOrderPlanType;
 
   // Requis uniquement pour BOOST
   @IsOptional()
   @IsString()
+  @Matches(/^city_[a-z]+_\d{3}$/, { message: 'cityId invalide' })
   cityId?: string;
 
   @IsOptional()
   @IsString()
+  @Matches(/^cat_[a-z]+_\d{3}$/, { message: 'categoryId invalide' })
   categoryId?: string;
 }

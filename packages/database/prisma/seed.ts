@@ -13,23 +13,18 @@ async function main() {
 
   console.log('🌱 Seeding database...\n');
 
-  // Helper function to generate cuid-like IDs
-  function generateId(prefix: string): string {
-    return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
-
   // 1. Seed Cities
   console.log('📍 Seeding cities...');
-  const casaId = 'city_casa_001';
-  const rabatId = 'city_rabat_002';
+  const casaId = 'city_casablanca_001';
+  const rabatId = 'city_rabatsale_002';
   const marrakechId = 'city_marrakech_003';
 
   await client.query(`
-    INSERT INTO "City" (id, name, slug, "createdAt")
+    INSERT INTO "City" (id, "publicId", name, slug, "createdAt")
     VALUES
-      ($1, 'Casablanca', 'casablanca', NOW()),
-      ($2, 'Rabat-Salé', 'rabat-sale', NOW()),
-      ($3, 'Marrakech', 'marrakech', NOW())
+      ($1, $1, 'Casablanca', 'casablanca', NOW()),
+      ($2, $2, 'Rabat-Salé', 'rabat-sale', NOW()),
+      ($3, $3, 'Marrakech', 'marrakech', NOW())
     ON CONFLICT (name) DO NOTHING
   `, [casaId, rabatId, marrakechId]);
 
@@ -45,16 +40,16 @@ async function main() {
   const jardinageId = 'cat_jardinage_008';
 
   await client.query(`
-    INSERT INTO "Category" (id, name, slug, "createdAt")
+    INSERT INTO "Category" (id, "publicId", name, slug, "createdAt")
     VALUES
-      ($1, 'Plomberie', 'plomberie', NOW()),
-      ($2, 'Électricité', 'electricite', NOW()),
-      ($3, 'Climatisation', 'climatisation', NOW()),
-      ($4, 'Serrurerie', 'serrurerie', NOW()),
-      ($5, 'Ménage', 'menage', NOW()),
-      ($6, 'Peinture', 'peinture', NOW()),
-      ($7, 'Bricolage', 'bricolage', NOW()),
-      ($8, 'Jardinage', 'jardinage', NOW())
+      ($1, $1, 'Plomberie', 'plomberie', NOW()),
+      ($2, $2, 'Électricité', 'electricite', NOW()),
+      ($3, $3, 'Climatisation', 'climatisation', NOW()),
+      ($4, $4, 'Serrurerie', 'serrurerie', NOW()),
+      ($5, $5, 'Ménage', 'menage', NOW()),
+      ($6, $6, 'Peinture', 'peinture', NOW()),
+      ($7, $7, 'Bricolage', 'bricolage', NOW()),
+      ($8, $8, 'Jardinage', 'jardinage', NOW())
     ON CONFLICT (name) DO NOTHING
   `, [plomberieId, electriciteId, climatisationId, serrurerieId, menageId, peintureId, bricolageId, jardinageId]);
 
@@ -65,54 +60,54 @@ async function main() {
   // Admin
   const adminId = 'user_admin_001';
   await client.query(`
-    INSERT INTO "User" (id, role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
-    VALUES ($1, 'ADMIN', 'ACTIVE', '+212600000000', 'admin@khadamat.com', $2, 'Admin', 'Khadamat', NOW(), NOW())
+    INSERT INTO "User" (id, "publicId", role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
+    VALUES ($1, $2, 'ADMIN', 'ACTIVE', '+212600000000', 'admin@khadamat.com', $3, 'Admin', 'Khadamat', NOW(), NOW())
     ON CONFLICT (phone) DO NOTHING
-  `, [adminId, hashedPassword]);
+  `, [adminId, 'usr_seed_admin_001', hashedPassword]);
 
   // Pro 1 - Casablanca
   const pro1Id = 'user_pro1_002';
   await client.query(`
-    INSERT INTO "User" (id, role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
-    VALUES ($1, 'PRO', 'ACTIVE', '+212611111111', 'pro1@khadamat.com', $2, 'Mohammed', 'Alami', NOW(), NOW())
+    INSERT INTO "User" (id, "publicId", role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
+    VALUES ($1, $2, 'PRO', 'ACTIVE', '+212611111111', 'pro1@khadamat.com', $3, 'Mohammed', 'Alami', NOW(), NOW())
     ON CONFLICT (phone) DO NOTHING
-  `, [pro1Id, hashedPassword]);
+  `, [pro1Id, 'usr_seed_pro1_002', hashedPassword]);
 
   await client.query(`
-    INSERT INTO "ProProfile" ("userId", "cityId", whatsapp, "kycStatus", "createdAt", "updatedAt")
-    VALUES ($1, $2, '+212611111111', 'NOT_SUBMITTED', NOW(), NOW())
+    INSERT INTO "ProProfile" ("userId", "publicId", "cityId", whatsapp, "kycStatus", "createdAt", "updatedAt")
+    VALUES ($1, $2, $3, '+212611111111', 'NOT_SUBMITTED', NOW(), NOW())
     ON CONFLICT ("userId") DO NOTHING
-  `, [pro1Id, casaId]);
+  `, [pro1Id, 'pro_seed_pro1_002', casaId]);
 
   // Pro 2 - Marrakech
   const pro2Id = 'user_pro2_003';
   await client.query(`
-    INSERT INTO "User" (id, role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
-    VALUES ($1, 'PRO', 'ACTIVE', '+212622222222', 'pro2@khadamat.com', $2, 'Fatima', 'Bennani', NOW(), NOW())
+    INSERT INTO "User" (id, "publicId", role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
+    VALUES ($1, $2, 'PRO', 'ACTIVE', '+212622222222', 'pro2@khadamat.com', $3, 'Fatima', 'Bennani', NOW(), NOW())
     ON CONFLICT (phone) DO NOTHING
-  `, [pro2Id, hashedPassword]);
+  `, [pro2Id, 'usr_seed_pro2_003', hashedPassword]);
 
   await client.query(`
-    INSERT INTO "ProProfile" ("userId", "cityId", whatsapp, "kycStatus", "createdAt", "updatedAt")
-    VALUES ($1, $2, '+212622222222', 'NOT_SUBMITTED', NOW(), NOW())
+    INSERT INTO "ProProfile" ("userId", "publicId", "cityId", whatsapp, "kycStatus", "createdAt", "updatedAt")
+    VALUES ($1, $2, $3, '+212622222222', 'NOT_SUBMITTED', NOW(), NOW())
     ON CONFLICT ("userId") DO NOTHING
-  `, [pro2Id, marrakechId]);
+  `, [pro2Id, 'pro_seed_pro2_003', marrakechId]);
 
   // Client 1
   const client1Id = 'user_client1_004';
   await client.query(`
-    INSERT INTO "User" (id, role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
-    VALUES ($1, 'CLIENT', 'ACTIVE', '+212633333333', 'client1@example.com', $2, 'Youssef', 'Idrissi', NOW(), NOW())
+    INSERT INTO "User" (id, "publicId", role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
+    VALUES ($1, $2, 'CLIENT', 'ACTIVE', '+212633333333', 'client1@example.com', $3, 'Youssef', 'Idrissi', NOW(), NOW())
     ON CONFLICT (phone) DO NOTHING
-  `, [client1Id, hashedPassword]);
+  `, [client1Id, 'usr_seed_cli1_004', hashedPassword]);
 
   // Client 2
   const client2Id = 'user_client2_005';
   await client.query(`
-    INSERT INTO "User" (id, role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
-    VALUES ($1, 'CLIENT', 'ACTIVE', '+212644444444', 'client2@example.com', $2, 'Salma', 'Tazi', NOW(), NOW())
+    INSERT INTO "User" (id, "publicId", role, status, phone, email, password, "firstName", "lastName", "createdAt", "updatedAt")
+    VALUES ($1, $2, 'CLIENT', 'ACTIVE', '+212644444444', 'client2@example.com', $3, 'Salma', 'Tazi', NOW(), NOW())
     ON CONFLICT (phone) DO NOTHING
-  `, [client2Id, hashedPassword]);
+  `, [client2Id, 'usr_seed_cli2_005', hashedPassword]);
 
   // 4. Seed ProServices
   console.log('🔧 Seeding pro services...');

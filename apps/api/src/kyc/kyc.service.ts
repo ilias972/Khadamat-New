@@ -1,39 +1,33 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, ConflictException, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
+import * as crypto from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { SubmitKycDto } from './kyc.dto';
 
-/**
- * KycService
- *
- * Service pour gérer le processus KYC (Know Your Customer) des professionnels.
- * Gère la soumission du dossier KYC avec CIN et photos.
- */
 @Injectable()
 export class KycService {
   private readonly logger = new Logger(KycService.name);
   private readonly kycDir = path.join(process.cwd(), 'uploads', 'kyc');
+  private readonly cinSalt: string;
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private config: ConfigService,
+  ) {
+    this.cinSalt = this.config.get<string>('CIN_HASH_SALT') || 'khadamat-cin-default-salt';
+  }
 
   /**
-   * submitKyc
-   *
-   * Soumet le dossier KYC d'un professionnel.
-   *
-   * Validation :
-   * - Vérifie que le PRO a un profil
-   * - Normalise le cinNumber (trim + uppercase)
-   * - Gère l'unicité du CIN (erreur P2002)
-   * - Met à jour kycStatus à PENDING
-   *
-   * @param userId - ID du PRO connecté
-   * @param dto - { cinNumber, frontUrl, backUrl }
-   * @returns ProProfile mis à jour
+   * Hash CIN number with salt using SHA-256
    */
+  private hashCin(cinNumber: string): string {
+    const normalized = cinNumber.trim().toUpperCase();
+    return crypto.createHash('sha256').update(normalized + this.cinSalt).digest('hex');
+  }
+
   async submitKyc(userId: string, dto: SubmitKycDto) {
-    // 1. Vérifier que le profil PRO existe
     const existingProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
     });
@@ -42,65 +36,57 @@ export class KycService {
       throw new NotFoundException('Profil Pro non trouvé');
     }
 
-    // 2. Normaliser le cinNumber (déjà fait par zod transform, mais on sécurise)
-    const normalizedCinNumber = dto.cinNumber.trim().toUpperCase();
+    const cinHash = this.hashCin(dto.cinNumber);
 
-    // 3. Mettre à jour le profil avec gestion d'erreur d'unicité
+    // Check uniqueness of cinHash
+    const existingCin = await this.prisma.proProfile.findFirst({
+      where: { cinHash, userId: { not: userId } },
+    });
+    if (existingCin) {
+      throw new ConflictException('Données en conflit');
+    }
+
     try {
       const updatedProfile = await this.prisma.proProfile.update({
         where: { userId },
         data: {
-          cinNumber: normalizedCinNumber,
-          kycCinFrontUrl: dto.frontUrl,
-          kycCinBackUrl: dto.backUrl,
-          kycStatus: 'PENDING', // Passe en attente de validation
-          kycRejectionReason: null, // Reset le motif de rejet si c'était un resoumission
+          cinHash,
+          kycCinFrontKey: dto.frontKey,
+          kycCinBackKey: dto.backKey,
+          kycStatus: 'PENDING',
+          kycRejectionReason: null,
         },
         select: {
           userId: true,
-          cinNumber: true,
           kycStatus: true,
-          kycCinFrontUrl: true,
-          kycCinBackUrl: true,
         },
       });
 
-      return updatedProfile;
+      return {
+        userId: updatedProfile.userId,
+        kycStatus: updatedProfile.kycStatus,
+        hasCinFront: !!dto.frontKey,
+        hasCinBack: !!dto.backKey,
+      };
     } catch (error: any) {
-      // Gestion de l'erreur d'unicité Prisma (P2002)
-      if (error.code === 'P2002' && error.meta?.target?.includes('cinNumber')) {
+      if (error.code === 'P2002') {
         throw new ConflictException('Données en conflit');
       }
-      throw error; // Relancer les autres erreurs
+      throw error;
     }
   }
 
-  /**
-   * resubmitKyc
-   *
-   * Re-soumet le dossier KYC après rejet (REJECTED → PENDING).
-   *
-   * - Accessible uniquement si kycStatus === 'REJECTED'
-   * - Met à jour cinNumber et/ou fichiers si fournis
-   * - Repasse le statut à PENDING
-   * - Efface le motif de rejet
-   *
-   * @param userId - ID du PRO connecté
-   * @param dto - { cinNumber?, frontUrl?, backUrl? }
-   * @returns ProProfile mis à jour
-   */
   async resubmitKyc(
     userId: string,
-    dto: { cinNumber?: string; frontUrl?: string; backUrl?: string },
+    dto: { cinNumber?: string; frontKey?: string; backKey?: string },
   ) {
-    // 1. Vérifier que le profil existe
     const existingProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
       select: {
         kycStatus: true,
-        cinNumber: true,
-        kycCinFrontUrl: true,
-        kycCinBackUrl: true,
+        cinHash: true,
+        kycCinFrontKey: true,
+        kycCinBackKey: true,
       },
     });
 
@@ -108,84 +94,74 @@ export class KycService {
       throw new NotFoundException('Profil Pro non trouvé');
     }
 
-    // 2. Vérifier que le statut est REJECTED
     if (existingProfile.kycStatus !== 'REJECTED') {
       throw new BadRequestException(
         'La re-soumission est autorisée uniquement si le dossier a été rejeté',
       );
     }
 
-    // 3. Préparer les données de mise à jour
     const updateData: any = {
-      kycStatus: 'PENDING', // Repasser à PENDING
-      kycRejectionReason: null, // Effacer le motif de rejet
+      kycStatus: 'PENDING',
+      kycRejectionReason: null,
     };
 
-    // Mettre à jour cinNumber si fourni
     if (dto.cinNumber) {
-      const normalizedCinNumber = dto.cinNumber.trim().toUpperCase();
-
-      // Vérifier l'unicité si changement de numéro
-      if (normalizedCinNumber !== existingProfile.cinNumber) {
-        const existingCin = await this.prisma.proProfile.findUnique({
-          where: { cinNumber: normalizedCinNumber },
+      const cinHash = this.hashCin(dto.cinNumber);
+      // Check uniqueness
+      if (cinHash !== existingProfile.cinHash) {
+        const existingCin = await this.prisma.proProfile.findFirst({
+          where: { cinHash, userId: { not: userId } },
         });
         if (existingCin) {
           throw new ConflictException('Données en conflit');
         }
       }
-
-      updateData.cinNumber = normalizedCinNumber;
+      updateData.cinHash = cinHash;
     }
 
-    // Mettre à jour les URLs si fournies
-    if (dto.frontUrl) {
-      updateData.kycCinFrontUrl = dto.frontUrl;
+    if (dto.frontKey) {
+      updateData.kycCinFrontKey = dto.frontKey;
     }
-    if (dto.backUrl) {
-      updateData.kycCinBackUrl = dto.backUrl;
+    if (dto.backKey) {
+      updateData.kycCinBackKey = dto.backKey;
     }
 
-    // 4. Mettre à jour le profil
     try {
       const updatedProfile = await this.prisma.proProfile.update({
         where: { userId },
         data: updateData,
         select: {
           userId: true,
-          cinNumber: true,
           kycStatus: true,
-          kycCinFrontUrl: true,
-          kycCinBackUrl: true,
-          kycRejectionReason: true,
+          kycCinFrontKey: true,
+          kycCinBackKey: true,
         },
       });
 
-      return updatedProfile;
+      return {
+        userId: updatedProfile.userId,
+        kycStatus: updatedProfile.kycStatus,
+        hasCinFront: !!updatedProfile.kycCinFrontKey,
+        hasCinBack: !!updatedProfile.kycCinBackKey,
+      };
     } catch (error: any) {
-      // Gestion de l'erreur d'unicité Prisma (P2002)
-      if (error.code === 'P2002' && error.meta?.target?.includes('cinNumber')) {
+      if (error.code === 'P2002') {
         throw new ConflictException('Données en conflit');
       }
       throw error;
     }
   }
 
-  /**
-   * getMyKycStatus
-   *
-   * Récupère le statut KYC du PRO connecté.
-   *
-   * @param userId - ID du PRO connecté
-   * @returns { kycStatus, kycRejectionReason }
-   */
   async getMyKycStatus(userId: string) {
     const profile = await this.prisma.proProfile.findUnique({
       where: { userId },
       select: {
         kycStatus: true,
         kycRejectionReason: true,
-        cinNumber: true,
+        cinHash: true,
+        kycCinFrontKey: true,
+        kycCinBackKey: true,
+        kycSelfieKey: true,
       },
     });
 
@@ -196,67 +172,107 @@ export class KycService {
     return {
       kycStatus: profile.kycStatus,
       kycRejectionReason: profile.kycRejectionReason,
-      hasCinNumber: !!profile.cinNumber,
+      hasCinNumber: !!profile.cinHash,
+      hasCinFront: !!profile.kycCinFrontKey,
+      hasCinBack: !!profile.kycCinBackKey,
+      hasSelfie: !!profile.kycSelfieKey,
     };
   }
 
-  private static readonly STREAM_TIMEOUT_MS = 15_000;
+  // ═══════════════════════════════════════════════════════════════
+  //  KYC FILE ACCESS (secure download proxy)
+  // ═══════════════════════════════════════════════════════════════
 
-  async getKycFile(
-    requestingUserId: string,
-    requestingUserRole: string,
-    filename: string,
-    clientIp: string,
-  ): Promise<{ stream: fs.ReadStream }> {
-    if (!filename || typeof filename !== 'string') {
-      this.logAudit(requestingUserId, filename || '', 'DENY', clientIp);
-      throw new BadRequestException('Nom de fichier invalide');
+  private static readonly STREAM_TIMEOUT_MS = 15_000;
+  private static readonly VALID_TYPES = ['cin-front', 'cin-back', 'selfie'] as const;
+
+  async resolveKycFileKey(
+    proPublicId: string,
+    type: 'cin-front' | 'cin-back' | 'selfie',
+  ): Promise<string> {
+    const selectField =
+      type === 'cin-front' ? 'kycCinFrontKey' :
+      type === 'cin-back' ? 'kycCinBackKey' :
+      'kycSelfieKey';
+
+    const profile = await this.prisma.proProfile.findUnique({
+      where: { publicId: proPublicId },
+      select: { [selectField]: true },
+    });
+
+    if (!profile) {
+      throw new NotFoundException('Profil Pro non trouvé');
     }
 
+    const key = (profile as any)[selectField];
+    if (!key) {
+      throw new NotFoundException('Fichier non trouvé');
+    }
+
+    return key;
+  }
+
+  async assertAccess(
+    requestingUser: { id: string; role: string },
+    proPublicId: string,
+  ): Promise<{ proUserId: string }> {
+    const profile = await this.prisma.proProfile.findUnique({
+      where: { publicId: proPublicId },
+      select: { userId: true },
+    });
+
+    if (!profile) {
+      throw new NotFoundException('Profil Pro non trouvé');
+    }
+
+    if (requestingUser.role === 'ADMIN') {
+      return { proUserId: profile.userId };
+    }
+
+    if (requestingUser.role === 'PRO' && profile.userId === requestingUser.id) {
+      return { proUserId: profile.userId };
+    }
+
+    throw new ForbiddenException('Accès non autorisé');
+  }
+
+  async logAccess(
+    userId: string,
+    key: string,
+    result: 'ALLOW' | 'DENY',
+    ip: string,
+  ): Promise<void> {
+    this.prisma.kycAccessLog
+      .create({
+        data: { userId, filename: key, result, ip },
+      })
+      .catch((err) => {
+        this.logger.error(`KYC audit write failed: ${err.message}`);
+      });
+  }
+
+  streamFile(
+    key: string,
+    res: any,
+  ): void {
+    // Extract filename from key (may be full URL from migration or just a filename)
+    const filename = path.basename(key);
     const safeFilename = path.basename(filename);
+
     if (safeFilename !== filename || filename.includes('..')) {
-      this.logAudit(requestingUserId, filename, 'DENY', clientIp);
       throw new BadRequestException('Nom de fichier invalide');
     }
 
     const ext = path.extname(safeFilename).toLowerCase();
     const allowedExts = ['.jpg', '.jpeg', '.png', '.webp'];
     if (!allowedExts.includes(ext)) {
-      this.logAudit(requestingUserId, safeFilename, 'DENY', clientIp);
       throw new BadRequestException('Type de fichier non autorisé');
-    }
-
-    const profile = await this.prisma.proProfile.findFirst({
-      where: {
-        OR: [
-          { kycCinFrontUrl: { endsWith: `/${safeFilename}` } },
-          { kycCinBackUrl: { endsWith: `/${safeFilename}` } },
-        ],
-      },
-      select: {
-        userId: true,
-        kycCinFrontUrl: true,
-        kycCinBackUrl: true,
-      },
-    });
-
-    if (!profile) {
-      this.logAudit(requestingUserId, safeFilename, 'DENY', clientIp);
-      throw new NotFoundException('Fichier non trouvé');
-    }
-
-    if (requestingUserRole !== 'ADMIN' && profile.userId !== requestingUserId) {
-      this.logAudit(requestingUserId, safeFilename, 'DENY', clientIp);
-      throw new ForbiddenException('Accès non autorisé');
     }
 
     const filePath = path.join(this.kycDir, safeFilename);
     if (!fs.existsSync(filePath)) {
-      this.logAudit(requestingUserId, safeFilename, 'DENY', clientIp);
       throw new NotFoundException('Fichier non trouvé');
     }
-
-    this.logAudit(requestingUserId, safeFilename, 'ALLOW', clientIp);
 
     const stream = fs.createReadStream(filePath);
 
@@ -268,21 +284,29 @@ export class KycService {
     stream.on('error', () => clearTimeout(timeout));
     stream.on('close', () => clearTimeout(timeout));
 
-    return { stream };
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'attachment; filename="kyc-file"',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Download-Options': 'noopen',
+      'Content-Security-Policy': "default-src 'none'",
+    });
+
+    stream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(500).end();
+      } else {
+        res.end();
+      }
+    });
+
+    stream.pipe(res);
   }
 
-  private logAudit(
-    userId: string,
-    filename: string,
-    result: 'ALLOW' | 'DENY',
-    ip: string,
-  ): void {
-    this.prisma.kycAccessLog
-      .create({
-        data: { userId, filename, result, ip },
-      })
-      .catch((err) => {
-        this.logger.error(`KYC audit write failed: ${err.message}`);
-      });
+  static isValidType(type: string): type is 'cin-front' | 'cin-back' | 'selfie' {
+    return (KycService.VALID_TYPES as readonly string[]).includes(type);
   }
 }

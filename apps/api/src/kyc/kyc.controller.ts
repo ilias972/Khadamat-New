@@ -4,6 +4,7 @@ import {
   Get,
   Body,
   Param,
+  Query,
   Request,
   Res,
   UseGuards,
@@ -15,7 +16,6 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
-import { ConfigService } from '@nestjs/config';
 import { ApiConsumes } from '@nestjs/swagger';
 import { KycService } from './kyc.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -25,37 +25,19 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { multerConfig } from './multer.config';
 import { SubmitKycSchema, type SubmitKycDto, type UploadResponseDto } from './kyc.dto';
 
-/**
- * KycController
- *
- * Controller pour la gestion du KYC (Know Your Customer) des professionnels.
- * Tous les endpoints sont protégés par JwtAuthGuard + RolesGuard (PRO uniquement).
- *
- * Routes :
- * - POST /api/kyc/upload : Upload d'une image CIN (recto ou verso)
- * - POST /api/kyc/submit : Soumission du dossier KYC complet
- * - GET /api/kyc/status : Récupérer le statut KYC
- */
 @Controller('kyc')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('PRO')
 export class KycController {
   constructor(
     private readonly kycService: KycService,
-    private readonly config: ConfigService,
   ) {}
 
   /**
    * POST /api/kyc/upload
    *
-   * Upload d'une image CIN (recto ou verso).
-   * Retourne l'URL publique du fichier uploadé.
-   *
-   * Sécurité :
-   * - Accepte uniquement images (jpg, png, webp)
-   * - Limite : 5MB
-   * - Stockage local : ./uploads/kyc/
-   * - Fichier renommé avec UUID
+   * Upload d'une image CIN.
+   * Retourne la key privée (jamais une URL publique).
    */
   @Post('upload')
   @UseInterceptors(FileInterceptor('file', multerConfig))
@@ -64,26 +46,14 @@ export class KycController {
       throw new BadRequestException('Aucun fichier fourni');
     }
 
-    // Construire l'URL publique
-    const baseUrl = this.config.get<string>('PUBLIC_URL') || 'http://localhost:3001';
-    const publicUrl = `${baseUrl}/uploads/kyc/${file.filename}`;
-
     return {
-      url: publicUrl,
+      key: file.filename,
       filename: file.filename,
     };
   }
 
   /**
    * POST /api/kyc/submit
-   *
-   * Soumet le dossier KYC complet avec :
-   * - cinNumber : Numéro CIN (normalisé automatiquement)
-   * - frontUrl : URL de la photo CIN recto
-   * - backUrl : URL de la photo CIN verso
-   *
-   * Passe le kycStatus à PENDING.
-   * Gère l'erreur d'unicité du CIN.
    */
   @Post('submit')
   async submitKyc(
@@ -95,15 +65,6 @@ export class KycController {
 
   /**
    * POST /api/kyc/resubmit
-   *
-   * Re-soumission du dossier KYC après rejet.
-   * Accessible uniquement si kycStatus === 'REJECTED'.
-   *
-   * Format : multipart/form-data
-   * Champs optionnels : cinNumber (texte), cinFront (fichier), cinBack (fichier)
-   * - Si cinNumber fourni, met à jour le numéro CIN
-   * - Si fichiers fournis, met à jour les URLs
-   * - Repasse le statut à PENDING
    */
   @Post('resubmit')
   @UseInterceptors(
@@ -125,7 +86,6 @@ export class KycController {
       cinBack?: Express.Multer.File[];
     },
   ) {
-    // Vérifier que le statut est REJECTED
     const status = await this.kycService.getMyKycStatus(req.user.id);
     if (status.kycStatus !== 'REJECTED') {
       throw new ForbiddenException(
@@ -133,20 +93,16 @@ export class KycController {
       );
     }
 
-    // Extract files
     const cinFrontFile = files?.cinFront?.[0];
     const cinBackFile = files?.cinBack?.[0];
 
-    // Générer les URLs publiques pour les nouveaux fichiers
-    const baseUrl = this.config.get<string>('PUBLIC_URL') || 'http://localhost:3001';
-    const frontUrl = cinFrontFile ? `${baseUrl}/uploads/kyc/${cinFrontFile.filename}` : undefined;
-    const backUrl = cinBackFile ? `${baseUrl}/uploads/kyc/${cinBackFile.filename}` : undefined;
+    const frontKey = cinFrontFile ? cinFrontFile.filename : undefined;
+    const backKey = cinBackFile ? cinBackFile.filename : undefined;
 
-    // Construire le DTO de re-soumission
     const resubmitDto = {
       cinNumber: body.cinNumber?.trim().toUpperCase() || undefined,
-      frontUrl,
-      backUrl,
+      frontKey,
+      backKey,
     };
 
     return this.kycService.resubmitKyc(req.user.id, resubmitDto);
@@ -154,51 +110,63 @@ export class KycController {
 
   /**
    * GET /api/kyc/status
-   *
-   * Récupère le statut KYC du PRO connecté.
-   * Retourne : { kycStatus, kycRejectionReason, hasCinNumber }
    */
   @Get('status')
   async getMyKycStatus(@Request() req) {
     return this.kycService.getMyKycStatus(req.user.id);
   }
 
-  @Get('file/:filename')
-  @UseGuards(JwtAuthGuard)
+  /**
+   * GET /api/kyc/files/:type/download?proPublicId=...
+   *
+   * Secure download proxy for KYC files.
+   * Access: ADMIN (any pro) or PRO owner only. CLIENT forbidden.
+   * All access (allow + deny) is logged in KycAccessLog.
+   */
+  @Get('files/:type/download')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('PRO', 'ADMIN')
-  async getKycFile(
+  async downloadKycFile(
     @Request() req,
-    @Param('filename') filename: string,
+    @Param('type') type: string,
+    @Query('proPublicId') proPublicId: string,
     @Res() res: Response,
   ) {
+    const clientIp = req.headers['x-forwarded-for'] || req.ip || 'unknown';
     const userId: string = req.user.id;
 
-    const { stream } = await this.kycService.getKycFile(
-      userId,
-      req.user.role,
-      filename,
-      req.ip || 'unknown',
-    );
+    if (!KycService.isValidType(type)) {
+      await this.kycService.logAccess(userId, `invalid-type:${type}`, 'DENY', clientIp);
+      throw new BadRequestException('Type de fichier invalide. Accepté : cin-front, cin-back, selfie');
+    }
 
-    res.set({
-      'Content-Type': 'application/octet-stream',
-      'Content-Disposition': 'attachment; filename="kyc-file"',
-      'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-      'Pragma': 'no-cache',
-      'Expires': '0',
-      'X-Content-Type-Options': 'nosniff',
-      'X-Download-Options': 'noopen',
-      'Content-Security-Policy': "default-src 'none'",
-    });
+    if (!proPublicId) {
+      await this.kycService.logAccess(userId, 'missing-proPublicId', 'DENY', clientIp);
+      throw new BadRequestException('proPublicId requis');
+    }
 
-    stream.on('error', () => {
-      if (!res.headersSent) {
-        res.status(500).end();
-      } else {
-        res.end();
-      }
-    });
+    // AuthZ check
+    try {
+      await this.kycService.assertAccess(
+        { id: userId, role: req.user.role },
+        proPublicId,
+      );
+    } catch (err) {
+      await this.kycService.logAccess(userId, `${proPublicId}/${type}`, 'DENY', clientIp);
+      throw err;
+    }
 
-    stream.pipe(res);
+    // Resolve file key
+    let key: string;
+    try {
+      key = await this.kycService.resolveKycFileKey(proPublicId, type);
+    } catch (err) {
+      await this.kycService.logAccess(userId, `${proPublicId}/${type}`, 'DENY', clientIp);
+      throw err;
+    }
+
+    // Log allow and stream
+    await this.kycService.logAccess(userId, key, 'ALLOW', clientIp);
+    this.kycService.streamFile(key, res);
   }
 }

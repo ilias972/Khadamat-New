@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+const CITY_ID_REGEX = /^city_[a-z]+_\d{3}$/;
+const CATEGORY_ID_REGEX = /^cat_[a-z]+_\d{3}$/;
+
 /**
  * UpdateProProfileSchema
  *
@@ -14,7 +17,7 @@ export const UpdateProProfileSchema = z.object({
     .string()
     .regex(/^(06|07)\d{8}$/, 'Format invalide. Ex: 0612345678')
     .optional(),
-  cityId: z.string().cuid().optional(),
+  cityId: z.string().regex(CITY_ID_REGEX, 'cityId invalide').optional(),
   whatsapp: z
     .string()
     .regex(/^(06|07)\d{8}$/, 'Format invalide. Ex: 0612345678')
@@ -40,7 +43,7 @@ export type UpdateProProfileInput = z.infer<typeof UpdateProProfileSchema>;
  */
 export const ProServiceSchema = z
   .object({
-    categoryId: z.string().cuid(),
+    categoryId: z.string().regex(CATEGORY_ID_REGEX, 'categoryId invalide'),
     pricingType: z.enum(['FIXED', 'RANGE']),
     fixedPriceMad: z.number().int().positive().optional(),
     minPriceMad: z.number().int().positive().optional(),

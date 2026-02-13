@@ -18,6 +18,8 @@ import { PaymentModule } from './payment/payment.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { KycModule } from './kyc/kyc.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
+import { FavoritesModule } from './favorites/favorites.module';
+import { ReviewsModule } from './reviews/reviews.module';
 
 @Module({
   imports: [
@@ -46,6 +48,8 @@ import { NewsletterModule } from './newsletter/newsletter.module';
     NotificationsModule,
     KycModule,
     NewsletterModule,
+    FavoritesModule,
+    ReviewsModule,
   ],
   controllers: [HealthController],
   providers: [

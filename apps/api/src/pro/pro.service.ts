@@ -1,41 +1,47 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { CatalogResolverService } from '../catalog/catalog-resolver.service';
 import type {
   UpdateProProfileInput,
   UpdateServicesInput,
   UpdateAvailabilityInput,
 } from '@khadamat/contracts';
 
-/**
- * ProService
- *
- * Service pour la gestion du profil et de la configuration des Professionnels.
- * Toutes les méthodes requièrent que l'utilisateur soit authentifié et ait le rôle PRO.
- */
+const FREE_BIO_MAX = 100;
+const PREMIUM_BIO_MAX = 500;
+const FREE_SERVICES_MAX = 1;
+const PREMIUM_SERVICES_MAX = 3;
+const PORTFOLIO_MAX = 6;
+
 @Injectable()
 export class ProService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private catalogResolver: CatalogResolverService,
+  ) {}
 
   /**
-   * getMyDashboard
-   *
-   * Récupère toutes les informations du dashboard du PRO :
-   * - user : Informations utilisateur de base
-   * - profile : Profil Pro (ville, whatsapp, KYC, etc.)
-   * - services : Liste des services proposés
-   * - availability : Disponibilités hebdomadaires
-   *
-   * @param userId - ID de l'utilisateur PRO
-   * @returns Dashboard complet du PRO
+   * Source de vérité Premium : ProProfile.isPremium + premiumActiveUntil
    */
+  async isPremiumPro(userId: string): Promise<boolean> {
+    const profile = await this.prisma.proProfile.findUnique({
+      where: { userId },
+      select: { isPremium: true, premiumActiveUntil: true },
+    });
+    if (!profile) return false;
+    if (!profile.isPremium) return false;
+    if (profile.premiumActiveUntil && profile.premiumActiveUntil < new Date()) return false;
+    return true;
+  }
+
   async getMyDashboard(userId: string) {
-    // Vérifier que le profil PRO existe
     const proProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
       include: {
         user: {
           select: {
             id: true,
+            publicId: true,
             role: true,
             status: true,
             phone: true,
@@ -44,9 +50,11 @@ export class ProService {
             lastName: true,
             cityId: true,
             addressLine: true,
+            avatarUrl: true,
             city: {
               select: {
                 id: true,
+                publicId: true,
                 name: true,
               },
             },
@@ -56,6 +64,7 @@ export class ProService {
         city: {
           select: {
             id: true,
+            publicId: true,
             name: true,
             slug: true,
           },
@@ -65,6 +74,7 @@ export class ProService {
             category: {
               select: {
                 id: true,
+                publicId: true,
                 name: true,
                 slug: true,
               },
@@ -79,6 +89,10 @@ export class ProService {
             dayOfWeek: 'asc',
           },
         },
+        portfolio: {
+          orderBy: { createdAt: 'desc' },
+          take: PORTFOLIO_MAX,
+        },
       },
     });
 
@@ -86,42 +100,70 @@ export class ProService {
       throw new NotFoundException('Profil Pro non trouvé');
     }
 
+    // Rating aggregates
+    const reviewAgg = await this.prisma.review.aggregate({
+      where: { proId: userId },
+      _avg: { rating: true },
+      _count: { rating: true },
+    });
+
+    // Last 5 reviews
+    const lastReviews = await this.prisma.review.findMany({
+      where: { proId: userId },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: {
+        id: true,
+        rating: true,
+        comment: true,
+        createdAt: true,
+      },
+    });
+
+    const userCityId = proProfile.user.city?.publicId ?? proProfile.user.cityId;
+    const profileCityId = proProfile.city?.publicId ?? proProfile.cityId;
+
     return {
-      user: proProfile.user,
+      user: {
+        ...proProfile.user,
+        id: proProfile.user.publicId ?? proProfile.user.id,
+        cityId: userCityId,
+        city: proProfile.user.city
+          ? { id: proProfile.user.city.publicId ?? proProfile.user.city.id, name: proProfile.user.city.name }
+          : null,
+      },
       profile: {
         userId: proProfile.userId,
-        cityId: proProfile.cityId,
-        city: proProfile.city,
+        publicId: proProfile.publicId,
+        cityId: profileCityId,
+        city: proProfile.city
+          ? { id: proProfile.city.publicId ?? proProfile.city.id, name: proProfile.city.name, slug: proProfile.city.slug }
+          : null,
         whatsapp: proProfile.whatsapp,
+        bio: proProfile.bio,
         kycStatus: proProfile.kycStatus,
         isPremium: proProfile.isPremium,
         premiumActiveUntil: proProfile.premiumActiveUntil,
         boostActiveUntil: proProfile.boostActiveUntil,
         createdAt: proProfile.createdAt,
         updatedAt: proProfile.updatedAt,
+        ratingAvg: reviewAgg._avg.rating ? Math.round(reviewAgg._avg.rating * 10) / 10 : null,
+        ratingCount: reviewAgg._count.rating,
+        lastReviews,
       },
-      services: proProfile.services,
+      services: proProfile.services.map((service) => ({
+        ...service,
+        categoryId: service.category?.publicId ?? service.categoryId,
+        category: service.category
+          ? { id: service.category.publicId ?? service.category.id, name: service.category.name, slug: service.category.slug }
+          : service.category,
+      })),
       availability: proProfile.weeklyAvailability,
+      portfolio: proProfile.portfolio,
     };
   }
 
-  /**
-   * updateProfile
-   *
-   * Met à jour le profil du PRO (WhatsApp, ville, téléphone).
-   *
-   * IMPORTANT: Synchronisation sur DEUX tables :
-   * - User.cityId (source de vérité pour l'affichage)
-   * - User.phone (identifiant unique, utilisé pour le login)
-   * - ProProfile.cityId (nécessaire pour le filtrage de recherche)
-   * - ProProfile.whatsapp (numéro WhatsApp distinct)
-   *
-   * @param userId - ID de l'utilisateur PRO
-   * @param dto - Données de mise à jour
-   * @returns Profil Pro mis à jour avec User
-   */
-  async updateProfile(userId: string, dto: UpdateProProfileInput) {
-    // Vérifier que le profil existe
+  async updateProfile(userId: string, dto: UpdateProProfileInput & { bio?: string; avatarUrl?: string }) {
     const existingProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
     });
@@ -130,22 +172,25 @@ export class ProService {
       throw new NotFoundException('Profil Pro non trouvé');
     }
 
-    // Vérifier que la ville existe si cityId est fourni
-    if (dto.cityId) {
-      const city = await this.prisma.city.findUnique({
-        where: { id: dto.cityId },
-      });
-      if (!city) {
-        throw new BadRequestException('Données invalides');
+    // Bio validation
+    if (dto.bio !== undefined) {
+      const isPremium = await this.isPremiumPro(userId);
+      const maxLen = isPremium ? PREMIUM_BIO_MAX : FREE_BIO_MAX;
+      if (dto.bio.length > maxLen) {
+        throw new BadRequestException('BIO_TOO_LONG');
       }
     }
 
-    // Vérifier que le téléphone n'est pas déjà utilisé par un autre utilisateur
+    let resolvedCityId: string | undefined;
+    if (dto.cityId) {
+      resolvedCityId = await this.catalogResolver.resolveCityId(dto.cityId);
+    }
+
     if (dto.phone) {
       const existingPhone = await this.prisma.user.findFirst({
         where: {
           phone: dto.phone,
-          id: { not: userId }, // Exclure l'utilisateur actuel
+          id: { not: userId },
         },
       });
       if (existingPhone) {
@@ -153,12 +198,11 @@ export class ProService {
       }
     }
 
-    // Transaction : Mettre à jour User ET ProProfile simultanément
     const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Mettre à jour User (cityId + phone)
-      const userUpdateData: { cityId?: string; phone?: string } = {};
-      if (dto.cityId) userUpdateData.cityId = dto.cityId;
+      const userUpdateData: { cityId?: string; phone?: string; avatarUrl?: string } = {};
+      if (resolvedCityId) userUpdateData.cityId = resolvedCityId;
       if (dto.phone) userUpdateData.phone = dto.phone;
+      if (dto.avatarUrl !== undefined) userUpdateData.avatarUrl = dto.avatarUrl;
 
       const updatedUser = await tx.user.update({
         where: { id: userId },
@@ -173,20 +217,21 @@ export class ProService {
           lastName: true,
           cityId: true,
           addressLine: true,
+          avatarUrl: true,
           city: {
             select: {
               id: true,
+              publicId: true,
               name: true,
             },
           },
         },
       });
 
-      // 2. Mettre à jour ProProfile (cityId pour le filtrage)
-      // Note: whatsapp n'est plus modifié depuis le dashboard (champ deprecated)
-      const profileUpdateData: { cityId?: string; whatsapp?: string } = {};
-      if (dto.cityId) profileUpdateData.cityId = dto.cityId;
-      if (dto.whatsapp) profileUpdateData.whatsapp = dto.whatsapp; // Rétrocompatibilité
+      const profileUpdateData: { cityId?: string; whatsapp?: string; bio?: string } = {};
+      if (resolvedCityId) profileUpdateData.cityId = resolvedCityId;
+      if (dto.whatsapp) profileUpdateData.whatsapp = dto.whatsapp;
+      if (dto.bio !== undefined) profileUpdateData.bio = dto.bio;
 
       const updatedProfile = await tx.proProfile.update({
         where: { userId },
@@ -195,6 +240,7 @@ export class ProService {
           city: {
             select: {
               id: true,
+              publicId: true,
               name: true,
               slug: true,
             },
@@ -205,21 +251,25 @@ export class ProService {
       return { user: updatedUser, profile: updatedProfile };
     });
 
-    return result;
+    return {
+      user: {
+        ...result.user,
+        cityId: result.user.city?.publicId ?? result.user.cityId,
+        city: result.user.city
+          ? { id: result.user.city.publicId ?? result.user.city.id, name: result.user.city.name }
+          : null,
+      },
+      profile: {
+        ...result.profile,
+        cityId: result.profile.city?.publicId ?? result.profile.cityId,
+        city: result.profile.city
+          ? { id: result.profile.city.publicId ?? result.profile.city.id, name: result.profile.city.name, slug: result.profile.city.slug }
+          : null,
+      },
+    };
   }
 
-  /**
-   * updateServices
-   *
-   * Met à jour les services proposés par le PRO.
-   * Stratégie REPLACE ALL : Supprime tous les services existants et recrée les nouveaux.
-   *
-   * @param userId - ID de l'utilisateur PRO
-   * @param dto - Array de services à créer
-   * @returns Liste complète des services mis à jour
-   */
   async updateServices(userId: string, dto: UpdateServicesInput) {
-    // Vérifier que le profil existe
     const existingProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
     });
@@ -228,38 +278,36 @@ export class ProService {
       throw new NotFoundException('Profil Pro non trouvé');
     }
 
-    // Extraire et dédupliquer les categoryIds
-    const categoryIds = [...new Set(dto.map((s) => s.categoryId))];
+    const categoryPublicIds = [...new Set(dto.map((s) => s.categoryId))];
+    const activeCount = dto.filter((s) => s.isActive).length;
 
-    // RÈGLE MÉTIER : Limiter les comptes gratuits à 1 service maximum
-    if (!existingProfile.isPremium && categoryIds.length > 1) {
-      throw new BadRequestException(
-        'Les comptes gratuits sont limités à 1 service. Passez Premium pour en ajouter davantage.',
-      );
+    // Limite services actifs Free/Premium
+    const isPremium = await this.isPremiumPro(userId);
+    const maxServices = isPremium ? PREMIUM_SERVICES_MAX : FREE_SERVICES_MAX;
+    if (activeCount > maxServices) {
+      throw new BadRequestException('SERVICE_LIMIT_REACHED');
     }
 
-    // Vérifier que toutes les catégories existent
     const categories = await this.prisma.category.findMany({
-      where: { id: { in: categoryIds } },
+      where: { publicId: { in: categoryPublicIds } },
+      select: { id: true, publicId: true },
     });
 
-    if (categories.length !== categoryIds.length) {
+    if (categories.length !== categoryPublicIds.length) {
       throw new NotFoundException('Une ou plusieurs catégories sont invalides');
     }
+    const categoryIdMap = new Map(categories.map((c) => [c.publicId, c.id]));
 
-    // Transaction : DELETE ALL + CREATE
     const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Supprimer tous les services existants
       await tx.proService.deleteMany({
         where: { proUserId: userId },
       });
 
-      // 2. Créer les nouveaux services
       if (dto.length > 0) {
         await tx.proService.createMany({
           data: dto.map((service) => ({
             proUserId: userId,
-            categoryId: service.categoryId,
+            categoryId: categoryIdMap.get(service.categoryId)!,
             pricingType: service.pricingType,
             fixedPriceMad: service.fixedPriceMad ?? null,
             minPriceMad: service.minPriceMad ?? null,
@@ -269,13 +317,13 @@ export class ProService {
         });
       }
 
-      // 3. Refetch pour confirmer la persistance (self-check)
       const updatedServices = await tx.proService.findMany({
         where: { proUserId: userId },
         include: {
           category: {
             select: {
               id: true,
+              publicId: true,
               name: true,
               slug: true,
             },
@@ -286,24 +334,19 @@ export class ProService {
         },
       });
 
-      return updatedServices;
+      return updatedServices.map((service) => ({
+        ...service,
+        categoryId: service.category?.publicId ?? service.categoryId,
+        category: service.category
+          ? { id: service.category.publicId ?? service.category.id, name: service.category.name, slug: service.category.slug }
+          : service.category,
+      }));
     });
 
     return result;
   }
 
-  /**
-   * updateAvailability
-   *
-   * Met à jour les disponibilités hebdomadaires du PRO.
-   * Stratégie REPLACE ALL : Supprime toutes les disponibilités existantes et recrée les nouvelles.
-   *
-   * @param userId - ID de l'utilisateur PRO
-   * @param dto - Array de créneaux de disponibilité
-   * @returns Nouvelles disponibilités créées
-   */
   async updateAvailability(userId: string, dto: UpdateAvailabilityInput) {
-    // Vérifier que le profil existe
     const existingProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
     });
@@ -312,14 +355,11 @@ export class ProService {
       throw new NotFoundException('Profil Pro non trouvé');
     }
 
-    // Transaction : DELETE ALL + CREATE MANY
     const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Supprimer toutes les disponibilités existantes
       await tx.weeklyAvailability.deleteMany({
         where: { proUserId: userId },
       });
 
-      // 2. Créer les nouvelles disponibilités
       if (dto.length > 0) {
         await tx.weeklyAvailability.createMany({
           data: dto.map((slot) => ({
@@ -332,7 +372,6 @@ export class ProService {
         });
       }
 
-      // 3. Récupérer les nouvelles disponibilités
       const newAvailability = await tx.weeklyAvailability.findMany({
         where: { proUserId: userId },
         orderBy: {
@@ -344,5 +383,45 @@ export class ProService {
     });
 
     return result;
+  }
+
+  // ── Portfolio ──
+
+  async getPortfolio(userId: string) {
+    return this.prisma.proPortfolioImage.findMany({
+      where: { proUserId: userId },
+      orderBy: { createdAt: 'desc' },
+      take: PORTFOLIO_MAX,
+    });
+  }
+
+  async addPortfolioImage(userId: string, url: string) {
+    const isPremium = await this.isPremiumPro(userId);
+    if (!isPremium) {
+      throw new ForbiddenException('PREMIUM_REQUIRED');
+    }
+
+    const count = await this.prisma.proPortfolioImage.count({
+      where: { proUserId: userId },
+    });
+    if (count >= PORTFOLIO_MAX) {
+      throw new BadRequestException('PORTFOLIO_LIMIT_REACHED');
+    }
+
+    return this.prisma.proPortfolioImage.create({
+      data: { proUserId: userId, url },
+    });
+  }
+
+  async deletePortfolioImage(userId: string, imageId: string) {
+    const image = await this.prisma.proPortfolioImage.findFirst({
+      where: { id: imageId, proUserId: userId },
+    });
+    if (!image) {
+      throw new NotFoundException('Image introuvable');
+    }
+
+    await this.prisma.proPortfolioImage.delete({ where: { id: imageId } });
+    return { success: true };
   }
 }

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { RoleSchema } from '../enums';
 
+const CITY_ID_REGEX = /^city_[a-z]+_\d{3}$/;
+
 // ============================================================================
 // AUTH SCHEMAS - PHASE 7A
 // ============================================================================
@@ -31,11 +33,11 @@ export const RegisterSchema = z
   .object({
     email: z.string().email('Email invalide'),
     phone: z.string().min(10, 'Téléphone invalide'),
-    password: z.string().min(6, 'Mot de passe minimum 6 caractères'),
+    password: z.string().min(10, 'Mot de passe minimum 10 caractères'),
     firstName: z.string().min(1, 'Prénom requis'),
     lastName: z.string().min(1, 'Nom requis'),
     role: RoleSchema.exclude(['ADMIN']), // CLIENT ou PRO uniquement
-    cityId: z.string().min(1, 'La ville est obligatoire'), // Requis pour TOUS
+    cityId: z.string().regex(CITY_ID_REGEX, 'cityId invalide'), // Requis pour TOUS
     addressLine: z.string().optional(), // Requis si CLIENT, validé dans refine
     cinNumber: z.string().optional(), // Requis si PRO, validé dans refine
   })
@@ -82,12 +84,13 @@ export const PublicUserSchema = z.object({
   status: z.string().optional(),
   createdAt: z.string().optional(),
   // Phase 10 V4-B: Hydratation complète
-  cityId: z.string().nullable().optional(),
+  cityId: z.string().regex(CITY_ID_REGEX, 'cityId invalide').nullable().optional(),
   addressLine: z.string().nullable().optional(),
   city: z.object({
-    id: z.string(),
+    id: z.string().regex(CITY_ID_REGEX, 'cityId invalide'),
     name: z.string(),
   }).nullable().optional(),
+  avatarUrl: z.string().nullable().optional(),
   isPremium: z.boolean().optional(), // Pour les PRO
   kycStatus: z.enum(['NOT_SUBMITTED', 'PENDING', 'APPROVED', 'REJECTED']).optional(), // Pour les PRO
 });
