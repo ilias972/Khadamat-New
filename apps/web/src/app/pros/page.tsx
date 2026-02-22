@@ -7,6 +7,8 @@ interface ProsPageProps {
   searchParams: Promise<{
     cityId?: string;
     categoryId?: string;
+    premium?: string;
+    minRating?: string;
     page?: string;
   }>;
 }
@@ -41,10 +43,12 @@ export default async function ProsPage({ searchParams }: ProsPageProps) {
   const page = params.page ? parseInt(params.page, 10) : 1;
   const cityId = params.cityId;
   const categoryId = params.categoryId;
+  const premium = params.premium === 'true' || params.premium === 'false' ? params.premium : undefined;
+  const minRating = params.minRating || undefined;
 
   // Fetch pros v2 + cities + categories en parallèle
   const [prosResponse, citiesResponse, categoriesResponse] = await Promise.all([
-    fetchPros(apiUrl, { cityId, categoryId, page }),
+    fetchPros(apiUrl, { cityId, categoryId, premium, minRating, page }),
     fetchCities(apiUrl),
     fetchCategories(apiUrl),
   ]);
@@ -86,7 +90,7 @@ export default async function ProsPage({ searchParams }: ProsPageProps) {
             initialData={prosResponse.data!}
             initialCities={citiesResponse}
             initialCategories={categoriesResponse}
-            initialFilters={{ cityId, categoryId, page }}
+            initialFilters={{ cityId, categoryId, premium, minRating, page }}
           />
         </div>
       </main>
@@ -100,12 +104,20 @@ export default async function ProsPage({ searchParams }: ProsPageProps) {
 
 async function fetchPros(
   apiUrl: string,
-  filters: { cityId?: string; categoryId?: string; page: number }
+  filters: {
+    cityId?: string;
+    categoryId?: string;
+    premium?: string;
+    minRating?: string;
+    page: number;
+  }
 ): Promise<{ data?: PaginatedResponse<PublicProCard>; error?: string }> {
   try {
     const queryParams = new URLSearchParams();
     if (filters.cityId) queryParams.append('cityId', filters.cityId);
     if (filters.categoryId) queryParams.append('categoryId', filters.categoryId);
+    if (filters.premium) queryParams.append('premium', filters.premium);
+    if (filters.minRating) queryParams.append('minRating', filters.minRating);
     queryParams.append('page', filters.page.toString());
 
     const url = `${apiUrl}/public/pros/v2?${queryParams.toString()}`;

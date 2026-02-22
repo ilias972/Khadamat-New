@@ -10,7 +10,7 @@ export interface DashboardStatsResponse {
   conversionRate: { confirmed: number; declined: number };
   pendingCount: number;
   nextBooking: {
-    client: { firstName: string; lastName: string; phone: string };
+    client: { firstName: string; lastName: string };
     timeSlot: string;
     category: { name: string };
   } | null;
@@ -38,7 +38,28 @@ export class DashboardService {
       throw new ForbiddenException('Seuls les professionnels peuvent accéder aux statistiques');
     }
 
-    // 2. REQUESTS COUNT (7 derniers jours)
+    // 2. PREMIUM ONLY
+    const pro = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        role: true,
+        proProfile: {
+          select: {
+            isPremium: true,
+          },
+        },
+      },
+    });
+
+    if (!pro || pro.role !== 'PRO') {
+      throw new ForbiddenException('Seuls les professionnels peuvent accéder aux statistiques');
+    }
+
+    if (!pro.proProfile?.isPremium) {
+      throw new ForbiddenException('PREMIUM_REQUIRED');
+    }
+
+    // 3. REQUESTS COUNT (7 derniers jours)
     // Récupère les bookings des 7 derniers jours, groupés par date
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); // 7 jours incluant aujourd'hui
@@ -77,7 +98,7 @@ export class DashboardService {
       .map(([date, count]) => ({ date, count }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
-    // 3. CONVERSION RATE
+    // 4. CONVERSION RATE
     // Compte les bookings CONFIRMED et DECLINED (tous les temps)
     const [confirmedCount, declinedCount] = await Promise.all([
       this.prisma.booking.count({
@@ -93,12 +114,12 @@ export class DashboardService {
       declined: declinedCount,
     };
 
-    // 4. PENDING COUNT
+    // 5. PENDING COUNT
     const pendingCount = await this.prisma.booking.count({
       where: { proId: userId, status: 'PENDING' },
     });
 
-    // 5. NEXT BOOKING
+    // 6. NEXT BOOKING
     // Prochaine réservation CONFIRMED à venir (timeSlot >= maintenant)
     const now = new Date();
     const nextBooking = await this.prisma.booking.findFirst({
@@ -114,7 +135,6 @@ export class DashboardService {
           select: {
             firstName: true,
             lastName: true,
-            phone: true,
           },
         },
         category: {

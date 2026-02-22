@@ -88,42 +88,107 @@ export class CatalogService {
 
   // V2 endpoint — select partial + total + tri monétisation + cache
   async getProsV2(
-    filters: { cityId?: string; categoryId?: string },
+    filters: { cityId?: string; categoryId?: string; premium?: boolean; minRating?: number },
     page: number = 1,
     limit: number = 20,
   ): Promise<{ data: PublicProCard[]; meta: PaginationMeta }> {
-    const { cityId: cityPublicId, categoryId: categoryPublicId } = filters;
+    const {
+      cityId: cityPublicId,
+      categoryId: categoryPublicId,
+      premium,
+      minRating,
+    } = filters;
 
-    const cacheKey = `catalog:pros:v2:${cityPublicId || '_'}:${categoryPublicId || '_'}:${page}:${limit}`;
+    const premiumKey = premium === undefined ? '_' : String(premium);
+    const minRatingKey = minRating === undefined ? '_' : String(minRating);
+    const cacheKey = `catalog:pros:v2:${cityPublicId || '_'}:${categoryPublicId || '_'}:${premiumKey}:${minRatingKey}:${page}:${limit}`;
     const cached = await this.cache.get<{ data: PublicProCard[]; meta: PaginationMeta }>(cacheKey);
     if (cached) return cached;
 
-    this.logger.log(`Recherche Pro v2: city=${cityPublicId || 'all'}, cat=${categoryPublicId || 'all'}, page=${page}`);
+    this.logger.log(
+      `Recherche Pro v2: city=${cityPublicId || 'all'}, cat=${categoryPublicId || 'all'}, premium=${premiumKey}, minRating=${minRatingKey}, page=${page}`
+    );
 
     const cityId = cityPublicId ? await this.catalogResolver.resolveCityId(cityPublicId) : undefined;
     const categoryId = categoryPublicId ? await this.catalogResolver.resolveCategoryId(categoryPublicId) : undefined;
-    const whereClause = this.buildProWhereClause(cityId, categoryId);
+    const whereClause = this.buildProWhereClause(cityId, categoryId, premium);
     const { skip, take } = getPagination(page, limit);
 
-    const [pros, total] = await Promise.all([
-      this.prisma.user.findMany({
-        where: whereClause,
-        skip,
-        take,
-        select: this.proSelectFields(),
-        orderBy: [
-          { proProfile: { isPremium: 'desc' } },
-          { proProfile: { boostActiveUntil: 'desc' } },
-          { createdAt: 'desc' },
-        ],
-      }),
-      this.prisma.user.count({ where: whereClause }),
-    ]);
+    // We compute rating aggregates first, then sort before pagination to keep
+    // a deterministic order: premium -> boost -> ratingAvg -> ratingCount -> createdAt.
+    const pros = await this.prisma.user.findMany({
+      where: whereClause,
+      select: this.proSelectFields(),
+    });
 
-    this.logger.log(`${pros.length}/${total} pros found (page ${page})`);
+    const proIds = pros.map((pro) => pro.id);
+    const ratingMap = new Map<string, { ratingAvg: number; ratingCount: number }>();
+    if (proIds.length > 0) {
+      const groupedRatings = await this.prisma.review.groupBy({
+        by: ['proId'],
+        where: { proId: { in: proIds } },
+        _avg: { rating: true },
+        _count: { rating: true },
+      });
+
+      for (const item of groupedRatings) {
+        ratingMap.set(item.proId, {
+          ratingAvg: item._avg.rating ?? 0,
+          ratingCount: item._count.rating,
+        });
+      }
+    }
+
+    const enrichedPros = pros
+      .map((pro) => {
+        const rating = ratingMap.get(pro.id);
+        return {
+          pro,
+          ratingAvg: rating?.ratingAvg ?? 0,
+          ratingCount: rating?.ratingCount ?? 0,
+        };
+      })
+      .filter((entry) => {
+        if (minRating === undefined) {
+          return true;
+        }
+        if (minRating <= 0) {
+          return true;
+        }
+        return entry.ratingAvg >= minRating;
+      });
+
+    enrichedPros.sort((a, b) => {
+      if (a.pro.proProfile.isPremium !== b.pro.proProfile.isPremium) {
+        return a.pro.proProfile.isPremium ? -1 : 1;
+      }
+
+      const aBoost = a.pro.proProfile.boostActiveUntil?.getTime() ?? Number.NEGATIVE_INFINITY;
+      const bBoost = b.pro.proProfile.boostActiveUntil?.getTime() ?? Number.NEGATIVE_INFINITY;
+      if (aBoost !== bBoost) {
+        return bBoost - aBoost;
+      }
+
+      if (a.ratingAvg !== b.ratingAvg) {
+        return b.ratingAvg - a.ratingAvg;
+      }
+
+      if (a.ratingCount !== b.ratingCount) {
+        return b.ratingCount - a.ratingCount;
+      }
+
+      const aCreated = a.pro.createdAt.getTime();
+      const bCreated = b.pro.createdAt.getTime();
+      return bCreated - aCreated;
+    });
+
+    const total = enrichedPros.length;
+    const pageSlice = enrichedPros.slice(skip, skip + take);
+
+    this.logger.log(`${pageSlice.length}/${total} pros found (page ${page})`);
 
     const result = {
-      data: pros.map((pro) => this.mapToPublicProCard(pro)),
+      data: pageSlice.map((entry) => this.mapToPublicProCard(entry.pro)),
       meta: getPaginationMeta(page, limit, total),
     };
 
@@ -251,7 +316,7 @@ export class CatalogService {
   //  PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════
 
-  private buildProWhereClause(cityId?: string, categoryId?: string) {
+  private buildProWhereClause(cityId?: string, categoryId?: string, premium?: boolean) {
     const profileConditions: any = {
       kycStatus: 'APPROVED',
     };
@@ -263,6 +328,9 @@ export class CatalogService {
       profileConditions.services = {
         some: { categoryId },
       };
+    }
+    if (premium !== undefined) {
+      profileConditions.isPremium = premium;
     }
 
     const whereClause: any = {

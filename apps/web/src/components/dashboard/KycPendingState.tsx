@@ -16,6 +16,7 @@ import { Clock, FileText, LogOut, User } from 'lucide-react';
 export default function KycPendingState() {
   const router = useRouter();
   const { user, logout } = useAuthStore();
+  const progressValue = 60;
 
   const handleLogout = () => {
     logout();
@@ -35,11 +36,11 @@ export default function KycPendingState() {
           <div className="mb-6 flex justify-center">
             <div className="relative">
               <div className="w-24 h-24 rounded-full bg-primary-100 flex items-center justify-center">
-                <Clock className="w-12 h-12 text-primary-500 motion-safe:animate-pulse" />
+                <Clock className="w-12 h-12 text-primary-500 motion-safe:animate-pulse" aria-hidden="true" />
               </div>
               {/* Badge notification */}
               <div className="absolute -top-1 -right-1 w-8 h-8 rounded-full bg-warning-500 flex items-center justify-center">
-                <FileText className="w-4 h-4 text-white" />
+                <FileText className="w-4 h-4 text-white" aria-hidden="true" />
               </div>
             </div>
           </div>
@@ -65,10 +66,17 @@ export default function KycPendingState() {
               <span className="text-sm text-text-muted">Progression</span>
               <span className="text-sm font-medium text-primary-600">En attente</span>
             </div>
-            <div className="h-2 bg-primary-100 rounded-full overflow-hidden">
+            <div
+              className="h-2 bg-primary-100 rounded-full overflow-hidden"
+              role="progressbar"
+              aria-label="Progression de la vérification KYC"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progressValue}
+            >
               <div
                 className="h-full bg-gradient-to-r from-primary-400 to-primary-500 rounded-full motion-safe:animate-pulse"
-                style={{ width: '60%' }}
+                style={{ width: `${progressValue}%` }}
               />
             </div>
           </div>
@@ -77,7 +85,7 @@ export default function KycPendingState() {
           <div className="space-y-3 mb-8 text-left">
             <div className="flex items-center gap-3">
               <div className="w-6 h-6 rounded-full bg-success-500 flex items-center justify-center">
-                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true" focusable="false">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
@@ -85,7 +93,7 @@ export default function KycPendingState() {
             </div>
             <div className="flex items-center gap-3">
               <div className="w-6 h-6 rounded-full bg-success-500 flex items-center justify-center">
-                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true" focusable="false">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
@@ -93,7 +101,7 @@ export default function KycPendingState() {
             </div>
             <div className="flex items-center gap-3">
               <div className="w-6 h-6 rounded-full bg-primary-500 flex items-center justify-center motion-safe:animate-pulse">
-                <Clock className="w-3 h-3 text-white" />
+                <Clock className="w-3 h-3 text-white" aria-hidden="true" />
               </div>
               <span className="text-sm font-medium text-primary-600">Vérification en cours...</span>
             </div>

@@ -29,8 +29,23 @@ interface ProsClientPageProps {
   initialFilters: {
     cityId?: string;
     categoryId?: string;
+    premium?: string;
+    minRating?: string;
     page: number;
   };
+}
+
+type PremiumFilter = '' | 'true' | 'false';
+const ALLOWED_MIN_RATINGS = ['4.5', '4', '3.5', '3', '2.5', '2'] as const;
+type MinRatingFilter = '' | (typeof ALLOWED_MIN_RATINGS)[number];
+const isAllowedMinRating = (value: string): value is (typeof ALLOWED_MIN_RATINGS)[number] =>
+  (ALLOWED_MIN_RATINGS as readonly string[]).includes(value);
+
+interface ProsFiltersState {
+  cityId: string;
+  categoryId: string;
+  premium: PremiumFilter;
+  minRating: MinRatingFilter;
 }
 
 export default function ProsClientPage({
@@ -49,6 +64,16 @@ export default function ProsClientPage({
 
   const [selectedCityId, setSelectedCityId] = useState(initialFilters.cityId || '');
   const [selectedCategoryId, setSelectedCategoryId] = useState(initialFilters.categoryId || '');
+  const [selectedPremium, setSelectedPremium] = useState<PremiumFilter>(
+    initialFilters.premium === 'true' || initialFilters.premium === 'false'
+      ? initialFilters.premium
+      : ''
+  );
+  const [selectedMinRating, setSelectedMinRating] = useState<MinRatingFilter>(
+    initialFilters.minRating && isAllowedMinRating(initialFilters.minRating)
+      ? initialFilters.minRating
+      : ''
+  );
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,19 +82,42 @@ export default function ProsClientPage({
   useEffect(() => {
     const cityId = searchParams.get('cityId') || '';
     const categoryId = searchParams.get('categoryId') || '';
+    const premium = searchParams.get('premium');
+    const minRating = searchParams.get('minRating');
+
     setSelectedCityId(cityId);
     setSelectedCategoryId(categoryId);
+    setSelectedPremium(premium === 'true' || premium === 'false' ? premium : '');
+    setSelectedMinRating(
+      minRating && isAllowedMinRating(minRating)
+        ? minRating
+        : ''
+    );
   }, [searchParams]);
 
-  const fetchPros = async (page: number = 1) => {
+  const buildQueryParams = (filters: ProsFiltersState, page: number) => {
+    const queryParams = new URLSearchParams();
+    if (filters.cityId) queryParams.append('cityId', filters.cityId);
+    if (filters.categoryId) queryParams.append('categoryId', filters.categoryId);
+    if (filters.premium) queryParams.append('premium', filters.premium);
+    if (filters.minRating) queryParams.append('minRating', filters.minRating);
+    queryParams.append('page', page.toString());
+    return queryParams;
+  };
+
+  const getCurrentFilters = (): ProsFiltersState => ({
+    cityId: selectedCityId,
+    categoryId: selectedCategoryId,
+    premium: selectedPremium,
+    minRating: selectedMinRating,
+  });
+
+  const fetchPros = async (page: number = 1, filters?: ProsFiltersState) => {
     setLoading(true);
     setError(null);
 
     try {
-      const queryParams = new URLSearchParams();
-      if (selectedCityId) queryParams.append('cityId', selectedCityId);
-      if (selectedCategoryId) queryParams.append('categoryId', selectedCategoryId);
-      queryParams.append('page', page.toString());
+      const queryParams = buildQueryParams(filters || getCurrentFilters(), page);
 
       const response = await getJSON<PaginatedResponse<PublicProCard>>(
         `/public/pros/v2?${queryParams.toString()}`
@@ -86,17 +134,18 @@ export default function ProsClientPage({
   };
 
   const handleApplyFilters = () => {
-    const queryParams = new URLSearchParams();
-    if (selectedCityId) queryParams.append('cityId', selectedCityId);
-    if (selectedCategoryId) queryParams.append('categoryId', selectedCategoryId);
+    const filters = getCurrentFilters();
+    const queryParams = buildQueryParams(filters, 1);
 
     router.push(`/pros?${queryParams.toString()}`);
-    // Fetch will be triggered by useEffect watching searchParams
-    fetchPros(1);
+    fetchPros(1, filters);
   };
 
   const handlePageChange = (newPage: number) => {
-    fetchPros(newPage);
+    const filters = getCurrentFilters();
+    const queryParams = buildQueryParams(filters, newPage);
+    router.push(`/pros?${queryParams.toString()}`);
+    fetchPros(newPage, filters);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -142,7 +191,7 @@ export default function ProsClientPage({
       {/* Filters */}
       <div className="bg-surface rounded-xl border border-border p-6">
         <h2 className="text-lg font-semibold text-text-primary mb-4">Filtrer les résultats</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <div>
             <label
               htmlFor="filter-city"
@@ -186,6 +235,50 @@ export default function ProsClientPage({
                   {category.name}
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div>
+            <label
+              htmlFor="filter-premium"
+              className="block text-sm font-medium text-text-label mb-2"
+            >
+              Abonnement
+            </label>
+            <select
+              id="filter-premium"
+              value={selectedPremium}
+              onChange={(e) => setSelectedPremium(e.target.value as PremiumFilter)}
+              className="w-full px-4 py-2 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary"
+              aria-label="Filtrer par abonnement"
+            >
+              <option value="">Tous</option>
+              <option value="true">Abonnés</option>
+              <option value="false">Non abonnés</option>
+            </select>
+          </div>
+
+          <div>
+            <label
+              htmlFor="filter-min-rating"
+              className="block text-sm font-medium text-text-label mb-2"
+            >
+              Note minimum
+            </label>
+            <select
+              id="filter-min-rating"
+              value={selectedMinRating}
+              onChange={(e) => setSelectedMinRating(e.target.value as MinRatingFilter)}
+              className="w-full px-4 py-2 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary"
+              aria-label="Filtrer par note minimale"
+            >
+              <option value="">Tous</option>
+              <option value="4.5">4.5+</option>
+              <option value="4">4.0+</option>
+              <option value="3.5">3.5+</option>
+              <option value="3">3.0+</option>
+              <option value="2.5">2.5+</option>
+              <option value="2">2.0+</option>
             </select>
           </div>
 
@@ -235,7 +328,7 @@ export default function ProsClientPage({
             Aucun professionnel trouvé pour ces critères.
           </p>
           <p className="text-text-muted text-sm mt-2">
-            Essayez de modifier vos filtres de recherche.
+            Essayez de réduire la note minimum ou de changer le filtre d&apos;abonnement.
           </p>
         </div>
       )}
