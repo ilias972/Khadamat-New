@@ -33,16 +33,16 @@ export default function ProBookingCTA({ proId, services }: ProBookingCTAProps) {
   // Cas A : Non connecté
   if (!isAuthenticated) {
     return (
-      <div className="bg-gradient-to-r from-zinc-900 to-zinc-700 dark:from-zinc-800 dark:to-zinc-900 rounded-lg p-8 text-center">
-        <h2 className="text-2xl font-bold text-white mb-4">
+      <div className="bg-gradient-to-r from-inverse-bg to-inverse-hover rounded-lg p-8 text-center">
+        <h2 className="text-2xl font-bold text-text-inverse mb-4">
           Prêt à réserver ce professionnel ?
         </h2>
-        <p className="text-zinc-300 mb-6">
+        <p className="text-text-muted mb-6">
           Connectez-vous pour prendre rendez-vous
         </p>
         <Link
           href="/auth/login"
-          className="inline-block px-8 py-3 bg-white text-zinc-900 rounded-lg hover:bg-zinc-100 transition font-medium"
+          className="inline-block px-8 py-3 bg-surface text-text-primary rounded-lg hover:bg-surface-active transition font-medium"
         >
           Se connecter
         </Link>
@@ -53,14 +53,14 @@ export default function ProBookingCTA({ proId, services }: ProBookingCTAProps) {
   // Cas C : Connecté en tant que PRO
   if (user?.role === 'PRO') {
     return (
-      <div className="bg-gradient-to-r from-amber-600 to-orange-600 dark:from-amber-700 dark:to-orange-700 rounded-lg p-8 text-center">
-        <h2 className="text-2xl font-bold text-white mb-4">
+      <div className="bg-gradient-to-r from-warning-600 to-primary-600 rounded-lg p-8 text-center">
+        <h2 className="text-2xl font-bold text-text-inverse mb-4">
           Réservation impossible
         </h2>
-        <p className="text-amber-100 mb-2">
+        <p className="text-warning-100 mb-2">
           Vous êtes connecté avec un compte Professionnel.
         </p>
-        <p className="text-amber-100 text-sm">
+        <p className="text-warning-100 text-sm">
           Connectez-vous avec un compte Client pour réserver ce service.
         </p>
       </div>
@@ -71,11 +71,11 @@ export default function ProBookingCTA({ proId, services }: ProBookingCTAProps) {
   // Si pas de categoryId disponible, désactiver le bouton
   if (!categoryId) {
     return (
-      <div className="bg-gradient-to-r from-zinc-600 to-zinc-500 dark:from-zinc-700 dark:to-zinc-600 rounded-lg p-8 text-center">
-        <h2 className="text-2xl font-bold text-white mb-4">
+      <div className="bg-gradient-to-r from-inverse-hover to-inverse-bg rounded-lg p-8 text-center">
+        <h2 className="text-2xl font-bold text-text-inverse mb-4">
           Réservation indisponible
         </h2>
-        <p className="text-zinc-100 mb-2">
+        <p className="text-inverse-text mb-2">
           Aucun service actif pour ce professionnel.
         </p>
       </div>
@@ -83,16 +83,16 @@ export default function ProBookingCTA({ proId, services }: ProBookingCTAProps) {
   }
 
   return (
-    <div className="bg-gradient-to-r from-green-600 to-teal-600 dark:from-green-700 dark:to-teal-700 rounded-lg p-8 text-center">
-      <h2 className="text-2xl font-bold text-white mb-4">
+    <div className="bg-gradient-to-r from-success-600 to-success-700 rounded-lg p-8 text-center">
+      <h2 className="text-2xl font-bold text-text-inverse mb-4">
         Prêt à réserver ce professionnel ?
       </h2>
-      <p className="text-green-100 mb-6">
+      <p className="text-success-100 mb-6">
         Bonjour {user?.firstName}, choisissez un créneau pour réserver
       </p>
       <Link
         href={`/book/${proId}?categoryId=${categoryId}`}
-        className="inline-block px-8 py-3 bg-white text-zinc-900 rounded-lg hover:bg-zinc-100 transition font-medium"
+        className="inline-block px-8 py-3 bg-surface text-text-primary rounded-lg hover:bg-surface-active transition font-medium"
       >
         Réserver maintenant
       </Link>

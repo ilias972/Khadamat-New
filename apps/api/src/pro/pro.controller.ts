@@ -11,8 +11,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ProService } from './pro.service';
+import { validateUrl } from '../common/utils/url-validation';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { KycApprovedGuard } from '../auth/guards/kyc-approved.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
@@ -36,6 +38,7 @@ export class ProController {
   }
 
   @Patch('profile')
+  @UseGuards(KycApprovedGuard)
   async updateProfile(
     @Request() req,
     @Body() dto: any,
@@ -60,6 +63,7 @@ export class ProController {
   }
 
   @Put('services')
+  @UseGuards(KycApprovedGuard)
   async updateServices(
     @Request() req,
     @Body(new ZodValidationPipe(UpdateServicesSchema))
@@ -69,6 +73,7 @@ export class ProController {
   }
 
   @Put('availability')
+  @UseGuards(KycApprovedGuard)
   async updateAvailability(
     @Request() req,
     @Body(new ZodValidationPipe(UpdateAvailabilitySchema))
@@ -85,14 +90,14 @@ export class ProController {
   }
 
   @Post('portfolio')
+  @UseGuards(KycApprovedGuard)
   async addPortfolioImage(@Request() req, @Body() body: { url: string }) {
-    if (!body.url || typeof body.url !== 'string' || body.url.trim().length === 0) {
-      throw new Error('URL requise');
-    }
-    return this.proService.addPortfolioImage(req.user.id, body.url.trim());
+    const validatedUrl = validateUrl(body.url);
+    return this.proService.addPortfolioImage(req.user.id, validatedUrl);
   }
 
   @Delete('portfolio/:id')
+  @UseGuards(KycApprovedGuard)
   async deletePortfolioImage(@Request() req, @Param('id') id: string) {
     return this.proService.deletePortfolioImage(req.user.id, id);
   }

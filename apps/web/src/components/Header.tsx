@@ -43,11 +43,11 @@ export default function Header() {
   }, [isDropdownOpen]);
 
   return (
-    <header className="bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+    <header className="bg-surface border-b border-border">
       <div className="container mx-auto px-6 py-4">
         <div className="flex items-center justify-between">
           {/* Logo */}
-          <Link href="/" className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
+          <Link href="/" className="text-2xl font-bold text-text-primary">
             Khadamat
           </Link>
 
@@ -57,7 +57,7 @@ export default function Header() {
             {pathname !== '/' && (
               <Link
                 href="/"
-                className="text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-50 transition"
+                className="text-text-label hover:text-text-primary transition"
               >
                 Accueil
               </Link>
@@ -69,19 +69,19 @@ export default function Header() {
                 {/* Non connecté */}
                 <Link
                   href="/auth/register"
-                  className="text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-50 transition"
+                  className="text-text-label hover:text-text-primary transition"
                 >
                   Devenir Pro
                 </Link>
                 <Link
                   href="/auth/register"
-                  className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition font-medium"
+                  className="px-4 py-2 border border-border-strong text-text-primary rounded-lg hover:bg-surface-active transition font-medium"
                 >
                   S&apos;inscrire
                 </Link>
                 <Link
                   href="/auth/login"
-                  className="px-4 py-2 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium"
+                  className="px-4 py-2 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium"
                 >
                   Se connecter
                 </Link>
@@ -92,7 +92,7 @@ export default function Header() {
                 {user?.role === 'PRO' && (
                   <Link
                     href="/plans"
-                    className="px-4 py-2 border-2 border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition font-medium flex items-center gap-2"
+                    className="px-4 py-2 border-2 border-info-600 text-info-600 rounded-lg hover:bg-info-50 transition font-medium flex items-center gap-2"
                   >
                     <span className="text-lg">👑</span>
                     Devenir Premium
@@ -103,10 +103,10 @@ export default function Header() {
                 <div className="relative" ref={dropdownRef}>
                   <button
                     onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                    className="flex items-center gap-2 px-4 py-2 text-zinc-900 dark:text-zinc-50 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition"
+                    className="flex items-center gap-2 px-4 py-2 text-text-primary hover:bg-surface-active rounded-lg transition"
                   >
-                    <div className="w-8 h-8 bg-zinc-900 dark:bg-zinc-50 rounded-full flex items-center justify-center">
-                      <span className="text-sm font-bold text-zinc-50 dark:text-zinc-900">
+                    <div className="w-8 h-8 bg-inverse-bg rounded-full flex items-center justify-center">
+                      <span className="text-sm font-bold text-inverse-text">
                         {user?.firstName?.charAt(0).toUpperCase()}
                       </span>
                     </div>
@@ -123,13 +123,13 @@ export default function Header() {
 
                   {/* Dropdown Menu */}
                   {isDropdownOpen && (
-                    <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-lg py-2 z-50">
+                    <div className="absolute right-0 mt-2 w-56 bg-surface border border-border rounded-lg shadow-lg py-2 z-50">
                       {/* Dashboard (PRO uniquement) */}
                       {user?.role === 'PRO' && (
                         <Link
                           href="/dashboard"
                           onClick={() => setIsDropdownOpen(false)}
-                          className="flex items-center gap-3 px-4 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition"
+                          className="flex items-center gap-3 px-4 py-2 text-text-label hover:bg-surface-active transition"
                         >
                           <span className="text-lg">📊</span>
                           <span>Tableau de bord</span>
@@ -141,7 +141,7 @@ export default function Header() {
                         <Link
                           href="/client/bookings"
                           onClick={() => setIsDropdownOpen(false)}
-                          className="flex items-center gap-3 px-4 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition"
+                          className="flex items-center gap-3 px-4 py-2 text-text-label hover:bg-surface-active transition"
                         >
                           <span className="text-lg">📅</span>
                           <span>Mes Réservations</span>
@@ -152,19 +152,19 @@ export default function Header() {
                       <Link
                         href="/profile"
                         onClick={() => setIsDropdownOpen(false)}
-                        className="flex items-center gap-3 px-4 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition"
+                        className="flex items-center gap-3 px-4 py-2 text-text-label hover:bg-surface-active transition"
                       >
                         <span className="text-lg">👤</span>
                         <span>Mon Compte</span>
                       </Link>
 
                       {/* Séparateur */}
-                      <div className="my-2 border-t border-zinc-200 dark:border-zinc-700"></div>
+                      <div className="my-2 border-t border-border"></div>
 
                       {/* Déconnexion */}
                       <button
                         onClick={handleLogout}
-                        className="w-full flex items-center gap-3 px-4 py-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                        className="w-full flex items-center gap-3 px-4 py-2 text-error-600 hover:bg-error-50 transition"
                       >
                         <span className="text-lg">🚪</span>
                         <span>Déconnexion</span>

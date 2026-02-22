@@ -5,6 +5,7 @@ import { useRouter, useSearchParams, useParams } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import Header from '@/components/Header';
 import { getJSON, postJSON, APIError } from '@/lib/api';
+import { toast } from '@/store/toastStore';
 
 /**
  * Booking Page
@@ -151,7 +152,7 @@ export default function BookingPage() {
         if (error.statusCode === 409) {
           setBookingError('Créneau déjà pris, merci d\'en choisir un autre');
         } else if (error.statusCode === 400 && error.message === 'CITY_REQUIRED') {
-          alert('Veuillez sélectionner votre ville dans votre profil');
+          toast.warning('Veuillez sélectionner votre ville dans votre profil');
           router.push('/profile');
           return;
         } else if (error.statusCode === 400 && error.message === 'CITY_MISMATCH') {
@@ -161,7 +162,7 @@ export default function BookingPage() {
           }, 3000);
           return;
         } else if (error.statusCode === 400 && error.message === 'ADDRESS_REQUIRED') {
-          alert('Veuillez renseigner votre adresse dans votre profil');
+          toast.warning('Veuillez renseigner votre adresse dans votre profil');
           router.push('/profile');
           return;
         } else if (error.statusCode === 403) {
@@ -191,10 +192,10 @@ export default function BookingPage() {
   // Loader pendant redirection
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-4"></div>
-          <p className="text-zinc-600 dark:text-zinc-400">Redirection...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+          <p className="text-text-secondary">Redirection...</p>
         </div>
       </div>
     );
@@ -203,20 +204,20 @@ export default function BookingPage() {
   // Vérifier rôle CLIENT
   if (user?.role !== 'CLIENT') {
     return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
+      <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto px-6 py-16 max-w-2xl">
-          <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-8 text-center">
+          <div className="bg-warning-50 border border-warning-200 rounded-lg p-8 text-center">
             <span className="text-6xl mb-4 block">⚠️</span>
-            <h1 className="text-2xl font-bold text-yellow-900 dark:text-yellow-100 mb-4">
+            <h1 className="text-2xl font-bold text-warning-900 mb-4">
               Accès réservé aux clients
             </h1>
-            <p className="text-yellow-800 dark:text-yellow-200 mb-6">
+            <p className="text-warning-800 mb-6">
               Connectez-vous avec un compte Client pour réserver un rendez-vous.
             </p>
             <button
               onClick={handleLogout}
-              className="px-6 py-3 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition font-medium"
+              className="px-6 py-3 bg-warning-600 text-white rounded-lg hover:bg-warning-700 transition font-medium"
             >
               Se déconnecter
             </button>
@@ -229,20 +230,20 @@ export default function BookingPage() {
   // Erreur categoryId manquant
   if (!categoryId) {
     return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
+      <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto px-6 py-16 max-w-2xl">
-          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-8 text-center">
+          <div className="bg-error-50 border border-error-200 rounded-lg p-8 text-center">
             <span className="text-6xl mb-4 block">❌</span>
-            <h1 className="text-2xl font-bold text-red-900 dark:text-red-100 mb-4">
+            <h1 className="text-2xl font-bold text-error-900 mb-4">
               Catégorie de service manquante
             </h1>
-            <p className="text-red-800 dark:text-red-200 mb-6">
+            <p className="text-error-800 mb-6">
               Veuillez sélectionner un service avant de réserver.
             </p>
             <button
               onClick={() => router.push('/pros')}
-              className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium"
+              className="px-6 py-3 bg-error-600 text-white rounded-lg hover:bg-error-700 transition font-medium"
             >
               Retour aux professionnels
             </button>
@@ -255,17 +256,17 @@ export default function BookingPage() {
   // Erreur lors du chargement du Pro
   if (errorPro) {
     return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
+      <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto px-6 py-16 max-w-2xl">
-          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-8 text-center">
+          <div className="bg-error-50 border border-error-200 rounded-lg p-8 text-center">
             <span className="text-6xl mb-4 block">❌</span>
-            <h1 className="text-2xl font-bold text-red-900 dark:text-red-100 mb-4">
+            <h1 className="text-2xl font-bold text-error-900 mb-4">
               {errorPro}
             </h1>
             <button
               onClick={() => router.push('/pros')}
-              className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium"
+              className="px-6 py-3 bg-error-600 text-white rounded-lg hover:bg-error-700 transition font-medium"
             >
               Retour aux professionnels
             </button>
@@ -278,12 +279,12 @@ export default function BookingPage() {
   // Loading Pro
   if (loadingPro) {
     return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
+      <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto px-6 py-16 max-w-2xl">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-4"></div>
-            <p className="text-zinc-600 dark:text-zinc-400">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+            <p className="text-text-secondary">
               Chargement des informations...
             </p>
           </div>
@@ -293,31 +294,31 @@ export default function BookingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
+    <div className="min-h-screen bg-background">
       <Header />
 
       <main className="container mx-auto px-6 py-16 max-w-3xl">
         {/* Success Screen - Flux WhatsApp */}
         {successMessage ? (
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-8">
+          <div className="bg-surface rounded-lg border border-border p-8">
             <div className="text-center mb-8">
-              <div className="w-20 h-20 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
+              <div className="w-20 h-20 bg-success-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <span className="text-4xl">✅</span>
               </div>
-              <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+              <h1 className="text-2xl font-bold text-text-primary mb-2">
                 Demande envoyée avec succès !
               </h1>
-              <p className="text-zinc-600 dark:text-zinc-400">
+              <p className="text-text-secondary">
                 Votre réservation a été envoyée à {pro?.firstName} {pro?.lastName}
               </p>
             </div>
 
             {/* Détails réservation */}
-            <div className="bg-zinc-50 dark:bg-zinc-900 rounded-lg p-4 mb-6">
-              <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-2">
+            <div className="bg-background rounded-lg p-4 mb-6">
+              <p className="text-sm text-text-secondary mb-2">
                 📅 {selectedDate} à {selectedSlot}
               </p>
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              <p className="text-sm text-text-secondary">
                 📍 {pro?.city?.name}
               </p>
             </div>
@@ -342,7 +343,7 @@ export default function BookingPage() {
                     href={whatsappUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium mb-3"
+                    className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-success-600 text-text-inverse rounded-lg hover:bg-success-700 transition font-medium mb-3"
                   >
                     <span className="text-xl">💬</span>
                     Discuter sur WhatsApp
@@ -352,7 +353,7 @@ export default function BookingPage() {
                 return (
                   <button
                     disabled
-                    className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-zinc-300 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 rounded-lg cursor-not-allowed font-medium mb-3"
+                    className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-border-strong text-text-muted rounded-lg cursor-not-allowed font-medium mb-3"
                   >
                     <span className="text-xl">💬</span>
                     Numéro indisponible
@@ -364,7 +365,7 @@ export default function BookingPage() {
             {/* Action secondaire */}
             <button
               onClick={() => router.push('/client/bookings')}
-              className="w-full px-6 py-3 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition font-medium"
+              className="w-full px-6 py-3 border border-border-strong text-text-primary rounded-lg hover:bg-surface-active transition font-medium"
             >
               Voir mes réservations
             </button>
@@ -373,17 +374,17 @@ export default function BookingPage() {
           <>
             {/* Header */}
             <div className="mb-8">
-              <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+              <h1 className="text-3xl font-bold text-text-primary mb-2">
                 Réserver avec {pro?.firstName} {pro?.lastName}
               </h1>
-              <p className="text-zinc-600 dark:text-zinc-400">
+              <p className="text-text-secondary">
                 {pro?.city?.name}
               </p>
             </div>
 
         {/* Date Selection */}
-        <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6 mb-6">
-          <label className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+        <div className="bg-surface rounded-lg border border-border p-6 mb-6">
+          <label className="block text-sm font-medium text-text-primary mb-2">
             Choisir une date
           </label>
           <input
@@ -392,20 +393,20 @@ export default function BookingPage() {
             onChange={(e) => setSelectedDate(e.target.value)}
             min={today}
             max={maxDate}
-            className="w-full px-4 py-3 border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+            className="w-full px-4 py-3 border border-border-strong rounded-lg bg-input-bg text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent"
           />
         </div>
 
         {/* Slots */}
-        <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6 mb-6">
-          <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-4">
+        <div className="bg-surface rounded-lg border border-border p-6 mb-6">
+          <h2 className="text-lg font-medium text-text-primary mb-4">
             Créneaux disponibles
           </h2>
 
           {loadingSlots && (
             <div className="text-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-2"></div>
-              <p className="text-zinc-600 dark:text-zinc-400 text-sm">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-inverse-bg mx-auto mb-2"></div>
+              <p className="text-text-secondary text-sm">
                 Chargement des créneaux...
               </p>
             </div>
@@ -413,7 +414,7 @@ export default function BookingPage() {
 
           {!loadingSlots && slots.length === 0 && (
             <div className="text-center py-8">
-              <p className="text-zinc-600 dark:text-zinc-400">
+              <p className="text-text-secondary">
                 Aucun créneau disponible ce jour
               </p>
             </div>
@@ -427,8 +428,8 @@ export default function BookingPage() {
                   onClick={() => setSelectedSlot(slot)}
                   className={`px-4 py-3 rounded-lg font-medium transition ${
                     selectedSlot === slot
-                      ? 'bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900'
-                      : 'bg-zinc-100 dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 hover:bg-zinc-200 dark:hover:bg-zinc-600'
+                      ? 'bg-inverse-bg text-inverse-text'
+                      : 'bg-surface-active text-text-primary hover:bg-border'
                   }`}
                 >
                   {slot}
@@ -440,18 +441,18 @@ export default function BookingPage() {
 
         {/* Confirmation */}
         {selectedSlot && (
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-6 mb-6">
-            <h3 className="text-lg font-medium text-blue-900 dark:text-blue-100 mb-2">
+          <div className="bg-info-50 border border-info-200 rounded-lg p-6 mb-6">
+            <h3 className="text-lg font-medium text-info-900 mb-2">
               Confirmer le rendez-vous
             </h3>
-            <p className="text-blue-800 dark:text-blue-200 mb-4">
+            <p className="text-info-800 mb-4">
               Le {selectedDate} à {selectedSlot} avec {pro?.firstName}{' '}
               {pro?.lastName}
             </p>
 
             {bookingError && (
-              <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
-                <p className="text-red-800 dark:text-red-200 text-sm">
+              <div className="mb-4 bg-error-50 border border-error-200 rounded-lg p-3">
+                <p className="text-error-800 text-sm">
                   {bookingError}
                 </p>
               </div>
@@ -460,7 +461,7 @@ export default function BookingPage() {
             <button
               onClick={handleBooking}
               disabled={submitting}
-              className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-6 py-3 bg-info-600 text-text-inverse rounded-lg hover:bg-info-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? 'Envoi en cours...' : 'Valider la réservation'}
             </button>

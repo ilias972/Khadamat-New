@@ -1,92 +1,153 @@
-import Header from '../../components/Header';
-import ProCard from '../../components/ProCard';
-import type { PublicProCard } from '@khadamat/contracts';
+import Navbar from '@/components/Navbar';
+import ProsClientPage from '@/components/pros/ProsClientPage';
+import type { PublicProCard, PublicCity, PublicCategory } from '@khadamat/contracts';
 import { getApiBaseUrl } from '@/lib/api';
 
 interface ProsPageProps {
   searchParams: Promise<{
     cityId?: string;
     categoryId?: string;
+    page?: string;
   }>;
 }
 
+type PaginationMeta = {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNext?: boolean;
+  hasPrev?: boolean;
+};
+
+type PaginatedResponse<T> = {
+  data: T[];
+  meta: PaginationMeta;
+};
+
 /**
- * Page de listing des Pros
+ * Page de listing des Pros (v2)
  *
- * - Affiche la liste des Pros actifs
- * - Filtres via query params : cityId, categoryId
+ * - Endpoint v2 avec cache, tri premium-first, pagination
+ * - Filtres ville/catégorie via query params
+ * - Pagination UI
+ * - Retry sur erreur
+ * - Accessibilité complète
  */
 export default async function ProsPage({ searchParams }: ProsPageProps) {
   const params = await searchParams;
   const apiUrl = getApiBaseUrl();
 
-  // Construction de l'URL avec query params
-  const queryParams = new URLSearchParams();
-  if (params.cityId) queryParams.append('cityId', params.cityId);
-  if (params.categoryId) queryParams.append('categoryId', params.categoryId);
+  const page = params.page ? parseInt(params.page, 10) : 1;
+  const cityId = params.cityId;
+  const categoryId = params.categoryId;
 
-  const url = `${apiUrl}/public/pros?${queryParams.toString()}`;
+  // Fetch pros v2 + cities + categories en parallèle
+  const [prosResponse, citiesResponse, categoriesResponse] = await Promise.all([
+    fetchPros(apiUrl, { cityId, categoryId, page }),
+    fetchCities(apiUrl),
+    fetchCategories(apiUrl),
+  ]);
 
-  // Fetch des Pros
-  let pros: PublicProCard[] = [];
-  let error = false;
-
-  try {
-    const response = await fetch(url, { cache: 'no-store' });
-    if (response.ok) {
-      pros = await response.json();
-    } else {
-      error = true;
-    }
-  } catch (err) {
-    console.error('Failed to fetch pros:', err);
-    error = true;
+  // Si erreur critique, afficher page d'erreur basique (RSC)
+  if (prosResponse.error) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <main className="container mx-auto px-6 py-16">
+          <div className="max-w-6xl mx-auto">
+            <div className="bg-error-50 border border-error-200 rounded-lg p-8 text-center" role="alert">
+              <h1 className="text-2xl font-bold text-error-800 mb-4">
+                Erreur de chargement
+              </h1>
+              <p className="text-error-700 mb-4">
+                {prosResponse.error}
+              </p>
+              <a
+                href="/pros"
+                className="inline-block px-6 py-3 bg-error-600 text-inverse-text rounded-lg hover:bg-error-700 motion-safe:transition font-medium"
+              >
+                Réessayer
+              </a>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
-      <Header />
+    <div className="min-h-screen bg-background">
+      <Navbar />
 
       <main className="container mx-auto px-6 py-16">
-        <div className="max-w-6xl mx-auto space-y-8">
-          {/* Titre */}
-          <div className="space-y-2">
-            <h1 className="text-4xl font-bold text-zinc-900 dark:text-zinc-50">
-              Professionnels disponibles
-            </h1>
-            <p className="text-zinc-600 dark:text-zinc-400">
-              {pros.length} professionnel{pros.length !== 1 ? 's' : ''} trouvé{pros.length !== 1 ? 's' : ''}
-            </p>
-          </div>
-
-          {/* Gestion des erreurs */}
-          {error && (
-            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-              <p className="text-red-800 dark:text-red-200">
-                Une erreur est survenue lors du chargement des professionnels.
-              </p>
-            </div>
-          )}
-
-          {/* Liste vide */}
-          {!error && pros.length === 0 && (
-            <div className="bg-zinc-100 dark:bg-zinc-800 rounded-lg p-12 text-center">
-              <p className="text-zinc-600 dark:text-zinc-400 text-lg">
-                Aucun professionnel trouvé pour ces critères.
-              </p>
-            </div>
-          )}
-
-          {/* Grille de Pros */}
-          {!error && pros.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {pros.map((pro) => (
-                <ProCard key={pro.id} pro={pro} />
-              ))}
-            </div>
-          )}
+        <div className="max-w-6xl mx-auto">
+          <ProsClientPage
+            initialData={prosResponse.data!}
+            initialCities={citiesResponse}
+            initialCategories={categoriesResponse}
+            initialFilters={{ cityId, categoryId, page }}
+          />
         </div>
       </main>
     </div>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  HELPERS SERVER-SIDE
+// ═══════════════════════════════════════════════════════════════
+
+async function fetchPros(
+  apiUrl: string,
+  filters: { cityId?: string; categoryId?: string; page: number }
+): Promise<{ data?: PaginatedResponse<PublicProCard>; error?: string }> {
+  try {
+    const queryParams = new URLSearchParams();
+    if (filters.cityId) queryParams.append('cityId', filters.cityId);
+    if (filters.categoryId) queryParams.append('categoryId', filters.categoryId);
+    queryParams.append('page', filters.page.toString());
+
+    const url = `${apiUrl}/public/pros/v2?${queryParams.toString()}`;
+    const response = await fetch(url, {
+      cache: 'no-store', // Let backend cache handle it
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      return { error: 'Impossible de charger les professionnels.' };
+    }
+
+    const data: PaginatedResponse<PublicProCard> = await response.json();
+    return { data };
+  } catch (err) {
+    console.error('Failed to fetch pros:', err);
+    return { error: 'Erreur réseau lors du chargement des professionnels.' };
+  }
+}
+
+async function fetchCities(apiUrl: string): Promise<PublicCity[]> {
+  try {
+    const response = await fetch(`${apiUrl}/public/cities`, {
+      cache: 'force-cache', // Cities change rarely
+    });
+    if (!response.ok) return [];
+    return response.json();
+  } catch (err) {
+    console.error('Failed to fetch cities:', err);
+    return [];
+  }
+}
+
+async function fetchCategories(apiUrl: string): Promise<PublicCategory[]> {
+  try {
+    const response = await fetch(`${apiUrl}/public/categories`, {
+      cache: 'force-cache', // Categories change rarely
+    });
+    if (!response.ok) return [];
+    return response.json();
+  } catch (err) {
+    console.error('Failed to fetch categories:', err);
+    return [];
+  }
 }

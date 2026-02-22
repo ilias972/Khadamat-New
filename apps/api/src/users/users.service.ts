@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { IsOptional, IsUUID, Length, Matches } from 'class-validator';
 import { PrismaService } from '../database/prisma.service';
+import { validateUrl } from '../common/utils/url-validation';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -44,7 +45,7 @@ export class UsersService {
     if (dto.addressLine !== undefined) dataToUpdate.addressLine = dto.addressLine.trim();
     if (dto.firstName !== undefined) dataToUpdate.firstName = dto.firstName.trim();
     if (dto.lastName !== undefined) dataToUpdate.lastName = dto.lastName.trim();
-    if (dto.avatarUrl !== undefined) dataToUpdate.avatarUrl = dto.avatarUrl;
+    if (dto.avatarUrl !== undefined) dataToUpdate.avatarUrl = validateUrl(dto.avatarUrl);
 
     return this.prisma.user.update({
       where: { id: userId },

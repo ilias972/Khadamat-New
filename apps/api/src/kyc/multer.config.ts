@@ -28,7 +28,10 @@ export const multerConfig: MulterOptions = {
 
     if (!allowedMimeTypes.includes(file.mimetype)) {
       return callback(
-        new BadRequestException('Format non autorisé. Accepté : JPG, PNG, WebP'),
+        new BadRequestException({
+          message: 'Format non autorisé. Accepté : JPG, PNG, WebP',
+          code: 'KYC_FILE_INVALID_TYPE',
+        }),
         false,
       );
     }

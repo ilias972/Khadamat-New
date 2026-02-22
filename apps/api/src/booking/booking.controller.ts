@@ -14,6 +14,7 @@ import {
 import { IsInt, Min, Max, IsBoolean } from 'class-validator';
 import { BookingService } from './booking.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { KycApprovedGuard } from '../auth/guards/kyc-approved.guard';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 
 export class UpdateDurationDto {
@@ -113,13 +114,14 @@ export class BookingController {
     @Request() req,
     @Query('page') rawPage?: string,
     @Query('limit') rawLimit?: string,
+    @Query('scope') scope?: string,
   ) {
     const page = rawPage ? Number(rawPage) : 1;
     const limit = rawLimit ? Number(rawLimit) : 20;
-    if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
+    if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 50) {
       throw new BadRequestException('Paramètres de pagination invalides');
     }
-    return this.bookingService.getMyBookings(req.user.id, req.user.role, page, limit);
+    return this.bookingService.getMyBookings(req.user.id, req.user.role, page, limit, scope);
   }
 
   /**
@@ -140,7 +142,7 @@ export class BookingController {
    * @returns Booking mis à jour
    */
   @Patch('bookings/:id/status')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, KycApprovedGuard)
   async updateBookingStatus(
     @Param('id') id: string,
     @Request() req,
@@ -168,7 +170,7 @@ export class BookingController {
    * @returns Booking mis à jour avec status WAITING_FOR_CLIENT
    */
   @Patch('bookings/:id/duration')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, KycApprovedGuard)
   async updateBookingDuration(
     @Param('id') id: string,
     @Request() req,
@@ -220,7 +222,7 @@ export class BookingController {
    * @returns Booking mis à jour avec status COMPLETED
    */
   @Patch('bookings/:id/complete')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, KycApprovedGuard)
   async completeBooking(
     @Param('id') id: string,
     @Request() req,

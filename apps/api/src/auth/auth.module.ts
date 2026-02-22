@@ -7,10 +7,12 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { RefreshTokenCleanupService } from './refresh-token-cleanup.service';
 import { FailedLoginService } from './failed-login.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     PassportModule,
+    NotificationsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {

@@ -9,15 +9,19 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../database/prisma.service';
 import { FailedLoginService } from './failed-login.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import type { RegisterInput, LoginInput, PublicUser } from '@khadamat/contracts';
+import type { ForgotPasswordDto } from './dto/forgot-password.dto';
+import type { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly refreshExpiresMs: number;
+  private readonly cinSalt: string;
 
   // Rate-limit replay detection : max 1 warn par userId par 60s
   private readonly replayWarnings = new Map<string, number>();
@@ -28,11 +32,19 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
     private readonly failedLogin: FailedLoginService,
+    private readonly notifications: NotificationsService,
   ) {
     // Convertir JWT_REFRESH_EXPIRES en ms (défaut 7 jours)
     this.refreshExpiresMs = this.parseDurationToMs(
       this.config.get<string>('JWT_REFRESH_EXPIRES') || '7d',
     );
+
+    // Fail-fast: validate CIN_HASH_SALT at boot
+    const salt = this.config.get<string>('CIN_HASH_SALT');
+    if (!salt || salt.length < 32) {
+      throw new Error('FATAL: CIN_HASH_SALT is missing or too weak (min 32 chars).');
+    }
+    this.cinSalt = salt;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -337,6 +349,158 @@ export class AuthService {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  //  FORGOT PASSWORD (request reset)
+  // ═══════════════════════════════════════════════════════════════
+
+  private static readonly RESET_TOKEN_EXPIRY_MS = 15 * 60 * 1000; // 15 minutes
+
+  /**
+   * Request a password reset. Always returns a generic message
+   * regardless of whether the user exists (anti-enumeration).
+   */
+  async requestPasswordReset(
+    dto: ForgotPasswordDto,
+  ): Promise<{ message: string }> {
+    const genericMessage = 'Si ce compte existe, vous recevrez des instructions.';
+
+    if (!dto.email && !dto.phone) {
+      throw new BadRequestException('Email ou téléphone requis.');
+    }
+    if (dto.email && dto.phone) {
+      throw new BadRequestException('Fournir email ou téléphone, pas les deux.');
+    }
+
+    // Look up user
+    const identifier = dto.email
+      ? { email: dto.email.toLowerCase().trim() }
+      : { phone: dto.phone!.trim() };
+
+    const user = await this.prisma.user.findFirst({
+      where: identifier,
+      select: { id: true, email: true, phone: true, status: true },
+    });
+
+    // If user doesn't exist or is not active, return generic message (anti-enumeration)
+    if (!user || user.status !== 'ACTIVE') {
+      return { message: genericMessage };
+    }
+
+    // Generate cryptographically secure token
+    const rawToken = crypto.randomBytes(32).toString('hex'); // 64 hex chars
+    const tokenHash = this.hashToken(rawToken);
+
+    // Store only the hash in DB
+    await this.prisma.passwordResetToken.create({
+      data: {
+        tokenHash,
+        userId: user.id,
+        expiresAt: new Date(Date.now() + AuthService.RESET_TOKEN_EXPIRY_MS),
+      },
+    });
+
+    // Send reset email/notification if user has email
+    if (user.email) {
+      const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000';
+      const resetUrl = `${frontendUrl}/auth/reset-password?token=${rawToken}`;
+
+      const html = `
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+          <h2>Réinitialisation de votre mot de passe</h2>
+          <p>Vous avez demandé à réinitialiser votre mot de passe Khadamat.</p>
+          <p>
+            <a href="${resetUrl}"
+               style="display: inline-block; padding: 12px 24px; background-color: #F08C1B; color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold;">
+              Réinitialiser mon mot de passe
+            </a>
+          </p>
+          <p style="color: #666; font-size: 13px;">
+            Ce lien expire dans 15 minutes.<br/>
+            Si vous n'avez pas demandé cette réinitialisation, ignorez cet e-mail.
+          </p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
+          <p style="color: #999; font-size: 11px;">
+            Khadamat — La plateforme marocaine des services de confiance.
+          </p>
+        </div>
+      `.trim();
+
+      try {
+        await this.notifications.sendEmail(
+          user.email,
+          'Réinitialisation de votre mot de passe — Khadamat',
+          html,
+        );
+      } catch (error) {
+        this.logger.error('Failed to send password reset email', error);
+      }
+    }
+
+    this.logger.log(`Password reset requested for user ${user.id}`);
+
+    return { message: genericMessage };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  RESET PASSWORD (apply new password)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Reset password using a valid token.
+   * - Validates token hash, expiry, single-use
+   * - Updates password (bcrypt cost 10)
+   * - Revokes ALL refresh tokens for the user
+   * - Marks token as used
+   */
+  async resetPassword(
+    dto: ResetPasswordDto,
+  ): Promise<{ message: string }> {
+    const genericError = 'Lien invalide ou expiré.';
+
+    const tokenHash = this.hashToken(dto.token);
+
+    const resetToken = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      select: { id: true, userId: true, expiresAt: true, usedAt: true },
+    });
+
+    // Token not found, expired, or already used
+    if (!resetToken) {
+      throw new BadRequestException(genericError);
+    }
+
+    if (resetToken.usedAt) {
+      throw new BadRequestException(genericError);
+    }
+
+    if (resetToken.expiresAt < new Date()) {
+      throw new BadRequestException(genericError);
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
+
+    // Atomic: update password + mark token used + revoke all refresh tokens
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: resetToken.userId },
+        data: { password: hashedPassword },
+      }),
+      this.prisma.passwordResetToken.update({
+        where: { id: resetToken.id },
+        data: { usedAt: new Date() },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId: resetToken.userId, revoked: false },
+        data: { revoked: true },
+      }),
+    ]);
+
+    this.logger.log(`Password reset completed for user ${resetToken.userId}`);
+
+    return { message: 'Mot de passe mis à jour.' };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   //  VALIDATE USER (utilisé par JwtStrategy)
   // ═══════════════════════════════════════════════════════════════
 
@@ -451,9 +615,8 @@ export class AuthService {
    * Hash CIN number with salt using SHA-256 (same logic as KycService).
    */
   private hashCin(cinNumber: string): string {
-    const salt = this.config.get<string>('CIN_HASH_SALT') || 'khadamat-cin-default-salt';
     const normalized = cinNumber.trim().toUpperCase();
-    return crypto.createHash('sha256').update(normalized + salt).digest('hex');
+    return crypto.createHash('sha256').update(normalized + this.cinSalt).digest('hex');
   }
 
   /**

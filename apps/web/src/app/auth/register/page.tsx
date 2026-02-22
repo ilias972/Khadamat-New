@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useEffect } from 'react';
+import { Suspense, useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { User, Briefcase, Upload, ArrowLeft, Check, AlertCircle, Shield, Zap, Users, MessageCircle } from 'lucide-react';
@@ -63,6 +63,11 @@ function RegisterPageInner() {
   const [cinNumberError, setCinNumberError] = useState('');
   const [cinFrontError, setCinFrontError] = useState('');
   const [cinBackError, setCinBackError] = useState('');
+  const errorRef = useRef<HTMLDivElement>(null);
+  const emailInputRef = useRef<HTMLInputElement>(null);
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const cinInputRef = useRef<HTMLInputElement>(null);
 
   // ── Error mapping ──
   const mapBackendError = (msg: string): string => {
@@ -174,6 +179,7 @@ function RegisterPageInner() {
         setEmailError('Adresse e-mail invalide');
         setError('L\'adresse e-mail est invalide');
         setLoading(false);
+        requestAnimationFrame(() => emailInputRef.current?.focus());
         return;
       }
 
@@ -182,6 +188,7 @@ function RegisterPageInner() {
         setPhoneError('Format : 06XXXXXXXX ou +212XXXXXXXXX');
         setError('Le numéro de téléphone est invalide');
         setLoading(false);
+        requestAnimationFrame(() => phoneInputRef.current?.focus());
         return;
       }
 
@@ -191,6 +198,7 @@ function RegisterPageInner() {
         setPasswordErrors(pwdErrs);
         setError('Le mot de passe ne respecte pas les critères requis');
         setLoading(false);
+        requestAnimationFrame(() => passwordInputRef.current?.focus());
         return;
       }
 
@@ -207,6 +215,7 @@ function RegisterPageInner() {
           setCinNumberError('Format invalide (ex : BJ453975)');
           setError('Le numéro de CIN est invalide');
           setLoading(false);
+          requestAnimationFrame(() => cinInputRef.current?.focus());
           return;
         }
         if (!cinFrontFile) {
@@ -266,6 +275,7 @@ function RegisterPageInner() {
       router.push(role === 'PRO' ? '/dashboard/kyc' : '/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Une erreur est survenue');
+      requestAnimationFrame(() => errorRef.current?.focus());
     } finally {
       setLoading(false);
     }
@@ -276,7 +286,7 @@ function RegisterPageInner() {
       {/* ═══════════════════════════════════════════════════════════════════
           LEFT PANEL - Orange Gradient Sidebar
           ═══════════════════════════════════════════════════════════════════ */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden" style={{ background: 'linear-gradient(180deg, #F9B16D 0%, #F08C1B 35%, #D97213 70%, #B55812 100%)' }}>
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden" style={{ background: 'linear-gradient(180deg, var(--color-primary-300) 0%, var(--color-primary-500) 35%, var(--color-primary-600) 70%, var(--color-primary-700) 100%)' }}>
         {/* Background Pattern - Geometric Shapes */}
         <div className="absolute inset-0">
           {/* Large decorative circles */}
@@ -365,13 +375,13 @@ function RegisterPageInner() {
       {/* ═══════════════════════════════════════════════════════════════════
           RIGHT PANEL - Beige Form Section with Floating Card
           ═══════════════════════════════════════════════════════════════════ */}
-      <div className="flex-1 bg-[#F2F0EF] flex items-center justify-center p-6 lg:p-12 min-h-screen">
-        <div className="w-full max-w-md bg-white rounded-3xl shadow-xl p-8 lg:p-10 border border-slate-100">
+      <div className="flex-1 bg-background flex items-center justify-center p-6 lg:p-12 min-h-screen">
+        <div className="w-full max-w-md bg-surface rounded-3xl shadow-xl p-8 lg:p-10 border border-border">
           {/* Back button */}
           {step === 2 && (
             <button
               onClick={() => { setStep(1); setRole(null); }}
-              className="flex items-center gap-2 text-slate-500 hover:text-slate-900 mb-6 transition-colors font-medium"
+              className="flex items-center gap-2 text-text-muted hover:text-text-primary mb-6 transition-colors font-medium"
             >
               <ArrowLeft className="w-4 h-4" />
               Retour au choix du profil
@@ -380,7 +390,7 @@ function RegisterPageInner() {
 
           {/* Mobile Logo */}
           <div className="lg:hidden mb-8">
-            <Link href="/" className="text-[#F08C1B] text-2xl font-bold">
+            <Link href="/" className="text-primary-500 text-2xl font-bold">
               Khadamat
             </Link>
           </div>
@@ -390,10 +400,10 @@ function RegisterPageInner() {
               ═══════════════════════════════════════════════════════════════ */}
           {step === 1 && (
             <div className="animate-fade-in">
-              <h1 className="text-3xl lg:text-4xl font-bold text-slate-900 mb-2">
+              <h1 className="text-3xl lg:text-4xl font-bold text-text-primary mb-2">
                 Créer un compte
               </h1>
-              <p className="text-slate-500 mb-8">
+              <p className="text-text-muted mb-8">
                 Choisissez votre type de profil pour commencer
               </p>
 
@@ -401,21 +411,21 @@ function RegisterPageInner() {
                 {/* Client Card */}
                 <button
                   onClick={() => handleRoleSelect('CLIENT')}
-                  className="w-full p-6 bg-slate-50 hover:bg-white rounded-2xl border-2 border-transparent hover:border-[#F08C1B] shadow-sm hover:shadow-xl transition-all duration-300 text-left group hover:-translate-y-1"
+                  className="w-full p-6 bg-input-bg hover:bg-surface rounded-2xl border-2 border-transparent hover:border-primary-500 shadow-sm hover:shadow-xl motion-safe:transition-all motion-safe:duration-300 text-left group motion-safe:hover:-translate-y-1"
                 >
                   <div className="flex items-start gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#FEF3E7] to-[#FDECD4] flex items-center justify-center group-hover:from-[#FDE5CC] group-hover:to-[#FBCF9E] transition-all shadow-sm group-hover:shadow-md">
-                      <User className="w-7 h-7 text-[#F08C1B]" />
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center group-hover:from-primary-100 group-hover:to-primary-200 transition-all shadow-sm group-hover:shadow-md">
+                      <User className="w-7 h-7 text-primary-500" />
                     </div>
                     <div className="flex-1">
-                      <h3 className="text-lg font-bold text-slate-900 mb-1 group-hover:text-[#D97213] transition-colors">
+                      <h3 className="text-lg font-bold text-text-primary mb-1 group-hover:text-primary-600 transition-colors">
                         Je suis Client
                       </h3>
-                      <p className="text-slate-500 text-sm leading-relaxed">
+                      <p className="text-text-muted text-sm leading-relaxed">
                         Je cherche des professionnels qualifiés pour mes projets
                       </p>
                     </div>
-                    <div className="w-7 h-7 rounded-full border-2 border-slate-300 group-hover:border-[#F08C1B] group-hover:bg-[#F08C1B] transition-all flex items-center justify-center group-hover:scale-110">
+                    <div className="w-7 h-7 rounded-full border-2 border-border-strong group-hover:border-primary-500 group-hover:bg-primary-500 transition-all flex items-center justify-center group-hover:scale-110">
                       <Check className="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                     </div>
                   </div>
@@ -424,21 +434,21 @@ function RegisterPageInner() {
                 {/* Pro Card */}
                 <button
                   onClick={() => handleRoleSelect('PRO')}
-                  className="w-full p-6 bg-slate-50 hover:bg-white rounded-2xl border-2 border-transparent hover:border-[#F08C1B] shadow-sm hover:shadow-xl transition-all duration-300 text-left group hover:-translate-y-1"
+                  className="w-full p-6 bg-input-bg hover:bg-surface rounded-2xl border-2 border-transparent hover:border-primary-500 shadow-sm hover:shadow-xl motion-safe:transition-all motion-safe:duration-300 text-left group motion-safe:hover:-translate-y-1"
                 >
                   <div className="flex items-start gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#FEF3E7] to-[#FDECD4] flex items-center justify-center group-hover:from-[#FDE5CC] group-hover:to-[#FBCF9E] transition-all shadow-sm group-hover:shadow-md">
-                      <Briefcase className="w-7 h-7 text-[#F08C1B]" />
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center group-hover:from-primary-100 group-hover:to-primary-200 transition-all shadow-sm group-hover:shadow-md">
+                      <Briefcase className="w-7 h-7 text-primary-500" />
                     </div>
                     <div className="flex-1">
-                      <h3 className="text-lg font-bold text-slate-900 mb-1 group-hover:text-[#D97213] transition-colors">
+                      <h3 className="text-lg font-bold text-text-primary mb-1 group-hover:text-primary-600 transition-colors">
                         Je suis Professionnel
                       </h3>
-                      <p className="text-slate-500 text-sm leading-relaxed">
+                      <p className="text-text-muted text-sm leading-relaxed">
                         Je propose mes services et développe ma clientèle
                       </p>
                     </div>
-                    <div className="w-7 h-7 rounded-full border-2 border-slate-300 group-hover:border-[#F08C1B] group-hover:bg-[#F08C1B] transition-all flex items-center justify-center group-hover:scale-110">
+                    <div className="w-7 h-7 rounded-full border-2 border-border-strong group-hover:border-primary-500 group-hover:bg-primary-500 transition-all flex items-center justify-center group-hover:scale-110">
                       <Check className="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                     </div>
                   </div>
@@ -448,16 +458,16 @@ function RegisterPageInner() {
               {/* Divider */}
               <div className="relative my-8">
                 <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-slate-200"></div>
+                  <div className="w-full border-t border-border"></div>
                 </div>
                 <div className="relative flex justify-center text-sm">
-                  <span className="px-4 bg-white text-slate-400 font-medium">ou</span>
+                  <span className="px-4 bg-surface text-text-muted font-medium">ou</span>
                 </div>
               </div>
 
-              <p className="text-center text-slate-500">
+              <p className="text-center text-text-muted">
                 Déjà un compte ?{' '}
-                <Link href="/auth/login" className="text-[#F08C1B] font-bold hover:text-[#D97213] hover:underline transition-colors">
+                <Link href="/auth/login" className="text-primary-500 font-bold hover:text-primary-600 hover:underline transition-colors">
                   Se connecter
                 </Link>
               </p>
@@ -470,21 +480,21 @@ function RegisterPageInner() {
           {step === 2 && role && (
             <div className="animate-fade-in">
               {/* Role Badge */}
-              <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#FEF3E7] to-[#FDECD4] rounded-full mb-4 shadow-sm">
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-primary-50 to-primary-100 rounded-full mb-4 shadow-sm">
                 {role === 'PRO' ? (
-                  <Briefcase className="w-4 h-4 text-[#F08C1B]" />
+                  <Briefcase className="w-4 h-4 text-primary-500" />
                 ) : (
-                  <User className="w-4 h-4 text-[#F08C1B]" />
+                  <User className="w-4 h-4 text-primary-500" />
                 )}
-                <span className="text-sm font-bold text-[#D97213]">
+                <span className="text-sm font-bold text-primary-600">
                   {role === 'PRO' ? 'Professionnel' : 'Client'}
                 </span>
               </div>
 
-              <h1 className="text-3xl lg:text-4xl font-bold text-slate-900 mb-2">
+              <h1 className="text-3xl lg:text-4xl font-bold text-text-primary mb-2">
                 {role === 'PRO' ? 'Rejoignez nos Pros' : 'Créez votre compte'}
               </h1>
-              <p className="text-slate-500 mb-8">
+              <p className="text-text-muted mb-8">
                 Remplissez vos informations pour commencer
               </p>
 
@@ -492,30 +502,30 @@ function RegisterPageInner() {
                 {/* Nom / Prénom */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label htmlFor="reg-firstName" className="block text-sm font-semibold text-slate-700 mb-2">
-                      Prénom <span className="text-red-500">*</span>
+                    <label htmlFor="reg-firstName" className="block text-sm font-semibold text-text-label mb-2">
+                      Prénom <span className="text-error-500">*</span>
                     </label>
                     <input
                       id="reg-firstName"
                       type="text"
                       value={formData.firstName}
                       onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                      className="w-full h-12 px-4 bg-slate-50 border-2 border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all"
+                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all"
                       placeholder="Ahmed"
                       required
                       autoComplete="given-name"
                     />
                   </div>
                   <div>
-                    <label htmlFor="reg-lastName" className="block text-sm font-semibold text-slate-700 mb-2">
-                      Nom <span className="text-red-500">*</span>
+                    <label htmlFor="reg-lastName" className="block text-sm font-semibold text-text-label mb-2">
+                      Nom <span className="text-error-500">*</span>
                     </label>
                     <input
                       id="reg-lastName"
                       type="text"
                       value={formData.lastName}
                       onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                      className="w-full h-12 px-4 bg-slate-50 border-2 border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all"
+                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all"
                       placeholder="Bennani"
                       required
                       autoComplete="family-name"
@@ -525,65 +535,69 @@ function RegisterPageInner() {
 
                 {/* Email */}
                 <div>
-                  <label htmlFor="reg-email" className="block text-sm font-semibold text-slate-700 mb-2">
-                    Email <span className="text-red-500">*</span>
+                  <label htmlFor="reg-email" className="block text-sm font-semibold text-text-label mb-2">
+                    Email <span className="text-error-500">*</span>
                   </label>
                   <input
+                    ref={emailInputRef}
                     id="reg-email"
                     type="email"
                     value={formData.email}
                     onChange={(e) => handleEmailChange(e.target.value)}
                     aria-describedby={emailError ? 'reg-email-error' : undefined}
-                    aria-invalid={!!emailError}
-                    className={`w-full h-12 px-4 bg-slate-50 border-2 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all ${
-                      emailError ? 'border-red-300' : 'border-slate-200'
+                    aria-invalid={!!emailError || undefined}
+                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all ${
+                      emailError ? 'border-error-300' : 'border-border'
                     }`}
                     placeholder="ahmed@exemple.com"
                     required
                     autoComplete="email"
                   />
                   {emailError && (
-                    <p id="reg-email-error" className="mt-1.5 text-xs text-red-600" role="alert">{emailError}</p>
+                    <p id="reg-email-error" className="mt-1.5 text-xs text-error-600" role="alert">{emailError}</p>
                   )}
                 </div>
 
                 {/* Téléphone */}
                 <div>
-                  <label htmlFor="reg-phone" className="block text-sm font-semibold text-slate-700 mb-2">
-                    Téléphone <span className="text-red-500">*</span>
+                  <label htmlFor="reg-phone" className="block text-sm font-semibold text-text-label mb-2">
+                    Téléphone <span className="text-error-500">*</span>
                   </label>
                   <input
+                    ref={phoneInputRef}
                     id="reg-phone"
                     type="tel"
                     value={formData.phone}
                     onChange={(e) => handlePhoneChange(e.target.value)}
                     aria-describedby={phoneError ? 'reg-phone-error' : undefined}
-                    aria-invalid={!!phoneError}
-                    className={`w-full h-12 px-4 bg-slate-50 border-2 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all ${
-                      phoneError ? 'border-red-300' : 'border-slate-200'
+                    aria-invalid={!!phoneError || undefined}
+                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all ${
+                      phoneError ? 'border-error-300' : 'border-border'
                     }`}
                     placeholder="0612345678"
                     required
                     autoComplete="tel"
                   />
                   {phoneError && (
-                    <p id="reg-phone-error" className="mt-1.5 text-xs text-red-600" role="alert">{phoneError}</p>
+                    <p id="reg-phone-error" className="mt-1.5 text-xs text-error-600" role="alert">{phoneError}</p>
                   )}
                 </div>
 
                 {/* Mot de passe */}
                 <div>
-                  <label htmlFor="reg-password" className="block text-sm font-semibold text-slate-700 mb-2">
-                    Mot de passe <span className="text-red-500">*</span>
+                  <label htmlFor="reg-password" className="block text-sm font-semibold text-text-label mb-2">
+                    Mot de passe <span className="text-error-500">*</span>
                   </label>
                   <input
+                    ref={passwordInputRef}
                     id="reg-password"
                     type="password"
                     value={formData.password}
                     onChange={(e) => handlePasswordChange(e.target.value)}
                     aria-describedby="reg-password-rules"
-                    className={`w-full h-12 px-4 bg-slate-50 border-2 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all ${
-                      passwordErrors.length > 0 ? 'border-red-300' : 'border-slate-200'
+                    aria-invalid={passwordErrors.length > 0 || undefined}
+                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all ${
+                      passwordErrors.length > 0 ? 'border-error-300' : 'border-border'
                     }`}
                     placeholder="Min. 10 caractères, 1 maj, 1 min, 1 chiffre"
                     required
@@ -598,11 +612,11 @@ function RegisterPageInner() {
                         { ok: /[A-Z]/.test(formData.password), label: 'Au moins 1 majuscule' },
                         { ok: /[0-9]/.test(formData.password), label: 'Au moins 1 chiffre' },
                       ].map((rule) => (
-                        <li key={rule.label} className={`flex items-center gap-1.5 text-xs ${rule.ok ? 'text-emerald-600' : 'text-slate-400'}`}>
+                        <li key={rule.label} className={`flex items-center gap-1.5 text-xs ${rule.ok ? 'text-success-600' : 'text-text-muted'}`}>
                           {rule.ok ? (
                             <Check className="w-3 h-3" aria-hidden="true" />
                           ) : (
-                            <span className="w-3 h-3 rounded-full border border-slate-300 inline-block" aria-hidden="true" />
+                            <span className="w-3 h-3 rounded-full border border-border-strong inline-block" aria-hidden="true" />
                           )}
                           {rule.label}
                         </li>
@@ -613,8 +627,8 @@ function RegisterPageInner() {
 
                 {/* Confirmer mot de passe */}
                 <div>
-                  <label htmlFor="reg-confirmPassword" className="block text-sm font-semibold text-slate-700 mb-2">
-                    Confirmer le mot de passe <span className="text-red-500">*</span>
+                  <label htmlFor="reg-confirmPassword" className="block text-sm font-semibold text-text-label mb-2">
+                    Confirmer le mot de passe <span className="text-error-500">*</span>
                   </label>
                   <input
                     id="reg-confirmPassword"
@@ -623,15 +637,15 @@ function RegisterPageInner() {
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     aria-describedby={confirmPassword && formData.password !== confirmPassword ? 'reg-confirm-error' : undefined}
                     aria-invalid={!!(confirmPassword && formData.password !== confirmPassword)}
-                    className={`w-full h-12 px-4 bg-slate-50 border-2 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all ${
-                      confirmPassword && formData.password !== confirmPassword ? 'border-red-300' : 'border-slate-200'
+                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all ${
+                      confirmPassword && formData.password !== confirmPassword ? 'border-error-300' : 'border-border'
                     }`}
                     placeholder="Retapez votre mot de passe"
                     required
                     autoComplete="new-password"
                   />
                   {confirmPassword && formData.password !== confirmPassword && (
-                    <p id="reg-confirm-error" className="mt-1.5 text-xs text-red-600" role="alert">
+                    <p id="reg-confirm-error" className="mt-1.5 text-xs text-error-600" role="alert">
                       Les mots de passe ne correspondent pas
                     </p>
                   )}
@@ -639,10 +653,11 @@ function RegisterPageInner() {
 
                 {/* Ville */}
                 <div>
-                  <label htmlFor="reg-city" className="block text-sm font-semibold text-slate-700 mb-2">
-                    Ville <span className="text-red-500">*</span>
+                  <label htmlFor="reg-city" className="block text-sm font-semibold text-text-label mb-2">
+                    Ville <span className="text-error-500">*</span>
                   </label>
                   <CitySelect
+                    id="reg-city"
                     value={formData.cityId}
                     onChange={(cityId) => setFormData({ ...formData, cityId })}
                     required
@@ -652,15 +667,15 @@ function RegisterPageInner() {
                 {/* CLIENT: Adresse */}
                 {role === 'CLIENT' && (
                   <div>
-                    <label htmlFor="reg-address" className="block text-sm font-semibold text-slate-700 mb-2">
-                      Adresse complète <span className="text-red-500">*</span>
+                    <label htmlFor="reg-address" className="block text-sm font-semibold text-text-label mb-2">
+                      Adresse complète <span className="text-error-500">*</span>
                     </label>
                     <input
                       id="reg-address"
                       type="text"
                       value={formData.addressLine}
                       onChange={(e) => setFormData({ ...formData, addressLine: e.target.value })}
-                      className="w-full h-12 px-4 bg-slate-50 border-2 border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all"
+                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all"
                       placeholder="12 Rue Hassan II, Apt 5"
                       required
                       autoComplete="street-address"
@@ -674,33 +689,34 @@ function RegisterPageInner() {
                     {/* Section Divider */}
                     <div className="relative py-3">
                       <div className="absolute inset-0 flex items-center">
-                        <div className="w-full border-t border-slate-200"></div>
+                        <div className="w-full border-t border-border"></div>
                       </div>
                       <div className="relative flex justify-center text-sm">
-                        <span className="px-4 bg-white text-slate-500 font-medium">Vérification d&apos;identité</span>
+                        <span className="px-4 bg-surface text-text-muted font-medium">Vérification d&apos;identité</span>
                       </div>
                     </div>
 
                     {/* CIN Number */}
                     <div>
-                      <label htmlFor="reg-cin" className="block text-sm font-semibold text-slate-700 mb-2">
-                        Numéro de CIN <span className="text-red-500">*</span>
+                      <label htmlFor="reg-cin" className="block text-sm font-semibold text-text-label mb-2">
+                        Numéro de CIN <span className="text-error-500">*</span>
                       </label>
                       <input
+                        ref={cinInputRef}
                         id="reg-cin"
                         type="text"
                         value={formData.cinNumber}
                         onChange={(e) => handleCinNumberChange(e.target.value)}
                         aria-describedby={cinNumberError ? 'reg-cin-error' : undefined}
-                        aria-invalid={!!cinNumberError}
-                        className={`w-full h-12 px-4 bg-slate-50 border-2 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all font-mono tracking-wider ${
-                          cinNumberError ? 'border-red-300' : 'border-slate-200'
+                        aria-invalid={!!cinNumberError || undefined}
+                        className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all font-mono tracking-wider ${
+                          cinNumberError ? 'border-error-300' : 'border-border'
                         }`}
                         placeholder="BJ453975"
                         required
                       />
                       {cinNumberError && (
-                        <p id="reg-cin-error" className="mt-1.5 text-xs text-red-600" role="alert">{cinNumberError}</p>
+                        <p id="reg-cin-error" className="mt-1.5 text-xs text-error-600" role="alert">{cinNumberError}</p>
                       )}
                     </div>
 
@@ -708,41 +724,42 @@ function RegisterPageInner() {
                     <div className="grid grid-cols-2 gap-4">
                       {/* Recto */}
                       <div>
-                        <span className="block text-sm font-semibold text-slate-700 mb-2">
-                          CIN Recto <span className="text-red-500">*</span>
+                        <span className="block text-sm font-semibold text-text-label mb-2">
+                          CIN Recto <span className="text-error-500">*</span>
                         </span>
                         <label className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
                           cinFrontFile
-                            ? 'border-emerald-500 bg-emerald-50'
+                            ? 'border-success-500 bg-success-50'
                             : cinFrontError
-                              ? 'border-red-300 bg-red-50'
-                              : 'border-slate-300 bg-white hover:border-[#F08C1B] hover:bg-[#FEF3E7]'
+                              ? 'border-error-300 bg-error-50'
+                              : 'border-border-strong bg-surface hover:border-primary-500 hover:bg-primary-50'
                         }`}>
                           {cinFrontFile ? (
                             <div className="text-center">
-                              <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-2">
-                                <Check className="w-6 h-6 text-emerald-600" />
+                              <div className="w-12 h-12 rounded-full bg-success-100 flex items-center justify-center mx-auto mb-2">
+                                <Check className="w-6 h-6 text-success-600" />
                               </div>
-                              <span className="text-sm text-emerald-700 font-semibold">Fichier ajouté</span>
-                              <p className="text-xs text-emerald-600 mt-1 truncate max-w-[120px]">{cinFrontFile.name}</p>
+                              <span className="text-sm text-success-700 font-semibold">Fichier ajouté</span>
+                              <p className="text-xs text-success-600 mt-1 truncate max-w-[120px]">{cinFrontFile.name}</p>
                             </div>
                           ) : (
                             <div className="text-center">
-                              <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                              <span className="text-sm text-slate-600 font-medium">Cliquez pour ajouter</span>
-                              <p className="text-xs text-slate-400 mt-1">JPG, PNG, WebP (max 5 Mo)</p>
+                              <Upload className="w-8 h-8 text-text-muted mx-auto mb-2" />
+                              <span className="text-sm text-text-secondary font-medium">Cliquez pour ajouter</span>
+                              <p className="text-xs text-text-muted mt-1">JPG, PNG, WebP (max 5 Mo)</p>
                             </div>
                           )}
                           <input
                             type="file"
                             className="hidden"
                             accept=".jpg,.jpeg,.png,.webp"
+                            aria-label="Photo CIN recto"
                             onChange={(e) => handleCinFile(e.target.files?.[0], setCinFrontFile, setCinFrontError)}
                             required
                           />
                         </label>
                         {cinFrontError && (
-                          <p className="mt-1.5 text-xs text-red-600 flex items-center gap-1">
+                          <p className="mt-1.5 text-xs text-error-600 flex items-center gap-1" role="alert">
                             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
                             {cinFrontError}
                           </p>
@@ -751,41 +768,42 @@ function RegisterPageInner() {
 
                       {/* Verso */}
                       <div>
-                        <span className="block text-sm font-semibold text-slate-700 mb-2">
-                          CIN Verso <span className="text-red-500">*</span>
+                        <span className="block text-sm font-semibold text-text-label mb-2">
+                          CIN Verso <span className="text-error-500">*</span>
                         </span>
                         <label className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
                           cinBackFile
-                            ? 'border-emerald-500 bg-emerald-50'
+                            ? 'border-success-500 bg-success-50'
                             : cinBackError
-                              ? 'border-red-300 bg-red-50'
-                              : 'border-slate-300 bg-white hover:border-[#F08C1B] hover:bg-[#FEF3E7]'
+                              ? 'border-error-300 bg-error-50'
+                              : 'border-border-strong bg-surface hover:border-primary-500 hover:bg-primary-50'
                         }`}>
                           {cinBackFile ? (
                             <div className="text-center">
-                              <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-2">
-                                <Check className="w-6 h-6 text-emerald-600" />
+                              <div className="w-12 h-12 rounded-full bg-success-100 flex items-center justify-center mx-auto mb-2">
+                                <Check className="w-6 h-6 text-success-600" />
                               </div>
-                              <span className="text-sm text-emerald-700 font-semibold">Fichier ajouté</span>
-                              <p className="text-xs text-emerald-600 mt-1 truncate max-w-[120px]">{cinBackFile.name}</p>
+                              <span className="text-sm text-success-700 font-semibold">Fichier ajouté</span>
+                              <p className="text-xs text-success-600 mt-1 truncate max-w-[120px]">{cinBackFile.name}</p>
                             </div>
                           ) : (
                             <div className="text-center">
-                              <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                              <span className="text-sm text-slate-600 font-medium">Cliquez pour ajouter</span>
-                              <p className="text-xs text-slate-400 mt-1">JPG, PNG, WebP (max 5 Mo)</p>
+                              <Upload className="w-8 h-8 text-text-muted mx-auto mb-2" />
+                              <span className="text-sm text-text-secondary font-medium">Cliquez pour ajouter</span>
+                              <p className="text-xs text-text-muted mt-1">JPG, PNG, WebP (max 5 Mo)</p>
                             </div>
                           )}
                           <input
                             type="file"
                             className="hidden"
                             accept=".jpg,.jpeg,.png,.webp"
+                            aria-label="Photo CIN verso"
                             onChange={(e) => handleCinFile(e.target.files?.[0], setCinBackFile, setCinBackError)}
                             required
                           />
                         </label>
                         {cinBackError && (
-                          <p className="mt-1.5 text-xs text-red-600 flex items-center gap-1">
+                          <p className="mt-1.5 text-xs text-error-600 flex items-center gap-1" role="alert">
                             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
                             {cinBackError}
                           </p>
@@ -794,11 +812,11 @@ function RegisterPageInner() {
                     </div>
 
                     {/* KYC Info Box */}
-                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start gap-3">
-                      <Shield className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                    <div className="bg-info-50 border border-info-200 rounded-xl p-4 flex items-start gap-3">
+                      <Shield className="w-5 h-5 text-info-600 flex-shrink-0 mt-0.5" />
                       <div>
-                        <p className="text-blue-900 text-sm font-semibold">Vérification sécurisée</p>
-                        <p className="text-blue-700 text-sm mt-1">
+                        <p className="text-info-900 text-sm font-semibold">Vérification sécurisée</p>
+                        <p className="text-info-700 text-sm mt-1">
                           Votre compte sera validé sous 24-48h après vérification de vos documents.
                         </p>
                       </div>
@@ -809,9 +827,14 @@ function RegisterPageInner() {
                 {/* Error */}
                 <div aria-live="assertive" aria-atomic="true">
                   {error && (
-                    <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4" role="alert">
-                      <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
-                      <p className="text-red-700 text-sm font-medium">{error}</p>
+                    <div
+                      ref={errorRef}
+                      tabIndex={-1}
+                      className="flex items-start gap-3 bg-error-50 border border-error-200 rounded-xl p-4 outline-none"
+                      role="alert"
+                    >
+                      <AlertCircle className="w-5 h-5 text-error-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                      <p className="text-error-700 text-sm font-medium">{error}</p>
                     </div>
                   )}
                 </div>
@@ -820,11 +843,11 @@ function RegisterPageInner() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full h-14 px-6 bg-gradient-to-r from-[#F08C1B] to-[#D97213] text-white font-bold text-lg rounded-xl hover:from-[#D97213] hover:to-[#B55812] active:from-[#B55812] active:to-[#914616] transition-all duration-300 shadow-lg shadow-[#F08C1B]/30 hover:shadow-xl hover:shadow-[#F08C1B]/40 hover:-translate-y-0.5 hover:scale-[1.02] active:translate-y-0 active:scale-100 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:scale-100 disabled:hover:shadow-lg"
+                  className="w-full h-14 px-6 bg-gradient-to-r from-primary-500 to-primary-600 text-inverse-text font-bold text-lg rounded-xl hover:from-primary-600 hover:to-primary-700 active:from-primary-700 active:to-primary-800 motion-safe:transition-all motion-safe:duration-300 shadow-lg shadow-primary-500/30 hover:shadow-xl hover:shadow-primary-500/40 motion-safe:hover:-translate-y-0.5 motion-safe:hover:scale-[1.02] active:translate-y-0 active:scale-100 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:scale-100 disabled:hover:shadow-lg"
                 >
                   {loading ? (
                     <span className="flex items-center justify-center gap-2">
-                      <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                      <svg className="motion-safe:animate-spin h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                       </svg>
@@ -836,9 +859,9 @@ function RegisterPageInner() {
                 </button>
               </form>
 
-              <p className="text-center text-slate-500 mt-6">
+              <p className="text-center text-text-muted mt-6">
                 Déjà un compte ?{' '}
-                <Link href="/auth/login" className="text-[#F08C1B] font-semibold hover:underline">
+                <Link href="/auth/login" className="text-primary-500 font-semibold hover:underline">
                   Se connecter
                 </Link>
               </p>

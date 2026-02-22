@@ -5,6 +5,22 @@ import { ArrowLeft } from 'lucide-react';
 export const metadata: Metadata = {
   title: 'Mentions Légales — Khadamat',
   description: 'Mentions légales de la plateforme Khadamat.',
+  alternates: { canonical: 'https://khadamat.ma/legal/mentions' },
+  openGraph: {
+    title: 'Mentions Légales — Khadamat',
+    description: 'Mentions légales de la plateforme Khadamat.',
+    url: 'https://khadamat.ma/legal/mentions',
+    siteName: 'Khadamat',
+    locale: 'fr_MA',
+    type: 'website',
+    images: [{ url: 'https://khadamat.ma/og-image.jpg', width: 1200, height: 630, alt: 'Khadamat' }],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Mentions Légales — Khadamat',
+    description: 'Mentions légales de la plateforme Khadamat.',
+    images: ['https://khadamat.ma/og-image.jpg'],
+  },
 };
 
 export default function MentionsPage() {
@@ -24,21 +40,10 @@ export default function MentionsPage() {
         </h1>
 
         <div className="prose prose-sm max-w-none text-text-secondary space-y-6">
-          <p>
-            Khadamat est une plateforme de mise en relation entre particuliers et
-            professionnels de services au Maroc.
-          </p>
-
-          <p className="bg-surface border border-border rounded-xl p-6 text-text-muted text-center">
-            Cette page est en cours de rédaction. Les mentions légales complètes
-            seront publiées prochainement.
-          </p>
-
-          <p>
-            Pour toute question, contactez-nous à{' '}
-            <a href="mailto:support@khadamat.ma" className="text-primary-600 hover:underline">
-              support@khadamat.ma
-            </a>.
+          <p className="bg-surface border border-border rounded-xl p-6 text-text-muted">
+            Cette page est temporairement indisponible. Les Mentions Légales
+            complètes seront publiées avant la mise en production. Pour toute
+            question, contactez : support@khadamat.ma.
           </p>
         </div>
       </div>

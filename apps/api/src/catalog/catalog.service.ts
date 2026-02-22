@@ -3,6 +3,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { PrismaService } from '../database/prisma.service';
 import { CatalogResolverService } from './catalog-resolver.service';
+import { getPagination, getPaginationMeta, type PaginationMeta } from '../common/utils/pagination';
 import type {
   PublicCity,
   PublicCategory,
@@ -90,11 +91,11 @@ export class CatalogService {
     filters: { cityId?: string; categoryId?: string },
     page: number = 1,
     limit: number = 20,
-  ): Promise<{ data: PublicProCard[]; total: number; page: number; limit: number }> {
+  ): Promise<{ data: PublicProCard[]; meta: PaginationMeta }> {
     const { cityId: cityPublicId, categoryId: categoryPublicId } = filters;
 
     const cacheKey = `catalog:pros:v2:${cityPublicId || '_'}:${categoryPublicId || '_'}:${page}:${limit}`;
-    const cached = await this.cache.get<{ data: PublicProCard[]; total: number; page: number; limit: number }>(cacheKey);
+    const cached = await this.cache.get<{ data: PublicProCard[]; meta: PaginationMeta }>(cacheKey);
     if (cached) return cached;
 
     this.logger.log(`Recherche Pro v2: city=${cityPublicId || 'all'}, cat=${categoryPublicId || 'all'}, page=${page}`);
@@ -102,13 +103,13 @@ export class CatalogService {
     const cityId = cityPublicId ? await this.catalogResolver.resolveCityId(cityPublicId) : undefined;
     const categoryId = categoryPublicId ? await this.catalogResolver.resolveCategoryId(categoryPublicId) : undefined;
     const whereClause = this.buildProWhereClause(cityId, categoryId);
-    const skip = (page - 1) * limit;
+    const { skip, take } = getPagination(page, limit);
 
     const [pros, total] = await Promise.all([
       this.prisma.user.findMany({
         where: whereClause,
         skip,
-        take: limit,
+        take,
         select: this.proSelectFields(),
         orderBy: [
           { proProfile: { isPremium: 'desc' } },
@@ -123,9 +124,7 @@ export class CatalogService {
 
     const result = {
       data: pros.map((pro) => this.mapToPublicProCard(pro)),
-      total,
-      page,
-      limit,
+      meta: getPaginationMeta(page, limit, total),
     };
 
     await this.cache.set(cacheKey, result, CACHE_TTL_PROS_V2);
@@ -275,13 +274,17 @@ export class CatalogService {
     return whereClause;
   }
 
-  /** Select partiel — JAMAIS de password ni de données sensibles */
+  /**
+   * Select partiel pour endpoints de LISTE
+   * Defense-in-depth: do not select phone on list endpoints
+   * (phone is only exposed on detail endpoint with eligibility check)
+   */
   private proSelectFields() {
     return {
       id: true,
       firstName: true,
       lastName: true,
-      phone: true,
+      // phone: intentionally omitted for list endpoints (defense-in-depth)
       avatarUrl: true,
       createdAt: true,
       proProfile: {

@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { getJSON, putJSON, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
 import { timeToMinutes, minutesToTime, DAYS_OF_WEEK } from '@/lib/timeHelpers';
@@ -31,59 +32,91 @@ interface AvailabilityFormSlot {
   isActive: boolean;
 }
 
+interface DayError {
+  dayOfWeek: number;
+  message: string;
+}
+
+// DA-08: Helper functions for mapping (DRY)
+function apiAvailabilityToFormState(apiData: AvailabilitySlot[]): AvailabilityFormSlot[] {
+  return DAYS_OF_WEEK.map((day) => {
+    const existingSlot = apiData.find((slot) => slot.dayOfWeek === day.value);
+
+    if (existingSlot) {
+      return {
+        dayOfWeek: day.value,
+        startTime: minutesToTime(existingSlot.startMin),
+        endTime: minutesToTime(existingSlot.endMin),
+        isActive: existingSlot.isActive,
+      };
+    } else {
+      // Valeurs par défaut : 9h-18h, inactif
+      return {
+        dayOfWeek: day.value,
+        startTime: '09:00',
+        endTime: '18:00',
+        isActive: false,
+      };
+    }
+  });
+}
+
+function formStateToPayload(formState: AvailabilityFormSlot[]) {
+  return formState
+    .filter((slot) => slot.isActive)
+    .map((slot) => ({
+      dayOfWeek: slot.dayOfWeek,
+      startMin: timeToMinutes(slot.startTime),
+      endMin: timeToMinutes(slot.endTime),
+      isActive: slot.isActive,
+    }));
+}
+
 export default function AvailabilityPage() {
+  const router = useRouter();
   const [availability, setAvailability] = useState<AvailabilityFormSlot[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [dayErrors, setDayErrors] = useState<DayError[]>([]);
   const [success, setSuccess] = useState('');
+
+  // DA-09: Extract loadData for retry functionality
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const dashboardData = await getJSON<{ availability: AvailabilitySlot[] }>('/pro/me');
+      const initialForm = apiAvailabilityToFormState(dashboardData.availability);
+      setAvailability(initialForm);
+    } catch (err) {
+      if (err instanceof APIError) {
+        // DA-03: Handle KYC 403
+        if (err.statusCode === 403 && (err.message.includes('KYC_NOT_APPROVED') || err.response?.code === 'KYC_NOT_APPROVED')) {
+          router.replace('/dashboard/kyc');
+          return;
+        }
+        setError(err.message);
+      } else {
+        setError('Erreur lors du chargement');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [router]);
 
   // Charger les disponibilités existantes
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const dashboardData = await getJSON<{ availability: AvailabilitySlot[] }>(
-          '/pro/me',
-        );
+    loadData();
+  }, [loadData]);
 
-        // Initialiser le formulaire avec les disponibilités existantes
-        const initialForm: AvailabilityFormSlot[] = DAYS_OF_WEEK.map((day) => {
-          const existingSlot = dashboardData.availability.find(
-            (slot) => slot.dayOfWeek === day.value,
-          );
-
-          if (existingSlot) {
-            return {
-              dayOfWeek: day.value,
-              startTime: minutesToTime(existingSlot.startMin),
-              endTime: minutesToTime(existingSlot.endMin),
-              isActive: existingSlot.isActive,
-            };
-          } else {
-            // Valeurs par défaut : 9h-18h, inactif
-            return {
-              dayOfWeek: day.value,
-              startTime: '09:00',
-              endTime: '18:00',
-              isActive: false,
-            };
-          }
-        });
-
-        setAvailability(initialForm);
-      } catch (err) {
-        if (err instanceof APIError) {
-          setError(err.message);
-        } else {
-          setError('Erreur lors du chargement');
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, []);
+  // DA-11: Auto-dismiss success after 3s
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
 
   const handleToggleDay = (dayOfWeek: number) => {
     setAvailability((prev) =>
@@ -93,6 +126,8 @@ export default function AvailabilityPage() {
           : slot,
       ),
     );
+    // Clear day errors when toggling
+    setDayErrors((prev) => prev.filter((e) => e.dayOfWeek !== dayOfWeek));
   };
 
   const handleChange = (
@@ -105,60 +140,64 @@ export default function AvailabilityPage() {
         slot.dayOfWeek === dayOfWeek ? { ...slot, [field]: value } : slot,
       ),
     );
+    // Clear day errors when changing time
+    setDayErrors((prev) => prev.filter((e) => e.dayOfWeek !== dayOfWeek));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setError(null);
     setSuccess('');
+    setDayErrors([]);
+
+    // DA-02: Client-side validation startTime < endTime
+    const errors: DayError[] = [];
+    const activeSlots = availability.filter((slot) => slot.isActive);
+
+    for (const slot of activeSlots) {
+      if (!slot.startTime || !slot.endTime) {
+        errors.push({
+          dayOfWeek: slot.dayOfWeek,
+          message: 'Veuillez renseigner une heure de début et de fin.',
+        });
+        continue;
+      }
+
+      const startMin = timeToMinutes(slot.startTime);
+      const endMin = timeToMinutes(slot.endTime);
+
+      if (startMin >= endMin) {
+        errors.push({
+          dayOfWeek: slot.dayOfWeek,
+          message: 'L\'heure de début doit être avant l\'heure de fin.',
+        });
+      }
+    }
+
+    if (errors.length > 0) {
+      setDayErrors(errors);
+      setError('Veuillez corriger les erreurs dans les horaires.');
+      return;
+    }
+
     setSaving(true);
 
     try {
-      // Construire le payload : Array de AvailabilitySlotInput
-      // Convertir les heures (HH:MM) en minutes
-      const payload = availability
-        .filter((slot) => slot.isActive) // Seulement les jours actifs
-        .map((slot) => ({
-          dayOfWeek: slot.dayOfWeek,
-          startMin: timeToMinutes(slot.startTime),
-          endMin: timeToMinutes(slot.endTime),
-          isActive: slot.isActive,
-        }));
-
+      const payload = formStateToPayload(availability);
       await putJSON('/pro/availability', payload);
       setSuccess('Disponibilités mises à jour avec succès !');
 
       // Recharger les disponibilités
-      const dashboardData = await getJSON<{ availability: AvailabilitySlot[] }>(
-        '/pro/me',
-      );
-
-      // Mettre à jour le formulaire avec les nouvelles données
-      const updatedForm: AvailabilityFormSlot[] = DAYS_OF_WEEK.map((day) => {
-        const existingSlot = dashboardData.availability.find(
-          (slot) => slot.dayOfWeek === day.value,
-        );
-
-        if (existingSlot) {
-          return {
-            dayOfWeek: day.value,
-            startTime: minutesToTime(existingSlot.startMin),
-            endTime: minutesToTime(existingSlot.endMin),
-            isActive: existingSlot.isActive,
-          };
-        } else {
-          return {
-            dayOfWeek: day.value,
-            startTime: '09:00',
-            endTime: '18:00',
-            isActive: false,
-          };
-        }
-      });
-
+      const dashboardData = await getJSON<{ availability: AvailabilitySlot[] }>('/pro/me');
+      const updatedForm = apiAvailabilityToFormState(dashboardData.availability);
       setAvailability(updatedForm);
     } catch (err) {
       if (err instanceof APIError) {
+        // DA-03: Handle KYC 403
+        if (err.statusCode === 403 && (err.message.includes('KYC_NOT_APPROVED') || err.response?.code === 'KYC_NOT_APPROVED')) {
+          router.replace('/dashboard/kyc');
+          return;
+        }
         setError(err.message);
       } else {
         setError('Erreur lors de la sauvegarde');
@@ -168,52 +207,83 @@ export default function AvailabilityPage() {
     }
   };
 
+  // Check if form has validation errors
+  const hasValidationErrors = dayErrors.length > 0;
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">
+          <h1 className="text-3xl font-bold text-text-primary">
             Disponibilités
           </h1>
-          <p className="text-zinc-600 dark:text-zinc-400 mt-2">
+          <p className="text-text-secondary mt-2">
             Gérez vos horaires de travail hebdomadaires
           </p>
         </div>
 
+        {/* DA-09: Error banner with retry */}
+        {error && !loading && (
+          <div className="bg-error-50 border border-error-200 rounded-lg p-4" role="alert">
+            <p className="text-error-800 mb-3">{error}</p>
+            {!saving && (
+              <button
+                onClick={loadData}
+                disabled={loading}
+                className="px-4 py-2 bg-error-600 text-inverse-text rounded-lg hover:bg-error-700 motion-safe:transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Réessayer
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Loading */}
         {loading && (
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-8 text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-4"></div>
-            <p className="text-zinc-600 dark:text-zinc-400">Chargement...</p>
+          <div className="bg-surface rounded-lg border border-border p-8 text-center" aria-busy="true">
+            {/* DA-06: motion-safe:animate-spin */}
+            <div className="motion-safe:animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+            <p className="text-text-secondary">Chargement...</p>
           </div>
         )}
 
         {/* Form */}
-        {!loading && (
+        {!loading && !error && (
           <form onSubmit={handleSubmit} className="space-y-4">
             {availability.map((slot, index) => {
               const dayInfo = DAYS_OF_WEEK[index];
+              const dayError = dayErrors.find((e) => e.dayOfWeek === slot.dayOfWeek);
 
               return (
-                <div
+                /* DA-04: Semantic fieldset for grouping */
+                <fieldset
                   key={slot.dayOfWeek}
-                  className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6"
+                  className="bg-surface rounded-lg border border-border p-6"
                 >
+                  <legend className="sr-only">Disponibilité pour {dayInfo.label}</legend>
+
                   {/* Day Toggle */}
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                    <h3 className="text-lg font-semibold text-text-primary">
                       {dayInfo.label}
                     </h3>
-                    <label className="flex items-center cursor-pointer">
+                    <label
+                      htmlFor={`toggle-${slot.dayOfWeek}`}
+                      className="flex items-center cursor-pointer"
+                    >
+                      {/* DA-05: aria-label on sr-only checkbox */}
                       <input
                         type="checkbox"
+                        id={`toggle-${slot.dayOfWeek}`}
                         checked={slot.isActive}
                         onChange={() => handleToggleDay(slot.dayOfWeek)}
+                        aria-label={`Activer la disponibilité pour ${dayInfo.label}`}
                         className="sr-only peer"
                       />
-                      <div className="relative w-11 h-6 bg-zinc-300 dark:bg-zinc-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-zinc-900 dark:peer-focus:ring-zinc-50 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900 dark:peer-checked:bg-zinc-50"></div>
-                      <span className="ml-3 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                      {/* DA-06: motion-safe on transitions */}
+                      <div className="relative w-11 h-6 bg-border-strong peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-inverse-bg rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-5 after:w-5 motion-safe:after:transition-all peer-checked:bg-inverse-bg"></div>
+                      <span className="ml-3 text-sm font-medium text-text-label">
                         {slot.isActive ? 'Travaillé' : 'Repos'}
                       </span>
                     </label>
@@ -221,59 +291,80 @@ export default function AvailabilityPage() {
 
                   {/* Time Range (shown only if active) */}
                   {slot.isActive && (
-                    <div className="grid grid-cols-2 gap-4 pt-4 border-t border-zinc-200 dark:border-zinc-700">
-                      <div>
-                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
-                          Heure de début
-                        </label>
-                        <input
-                          type="time"
-                          value={slot.startTime}
-                          onChange={(e) =>
-                            handleChange(slot.dayOfWeek, 'startTime', e.target.value)
-                          }
-                          className="w-full px-4 py-2 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
-                          required
-                        />
+                    <div className="pt-4 border-t border-border">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          {/* DA-04: htmlFor on label */}
+                          <label
+                            htmlFor={`start-${slot.dayOfWeek}`}
+                            className="block text-sm font-medium text-text-label mb-2"
+                          >
+                            Heure de début
+                          </label>
+                          <input
+                            type="time"
+                            id={`start-${slot.dayOfWeek}`}
+                            value={slot.startTime}
+                            onChange={(e) =>
+                              handleChange(slot.dayOfWeek, 'startTime', e.target.value)
+                            }
+                            aria-describedby={dayError ? `error-${slot.dayOfWeek}` : undefined}
+                            aria-invalid={!!dayError}
+                            className="w-full px-4 py-2 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary"
+                            required
+                          />
+                        </div>
+                        <div>
+                          {/* DA-04: htmlFor on label */}
+                          <label
+                            htmlFor={`end-${slot.dayOfWeek}`}
+                            className="block text-sm font-medium text-text-label mb-2"
+                          >
+                            Heure de fin
+                          </label>
+                          <input
+                            type="time"
+                            id={`end-${slot.dayOfWeek}`}
+                            value={slot.endTime}
+                            onChange={(e) =>
+                              handleChange(slot.dayOfWeek, 'endTime', e.target.value)
+                            }
+                            aria-describedby={dayError ? `error-${slot.dayOfWeek}` : undefined}
+                            aria-invalid={!!dayError}
+                            className="w-full px-4 py-2 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary"
+                            required
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
-                          Heure de fin
-                        </label>
-                        <input
-                          type="time"
-                          value={slot.endTime}
-                          onChange={(e) =>
-                            handleChange(slot.dayOfWeek, 'endTime', e.target.value)
-                          }
-                          className="w-full px-4 py-2 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
-                          required
-                        />
-                      </div>
+
+                      {/* DA-02: Inline error message */}
+                      {dayError && (
+                        <p
+                          id={`error-${slot.dayOfWeek}`}
+                          className="text-error-700 text-sm mt-2"
+                          role="alert"
+                        >
+                          {dayError.message}
+                        </p>
+                      )}
                     </div>
                   )}
-                </div>
+                </fieldset>
               );
             })}
 
-            {/* Messages */}
-            {error && (
-              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-                <p className="text-red-800 dark:text-red-200">{error}</p>
-              </div>
-            )}
-
+            {/* Success message */}
             {success && (
-              <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-                <p className="text-green-800 dark:text-green-200">{success}</p>
+              <div className="bg-success-50 border border-success-200 rounded-lg p-4" role="alert">
+                <p className="text-success-800">{success}</p>
               </div>
             )}
 
             {/* Submit */}
             <button
               type="submit"
-              disabled={saving}
-              className="w-full px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={saving || hasValidationErrors}
+              className="w-full px-6 py-3 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover motion-safe:transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {saving ? 'Enregistrement...' : 'Enregistrer les disponibilités'}
             </button>

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { LogIn, AlertCircle, Shield, Clock, Users } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
@@ -15,8 +15,9 @@ import type { LoginInput, AuthResponse } from '@khadamat/contracts';
  * Design chaleureux avec Orange (#F08C1B) et Beige (#F2F0EF)
  */
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { setAuth } = useAuthStore();
 
   const [formData, setFormData] = useState<LoginInput>({
@@ -25,6 +26,8 @@ export default function LoginPage() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const loginRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,18 +38,22 @@ export default function LoginPage() {
       const response = await postJSON<AuthResponse>('/auth/login', formData);
       setAuth(response.user);
 
-      // Redirect based on role
-      if (response.user.role === 'PRO') {
+      // Redirect to ?next= destination if valid, otherwise role-based default
+      const next = searchParams.get('next');
+      if (next && next.startsWith('/') && !next.startsWith('//')) {
+        router.push(next);
+      } else if (response.user.role === 'PRO') {
         router.push('/dashboard');
       } else {
         router.push('/');
       }
     } catch (err) {
-      if (err instanceof APIError) {
-        setError(err.message);
-      } else {
-        setError('Identifiants invalides');
-      }
+      const msg = err instanceof APIError ? err.message : 'Identifiants invalides';
+      setError(msg);
+      // Focus error zone for screen readers, then focus first field
+      requestAnimationFrame(() => {
+        errorRef.current?.focus();
+      });
     } finally {
       setLoading(false);
     }
@@ -57,7 +64,7 @@ export default function LoginPage() {
       {/* ═══════════════════════════════════════════════════════════════════
           LEFT PANEL - Orange Vibrant Sidebar
           ═══════════════════════════════════════════════════════════════════ */}
-      <div className="hidden lg:flex lg:w-1/2 bg-[#F08C1B] relative overflow-hidden">
+      <div className="hidden lg:flex lg:w-1/2 bg-primary-500 relative overflow-hidden">
         {/* Background Pattern */}
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-20 right-10 w-48 h-48 border-4 border-white rounded-full" />
@@ -123,54 +130,77 @@ export default function LoginPage() {
       {/* ═══════════════════════════════════════════════════════════════════
           RIGHT PANEL - Beige Form Section
           ═══════════════════════════════════════════════════════════════════ */}
-      <div className="flex-1 bg-[#F2F0EF] flex items-center justify-center p-6 lg:p-12">
+      <div className="flex-1 bg-background flex items-center justify-center p-6 lg:p-12">
         <div className="w-full max-w-md">
           {/* Mobile Logo */}
           <div className="lg:hidden mb-8">
-            <Link href="/" className="text-[#F08C1B] text-2xl font-bold">
+            <Link href="/" className="text-primary-500 text-2xl font-bold">
               Khadamat
             </Link>
           </div>
 
           {/* Header */}
           <div className="mb-8">
-            <h1 className="text-3xl font-bold text-slate-900 mb-2">
+            <h1 className="text-3xl font-bold text-text-primary mb-2">
               Connexion
             </h1>
-            <p className="text-slate-500">
+            <p className="text-text-muted">
               Accédez à votre compte Khadamat
             </p>
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+            {/* Error Message */}
+            <div aria-live="assertive" aria-atomic="true">
+              {error && (
+                <div
+                  ref={errorRef}
+                  tabIndex={-1}
+                  role="alert"
+                  className="flex items-start gap-3 bg-error-50 border border-error-200 rounded-xl p-4 outline-none"
+                >
+                  <AlertCircle className="w-5 h-5 text-error-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                  <p className="text-error-700 text-sm font-medium">{error}</p>
+                </div>
+              )}
+            </div>
+
             {/* Login Field */}
             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">
+              <label htmlFor="login-email" className="block text-sm font-semibold text-text-label mb-2">
                 Email ou Téléphone
               </label>
               <input
+                ref={loginRef}
+                id="login-email"
                 type="text"
                 value={formData.login}
                 onChange={(e) => setFormData({ ...formData, login: e.target.value })}
-                className="w-full px-4 py-3 bg-white border-2 border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all"
+                aria-invalid={!!error || undefined}
+                aria-describedby={error ? 'login-global-error' : undefined}
+                className="w-full px-4 py-3 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
                 placeholder="exemple@email.com ou 0612345678"
                 required
+                autoComplete="username"
               />
             </div>
 
             {/* Password Field */}
             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">
+              <label htmlFor="login-password" className="block text-sm font-semibold text-text-label mb-2">
                 Mot de passe
               </label>
               <input
+                id="login-password"
                 type="password"
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                className="w-full px-4 py-3 bg-white border-2 border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all"
+                aria-invalid={!!error || undefined}
+                className="w-full px-4 py-3 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
                 placeholder="Votre mot de passe"
                 required
+                autoComplete="current-password"
               />
             </div>
 
@@ -178,29 +208,21 @@ export default function LoginPage() {
             <div className="text-right">
               <Link
                 href="/auth/forgot-password"
-                className="text-sm text-[#F08C1B] font-medium hover:underline"
+                className="text-sm text-primary-500 font-medium hover:underline"
               >
                 Mot de passe oublié ?
               </Link>
             </div>
 
-            {/* Error Message */}
-            {error && (
-              <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
-                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                <p className="text-red-700 text-sm font-medium">{error}</p>
-              </div>
-            )}
-
             {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full px-6 py-4 bg-[#F08C1B] text-white font-bold rounded-xl hover:bg-[#D97213] active:bg-[#C56510] transition-all duration-200 shadow-lg shadow-[#F08C1B]/25 hover:shadow-xl hover:shadow-[#F08C1B]/30 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-lg"
+              className="w-full px-6 py-4 bg-primary-500 text-white font-bold rounded-xl hover:bg-primary-600 active:bg-primary-700 motion-safe:transition-all motion-safe:duration-200 shadow-lg shadow-primary-500/25 hover:shadow-xl hover:shadow-primary-500/30 motion-safe:hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-lg"
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                  <svg className="motion-safe:animate-spin h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
@@ -215,17 +237,17 @@ export default function LoginPage() {
           {/* Divider */}
           <div className="relative my-8">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-300"></div>
+              <div className="w-full border-t border-border-strong"></div>
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="px-4 bg-[#F2F0EF] text-slate-500">ou</span>
+              <span className="px-4 bg-background text-text-muted">ou</span>
             </div>
           </div>
 
           {/* Register Link */}
-          <p className="text-center text-slate-500">
+          <p className="text-center text-text-muted">
             Pas encore de compte ?{' '}
-            <Link href="/auth/register" className="text-[#F08C1B] font-semibold hover:underline">
+            <Link href="/auth/register" className="text-primary-500 font-semibold hover:underline">
               S&apos;inscrire gratuitement
             </Link>
           </p>
@@ -234,7 +256,7 @@ export default function LoginPage() {
           <div className="mt-8 text-center">
             <Link
               href="/"
-              className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-900 transition-colors"
+              className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-text-primary transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
@@ -245,5 +267,13 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -56,7 +56,7 @@ export default function LoginForm() {
       <div>
         <label
           htmlFor="login"
-          className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+          className="block text-sm font-medium text-text-label mb-2"
         >
           Email ou Téléphone
         </label>
@@ -67,7 +67,7 @@ export default function LoginForm() {
           onChange={(e) =>
             setFormData({ ...formData, login: e.target.value })
           }
-          className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
+          className="w-full px-4 py-3 bg-input-bg border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-border-focus text-text-primary"
           placeholder="exemple@email.com ou 0612345678"
           required
         />
@@ -77,7 +77,7 @@ export default function LoginForm() {
       <div>
         <label
           htmlFor="password"
-          className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+          className="block text-sm font-medium text-text-label mb-2"
         >
           Mot de passe
         </label>
@@ -88,7 +88,7 @@ export default function LoginForm() {
           onChange={(e) =>
             setFormData({ ...formData, password: e.target.value })
           }
-          className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
+          className="w-full px-4 py-3 bg-input-bg border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-border-focus text-text-primary"
           placeholder="••••••••"
           required
         />
@@ -96,8 +96,8 @@ export default function LoginForm() {
 
       {/* Message d'erreur */}
       {error && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-          <p className="text-red-800 dark:text-red-200 text-sm">{error}</p>
+        <div className="bg-error-50 border border-error-200 rounded-lg p-4">
+          <p className="text-error-800 text-sm">{error}</p>
         </div>
       )}
 
@@ -105,7 +105,7 @@ export default function LoginForm() {
       <button
         type="submit"
         disabled={loading}
-        className="w-full px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full px-6 py-3 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {loading ? 'Connexion...' : 'Se connecter'}
       </button>

@@ -1,5 +1,7 @@
 import { Controller, Patch, Body, Request, UseGuards, ValidationPipe } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { UsersService, UpdateProfileDto } from './users.service';
 
 /**
@@ -22,7 +24,8 @@ export class UsersController {
    * @returns Profil mis à jour
    */
   @Patch('me')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('CLIENT')
   async updateProfile(
     @Request() req,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))

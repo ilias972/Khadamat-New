@@ -15,6 +15,7 @@ interface CitySelectProps {
   required?: boolean;
   disabled?: boolean;
   className?: string;
+  id?: string;
 }
 
 /**
@@ -36,6 +37,7 @@ export default function CitySelect({
   required = false,
   disabled = false,
   className = '',
+  id,
 }: CitySelectProps) {
   const [cities, setCities] = useState<City[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,11 +61,11 @@ export default function CitySelect({
 
   const baseClassName =
     className ||
-    'w-full h-12 px-4 bg-slate-50 border-2 border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-[#F08C1B] focus:ring-4 focus:ring-[#F08C1B]/10 transition-all appearance-none cursor-pointer';
+    'w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all appearance-none cursor-pointer';
 
   if (error) {
     return (
-      <div className="text-sm text-red-600 dark:text-red-400">
+      <div className="text-sm text-error-600">
         {error}
       </div>
     );
@@ -71,6 +73,7 @@ export default function CitySelect({
 
   return (
     <select
+      id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       required={required}

@@ -68,16 +68,16 @@ export class CatalogController {
   @ApiQuery({ name: 'categoryId', required: false })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
-  @ApiResponse({ status: 200, description: 'Liste paginée avec total' })
+  @ApiResponse({ status: 200, description: 'Liste paginée avec meta' })
   getProsV2(
     @Query('cityId') cityId?: string,
     @Query('categoryId') categoryId?: string,
     @Query('page') rawPage?: string,
     @Query('limit') rawLimit?: string,
-  ): Promise<{ data: PublicProCard[]; total: number; page: number; limit: number }> {
+  ) {
     const page = rawPage ? Number(rawPage) : 1;
     const limit = rawLimit ? Number(rawLimit) : 20;
-    if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
+    if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 50) {
       throw new BadRequestException('Paramètres de pagination invalides');
     }
     if (cityId && !isEntityId(cityId)) {

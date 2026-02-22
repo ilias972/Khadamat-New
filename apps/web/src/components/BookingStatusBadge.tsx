@@ -18,62 +18,67 @@ export default function BookingStatusBadge({ status }: BookingStatusBadgeProps) 
       case 'PENDING':
         return {
           label: 'En attente',
-          className: 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200 border-yellow-200 dark:border-yellow-800',
+          className: 'bg-warning-100 text-warning-800 border-warning-200',
         };
       case 'CONFIRMED':
         return {
           label: 'Confirmé',
-          className: 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-200 border-green-200 dark:border-green-800',
+          className: 'bg-success-100 text-success-800 border-success-200',
         };
       case 'WAITING_FOR_CLIENT':
         return {
           label: 'En attente client',
-          className: 'bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-200 border-orange-200 dark:border-orange-800',
+          className: 'bg-primary-100 text-primary-800 border-primary-200',
         };
       case 'DECLINED':
         return {
           label: 'Refusé',
-          className: 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-200 border-red-200 dark:border-red-800',
+          className: 'bg-error-100 text-error-800 border-error-200',
         };
       case 'COMPLETED':
         return {
           label: 'Terminé',
-          className: 'bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200 border-blue-200 dark:border-blue-800',
+          className: 'bg-info-100 text-info-800 border-info-200',
         };
       case 'CANCELLED_BY_CLIENT':
         return {
           label: 'Annulé (client)',
-          className: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700',
+          className: 'bg-surface-active text-text-label border-border',
         };
       case 'CANCELLED_BY_CLIENT_LATE':
         return {
           label: 'Annulé tard (client)',
-          className: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700',
+          className: 'bg-surface-active text-text-label border-border',
         };
       case 'CANCELLED_BY_PRO':
         return {
           label: 'Annulé (pro)',
-          className: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700',
+          className: 'bg-surface-active text-text-label border-border',
         };
       case 'CANCELLED_AUTO_OVERLAP':
         return {
           label: 'Annulé (conflit)',
-          className: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700',
+          className: 'bg-surface-active text-text-label border-border',
+        };
+      case 'CANCELLED_AUTO_FIRST_CONFIRMED':
+        return {
+          label: 'Annulée automatiquement',
+          className: 'bg-surface-active text-text-label border-border',
         };
       case 'EXPIRED':
         return {
           label: 'Expiré',
-          className: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700',
+          className: 'bg-surface-active text-text-label border-border',
         };
       case 'CANCELLED':
         return {
           label: 'Annulé',
-          className: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700',
+          className: 'bg-surface-active text-text-label border-border',
         };
       default:
         return {
           label: status,
-          className: 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700',
+          className: 'bg-surface-active text-text-label border-border',
         };
     }
   };

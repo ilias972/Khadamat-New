@@ -1,3972 +1,3381 @@
-# Audit Fullstack par pages
 
-## Table des matières
-- [/auth/login — Auth Login](#authlogin--auth-login)
-- [/auth/register — Auth Register](#authregister--auth-register)
-- [/profile — User Profile (global)](#profile--user-profile-global)
-- [/auth/forgot-password — Forgot Password](#authforgot-password--forgot-password)
-- [Synthèse Phase 1 — Auth & Profil](#synthèse-phase-1--auth--profil)
+# Phase 1 — Auth & Acces (RE-AUDIT post-corrections)
+
+> **Date** : 2026-02-19
+> **Contexte** : Re-audit complet apres les corrections appliquees (design tokens migration, RBAC guards, middleware.ts, forgot-password, KycApprovedGuard, accessibilite).
+> Remplace les findings de la Phase 1 initiale — reflete l'etat actuel du code.
+
+## Resume executif
+
+- **Statut global** : ⚠️ A ameliorer (progres significatifs depuis l'audit initial)
+- **Points forts** :
+  - Architecture auth solide : JWT httpOnly + refresh token rotation + replay detection
+  - Hachage bcrypt (cout 10), IDs publics/internes separes, CIN hashe SHA-256
+  - Rate limiting (5/min login/register, 3/h forgot-password, 5/h reset-password)
+  - Lockout apres 5 echecs (15 min)
+  - CSRF double protection : custom header (`X-CSRF-PROTECTION: 1`) + `sameSite: strict`
+  - Helmet complet (CSP, HSTS preload, X-Frame-Options DENY, noSniff, no-referrer)
+  - Validation serveur stricte (class-validator + whitelist + forbidNonWhitelisted)
+  - Securite fichiers KYC (magic bytes, Sharp rebuild, scan malware, MIME whitelist)
+  - `middleware.ts` Next.js protege les routes cote serveur (SSR edge)
+  - Forgot-password + reset-password implementes (token 256-bit, hashe SHA-256, TTL 15 min, single-use)
+  - KycApprovedGuard applique sur les routes PRO sensibles (backend)
+  - `@Roles('CLIENT')` sur `PATCH /users/me` (empeche PRO de modifier via cette route)
+  - Design tokens migres a 100% (0 hex, 0 zinc/slate/gray, 0 `dark:` dans les .tsx)
+- **Risques majeurs** :
+  1. **CRITIQUE** : Param redirect mismatch — middleware envoie `?returnTo=`, login lit `?next=` → redirect post-login cassee
+  2. **HIGH** : `aria-describedby="login-global-error"` reference un ID inexistant sur la page login
+  3. **HIGH** : `motion-safe:` manquant sur animations de register sidebar, forgot-password, reset-password
+  4. **MEDIUM** : Lockout en memoire (perdu au restart, non partage multi-instance)
+  5. **MEDIUM** : `GET /dashboard/stats` sans `@Roles('PRO')` ni premium gate backend
+- **Recommandations top 5** :
+  1. Corriger le param redirect : unifier sur `returnTo` ou `next` (middleware.ts + login/page.tsx)
+  2. Ajouter `id="login-global-error"` sur le div d'erreur du login
+  3. Wrapper toutes les animations dans `motion-safe:` (register, forgot-pw, reset-pw)
+  4. Persister le lockout dans Redis ou DB pour production multi-instance
+  5. Ajouter `@Roles('PRO')` + premium check sur `GET /dashboard/stats`
 
 ---
 
-# [/auth/login] — Auth Login
+## 1) /auth/login
 
-## 1) Résumé exécutif
-- **Rôle(s)**: Public (non authentifié)
-- **Objectif métier**: Authentifier un utilisateur (CLIENT ou PRO) via email/téléphone + mot de passe, puis rediriger vers le bon espace.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 3 ; Perf: 4 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/auth/login/page.tsx`
-  - `apps/web/src/lib/api.ts` (postJSON)
-  - `apps/web/src/store/authStore.ts` (setAuth)
-  - `apps/api/src/auth/auth.controller.ts` (login)
-  - `apps/api/src/auth/auth.service.ts` (login)
-  - `apps/api/src/auth/dto/login.dto.ts` (LoginDto)
-  - `apps/api/src/auth/failed-login.service.ts` (bruteforce)
-  - `packages/contracts/src/schemas/auth.ts` (LoginInput, PublicUser)
-  - `packages/database/prisma/schema.prisma` (User, RefreshToken)
-
-## 2) Cartographie technique (fichiers)
 ### Frontend
-- `apps/web/src/app/auth/login/page.tsx` — Page login, composant client-side
-- `apps/web/src/lib/api.ts` — Helper `postJSON` avec auto-refresh 401
-- `apps/web/src/store/authStore.ts` — Zustand store, `setAuth(user)`
 
-### Backend
-- `apps/api/src/auth/auth.controller.ts:235-252` — `POST /api/auth/login`
-- `apps/api/src/auth/auth.service.ts:173-224` — `login()` logique métier
-- `apps/api/src/auth/dto/login.dto.ts` — DTO validation (class-validator)
-- `apps/api/src/auth/failed-login.service.ts` — Anti-bruteforce in-memory
+**Fichier** : `apps/web/src/app/auth/login/page.tsx` (279 lignes)
+
+**Composant legacy** : `apps/web/src/components/auth/LoginForm.tsx` (114 lignes) — **code mort**, non importe nulle part. Le login page definit son propre `LoginForm` inline.
+
+**Champs** : `login` (email ou telephone, type="text"), `password` (type="password")
+**Validation** : Aucune librairie. Utilise `required` natif HTML + `noValidate` sur le form. Aucune validation client-side avant soumission — depend entierement du backend.
+**Types** : `LoginInput` et `AuthResponse` depuis `@khadamat/contracts`.
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | `loading` state, bouton disabled + spinner | OK |
+| Erreur | `error` state, `role="alert"` + `aria-live="assertive"` | OK |
+| Succes | Implicit via redirect (`router.push`) | OK |
+
+**Accessibilite** :
+- `<label htmlFor="login-email">` et `<label htmlFor="login-password">` correctement lies — OK
+- `aria-live="assertive"` sur le wrapper erreur — OK
+- `aria-invalid` sur les inputs quand erreur presente — OK
+- `aria-hidden="true"` sur les SVG decoratifs — OK
+- `tabIndex={-1}` + `ref` + `requestAnimationFrame` focus sur le div erreur — OK
+- **BUG** : `aria-describedby="login-global-error"` sur l'input login reference un ID inexistant. Le div d'erreur n'a pas `id="login-global-error"`.
+
+**Design tokens** : 100% design tokens (`bg-primary-500`, `text-text-primary`, `bg-surface`, `border-border`, etc.). Aucun hex en dur. `text-white` utilise (acceptable pour contraste sur fond primaire). `motion-safe:` correctement utilise dans la section formulaire.
+
+**Redirections** :
+- Verifie `searchParams.get('next')` pour redirect safe (doit commencer par `/` et pas `//` — bonne protection open-redirect)
+- **BUG CRITIQUE** : Le middleware envoie `?returnTo=...` mais la page login lit `?next=...`. Les noms ne correspondent pas. Le retour a la page d'origine apres login **ne fonctionne pas**.
+- Redirect par role : PRO → `/dashboard`, CLIENT → `/`
+
+**Liens** :
+- Vers `/auth/forgot-password` — OK (page existe)
+- Vers `/auth/register` — OK
+- Vers `/` (accueil) — OK
+
+**Securite** :
+- CSRF via `postJSON` (header `X-CSRF-PROTECTION: 1` + `credentials: 'include'`) — OK
+- Pas de toggle visibilite mot de passe — manquant
+- `autoComplete="username"` et `autoComplete="current-password"` — OK
+
+### API / Backend
+
+**Endpoint** : `POST /api/auth/login`
+**Fichier** : `apps/api/src/auth/auth.controller.ts` (ligne 237-254)
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | Aucun (endpoint public) | OK |
+| Rate Limiting | `@Throttle({ default: { limit: 5, ttl: 60_000 } })` — 5 req/min | OK |
+| DTO | `LoginDto` (whitelist + forbidNonWhitelisted) | OK |
+| Lockout | `FailedLoginService` : 5 tentatives, lockout 15 min | OK |
+| Timing Attack | Comparaison constante bcrypt avec `DUMMY_HASH` quand user non trouve | OK |
+| Messages erreur | Generique "Identifiants invalides" pour tous les cas | OK |
+| Status check | Comptes inactifs/suspendus rejetes (`user.status !== 'ACTIVE'`) | OK |
+| Tokens | Envoyes en cookies httpOnly, jamais dans le body de reponse | OK |
+
+**Problemes** :
+- **MEDIUM** : Lockout en memoire (`Map<string, LoginAttempt>`) — perdu au restart serveur, non partage entre instances. Un attaquant peut reset le lockout en attendant un deploiement.
+- **LOW** : Le lockout cible l'identifiant de login (email/phone), pas l'IP. Un attaquant peut verrouiller un utilisateur legitime en echouant deliberement 5 fois.
 
 ### DB
-- `schema.prisma` — `User` (l.127-164), `RefreshToken` (l.496-508)
-- Index `phone` (unique), `email` (unique)
 
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Routing propre + guard (rediriger si déjà connecté)
-- Form solide (validation client, disabled/loading, anti double submit)
-- UI states complets (loading/error/success)
-- A11y complète (labels, focus, keyboard, aria)
-- Design system tokens
+- **User model** : CUID `id`, `publicId` unique, `phone` unique, `email?` unique, `password` (bcrypt hash), `role` (enum CLIENT/PRO/ADMIN), `status` (ACTIVE par defaut)
+- **RefreshToken model** : `tokenHash` (SHA-256, unique), `revoked` boolean, `expiresAt`, relation User cascade
 
-### Actuel (constaté)
-- **UI/Composants**: Split layout (sidebar orange + formulaire beige). Design cohérent mais utilise des hex en dur (`#F08C1B`, `#F2F0EF`, `#D97213`, `#C56510`, `text-slate-*`) au lieu des design tokens CLAUDE.md.
-- **Data fetching / submit**: `postJSON('/auth/login', formData)` via lib/api.ts. Gestion 401 avec auto-refresh. `setAuth(response.user)` met à jour le store Zustand. Redirect via `router.push()` selon rôle.
-- **Validations**: Seulement `required` HTML natif sur les inputs. Aucune validation regex client-side (contrairement à register). Le front accepte n'importe quel format.
-- **Erreurs & UX**: Message d'erreur affiché dans un bandeau rouge avec icône. `APIError.message` affiché tel quel, sinon fallback "Identifiants invalides". Pas de retry.
-- **A11y**:
-  - ❌ `<label>` sans `htmlFor` — aucun `id` sur les inputs (violation CLAUDE.md)
-  - ❌ Pas de `aria-invalid`, `aria-describedby` sur le champ erreur
-  - ❌ Pas de `aria-live` sur le container d'erreur
-  - ❌ Spinner SVG sans `aria-label`/`role`
-  - ✅ Navigation clavier fonctionne (form natif)
-- **Perf**: OK. Composant léger, pas de dépendances lourdes.
-- **Sécurité front**: ✅ Token jamais stocké côté client (cookies httpOnly). Store Zustand ne contient que `PublicUser`.
-- **NON TROUVÉ**:
-  - Pas de guard "déjà connecté" — un user authentifié peut revenir sur /auth/login sans redirection.
-  - Pas de `prefers-reduced-motion` conditionnant l'animation du spinner SVG.
+### Problemes & recommandations
 
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[POST] /api/auth/login** → `AuthController.login()` → `AuthService.login()` → Guard: aucun (public)
-  - Request DTO: `LoginDto { login: string (min 1, max 120), password: string (min 10, max 128) }`
-  - Response: `{ user: PublicUser }` + cookies `accessToken` (15min) + `refreshToken` (7j)
-  - Errors: 401 "Identifiants invalides", 401 "Trop de tentatives. Réessayez plus tard.", 429 Throttle
-  - Sécurité: `@Throttle({ default: { limit: 5, ttl: 60_000 } })` + `FailedLoginService` lockout 15min après 5 échecs
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | CRITIQUE | Param `returnTo` vs `next` mismatch | Unifier le nom dans middleware.ts et login/page.tsx |
+| 2 | HIGH | `aria-describedby="login-global-error"` pointe sur ID inexistant | Ajouter `id="login-global-error"` sur le div erreur |
+| 3 | MEDIUM | Lockout en memoire, perdu au restart | Migrer vers Redis/DB |
+| 4 | LOW | Pas de toggle visibilite mot de passe | Ajouter Eye/EyeOff comme sur reset-password |
+| 5 | LOW | Aucune validation client-side (champs vides envoyables) | Ajouter validation basique pre-soumission |
+| 6 | LOW | `LoginForm.tsx` component legacy inutilise (code mort) | Supprimer le fichier |
 
-### Attendu (référentiel)
-- AuthN robuste, timing-safe, anti-enumeration
-- Rate limit + lockout
-- Tokens sécurisés (httpOnly, secure, sameSite)
-- Validation serveur complète
-- Logs sans secrets, erreurs standardisées
-- Tests unitaires + intégration
+### TODO
 
-### Actuel (constaté)
-- **Auth/AuthZ**: ✅ Timing-safe: `bcrypt.compare` contre DUMMY_HASH si user non trouvé (empêche timing attack). ✅ Anti-enumération: même message "Identifiants invalides" quel que soit le cas.
-- **Validations serveur**: ✅ class-validator sur LoginDto. ⚠️ `password: @MinLength(10)` — refuse les anciens mots de passe < 10 chars (pourrait bloquer des comptes existants si la politique a changé).
-- **Erreurs**: ✅ Message uniforme "Identifiants invalides". ✅ Pas de fuite d'infos. ⚠️ Le message lockout "Trop de tentatives" confirme implicitement l'existence du compte.
-- **Perf**: ✅ `findFirst` avec `OR [email, phone]` — OK. Les deux champs sont indexés (unique).
-- **Observabilité**: ✅ `Logger.warn` sur tentatives échouées et lockout. ✅ Hash de l'identifiant dans les logs (pas de PII). ❌ Pas de `requestId` tracé.
-- **Tests**: ❌ **Aucun fichier .spec.ts trouvé dans apps/api/src/**. Zéro test unitaire, zéro test d'intégration.
-- **Sécurité**:
-  - ✅ Rate limit `@Throttle` au niveau contrôleur (5 req/min)
-  - ✅ `FailedLoginService` lockout in-memory (5 échecs → 15min)
-  - ⚠️ Lockout **in-memory** — perdu au redémarrage du serveur. Non distribué (multi-instance = contournable).
-  - ✅ Cookies: `httpOnly: true`, `sameSite: 'strict'`, `secure` en prod
-  - ✅ Refresh token rotation avec détection de replay
-  - ⚠️ Pas de CSRF check sur le login (le controller a `requireCsrf()` mais ne l'appelle PAS sur login/register)
-  - ✅ `whitelist: true, forbidNonWhitelisted: true` sur le DTO (anti mass assignment)
+- [ ] Corriger le param redirect (`returnTo` → `next` dans middleware.ts, ou inversement)
+- [ ] Ajouter `id="login-global-error"` sur le div d'erreur
+- [ ] Ajouter toggle visibilite mot de passe
+- [ ] Supprimer `components/auth/LoginForm.tsx` (dead code)
 
-## 5) Base de données — État attendu vs état actuel
-- **Tables**: `User`, `RefreshToken`
-- **Contraintes/index**: ✅ `phone @unique`, `email @unique`, `RefreshToken.tokenHash @unique`, `RefreshToken(userId)` index, `RefreshToken(expiresAt)` index
-- **Migrations**: NON TROUVÉ — pas de dossier migrations vérifié (à vérifier dans `packages/database/prisma/migrations/`)
-- **Requêtes observées**: `user.findFirst` avec OR [email, phone] → OK (index unique couvre les deux cas). `refreshToken.create` pour stocker le hash.
-- **Risques cohérence/perf**:
-  - ⚠️ Les refresh tokens expirés ne sont jamais nettoyés (pas de cron/job visible). La table `RefreshToken` grossira indéfiniment.
-  - ✅ Le hash SHA-256 est indexé (@unique), lookup rapide.
+## Score detaille — /auth/login
 
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping champs**:
-  - UI: `{ login, password }` → DTO: `LoginDto { login, password }` → DB: `findFirst(OR: [email, phone])` ✅ Aligné
-  - Response: Back retourne `{ user: PublicUser }` + cookies → Front: `setAuth(response.user)` ✅ Aligné
-- **Incohérences**:
-  - ⚠️ Le contrat Zod `LoginSchema` (packages/contracts) n'impose pas `min(10)` sur password, mais le `LoginDto` (class-validator) impose `@MinLength(10)`. **Désalignement**: le front ne valide pas la longueur, le back rejettera des mdp < 10 avec une erreur 400 peu claire.
-  - ⚠️ Le front envoie via `postJSON` (Content-Type: application/json + credentials: include + X-CSRF-PROTECTION: 1), mais le back **n'appelle pas `requireCsrf()`** sur login. Le header est envoyé inutilement.
-- **Gestion erreurs bout-en-bout**: ✅ APIError côté front attrape le `message` du back. Le message est affiché dans le bandeau rouge.
-- **Permissions backend autoritatif**: ✅ Le back est le seul à décider (login, lockout, token).
+| Aspect | Score /5 | Justification |
+|--------|----------|---------------|
+| Frontend structure | 4/5 | Layout clean, split sidebar/form, types corrects. Code mort LoginForm.tsx |
+| UX & states | 4/5 | Loading/error/success OK. Pas de toggle password |
+| Validation front | 2/5 | Aucune validation client-side, noValidate + depend du backend |
+| Securite auth | 4/5 | httpOnly cookies, CSRF, constant-time compare, lockout. Lockout en memoire |
+| Backend protection | 5/5 | Rate limit, lockout, DUMMY_HASH, status check, DTO whitelist |
+| RBAC | 5/5 | Endpoint public, pas de guard necessaire |
+| Redirections | 2/5 | Redirect par role OK mais param `returnTo`/`next` mismatch = casse |
+| DB coherence | 5/5 | RefreshToken hashe, rotation, replay detection |
+| Tests | 3/5 | Tests password-reset couverts, pas de tests specifiques login flow |
 
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **[C1] Aucun test (back)**: Zéro test unitaire/intégration pour le flux auth le plus critique du système. Un changement accidentel pourrait casser le login sans détection.
-- **[C2] Lockout in-memory**: Le `FailedLoginService` stocke tout en `Map<>` RAM. Perdu au redémarrage, non partagé entre instances. Un attaquant peut reset le lockout en provoquant un redémarrage, ou cibler des instances différentes.
-- **[C3] Lien "Mot de passe oublié" → page 404**: Le front a un `<Link href="/auth/forgot-password">` mais aucune page n'existe (ni front, ni back). UX cassée + impression d'application non finie.
-
-### IMPORTANTS
-- **[I1] A11y labels manquants**: Labels sans `htmlFor`/`id`, pas d'`aria-live` sur erreurs. Non conforme WCAG AA.
-- **[I2] Hex en dur**: Couleurs `#F08C1B`, `#F2F0EF` etc. au lieu des design tokens (violation CLAUDE.md).
-- **[I3] Pas de guard "déjà connecté"**: Un user authentifié peut accéder à /auth/login sans redirection.
-- **[I4] Désalignement validation password**: Contrat Zod = min 6, DTO class-validator = min 10. Risque de confusion.
-- **[I5] Refresh tokens jamais purgés**: Pas de cron de nettoyage → croissance infinie de la table RefreshToken.
-
-### NICE-TO-HAVE
-- **[N1]** Ajouter `requestId` dans les logs pour traçabilité.
-- **[N2]** Migrer le lockout vers Redis pour persistance et distribution.
-- **[N3]** Ajouter `prefers-reduced-motion` sur les animations.
-- **[N4]** Feedback "X tentatives restantes" avant lockout.
-
-## 8) Plan "Amélioration Backend" (spécifique /auth/login)
-### Quick wins (≤2h)
-- [ ] Ajouter un cron job ou script de nettoyage des RefreshToken expirés (`WHERE expiresAt < NOW() AND revoked = true`)
-- [ ] Aligner le contrat Zod `LoginSchema` avec le DTO (password min 10)
-- [ ] Ajouter `requestId` dans les logs auth
-
-### Moyen (½–2 jours)
-- [ ] Écrire tests unitaires pour `AuthService.login()` (happy path, wrong password, lockout, timing-safe, user not found)
-- [ ] Écrire tests d'intégration pour `POST /auth/login` (rate limit, cookies, lockout reset)
-- [ ] Migrer `FailedLoginService` vers Redis (ou solution persistante)
-
-### Structurant (>2 jours)
-- [ ] Implémenter le flux "Mot de passe oublié" complet (front + back + email)
-- [ ] Ajouter CSRF validation sur login si architecture le requiert
-
-### Dépendances / risques
-- La migration Redis nécessite l'ajout de Redis à l'infra (Docker, config, env vars)
-- Le flux "forgot password" nécessite un service d'envoi d'emails (SMTP/SendGrid/etc.)
+### Score global page : 3.8 / 5
 
 ---
 
-# [/auth/register] — Auth Register
+## 2) /auth/register (?role=PRO|CLIENT)
 
-## 1) Résumé exécutif
-- **Rôle(s)**: Public (non authentifié)
-- **Objectif métier**: Inscrire un CLIENT (avec adresse) ou un PRO (avec KYC CIN) de manière atomique, puis auto-login.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 4 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 4 ; Perf: 4 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/auth/register/page.tsx`
-  - `apps/web/src/components/shared/CitySelect.tsx`
-  - `apps/web/src/lib/api.ts` (fetch direct, pas postFormData)
-  - `apps/web/src/store/authStore.ts`
-  - `apps/api/src/auth/auth.controller.ts:91-228` (register)
-  - `apps/api/src/auth/auth.service.ts:42-167` (register)
-  - `apps/api/src/auth/dto/register.dto.ts` (RegisterDto)
-  - `apps/api/src/kyc/multer.config.ts` (config upload)
-  - `packages/contracts/src/schemas/auth.ts` (RegisterSchema)
-  - `packages/database/prisma/schema.prisma` (User, ProProfile)
-
-## 2) Cartographie technique (fichiers)
 ### Frontend
-- `apps/web/src/app/auth/register/page.tsx` — Page multi-étapes (rôle → formulaire)
-- `apps/web/src/components/shared/CitySelect.tsx` — Composant sélection ville
 
-### Backend
-- `apps/api/src/auth/auth.controller.ts:91-228` — `POST /api/auth/register` avec FileFieldsInterceptor
-- `apps/api/src/auth/auth.service.ts:42-167` — `register()` logique atomique
-- `apps/api/src/auth/dto/register.dto.ts` — DTO validation class-validator
-- `apps/api/src/kyc/multer.config.ts` — Configuration Multer uploads
+**Fichier** : `apps/web/src/app/auth/register/page.tsx` (874 lignes)
+
+**Etape 1** : Selection du role (CLIENT ou PRO) via boutons, auto-selection possible via URL `?role=PRO`
+**Etape 2** : Formulaire multi-champs
+
+**Champs** :
+- Communs : firstName, lastName, email, phone, password, confirmPassword, cityId (CitySelect)
+- CLIENT : addressLine
+- PRO : cinNumber, cinFront (fichier), cinBack (fichier)
+
+**Validation** : Pas de librairie (pas de zod client-side, pas de react-hook-form). Validation manuelle inline :
+- Email regex, phone regex (format marocain `^(\+212|0)[5-7]\d{8}$`)
+- CIN regex (`^[A-Za-z]{1,2}\d{5,6}$`)
+- Password : 10+ chars, minuscule, majuscule, chiffre
+- Confirm password match
+- Fichiers : type (JPEG/PNG/WebP), taille max 5MB
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | `loading` state + spinner + bouton disabled | OK |
+| Erreur globale | `role="alert"` + `aria-live="assertive"` + `aria-atomic="true"` | OK |
+| Erreurs champ | Inline sous chaque champ (email, phone, cin, password, files) | OK |
+| Succes | Implicit via redirect | OK |
+
+**Accessibilite** :
+- Tous les labels utilisent `htmlFor` : `reg-firstName`, `reg-lastName`, `reg-email`, `reg-phone`, `reg-password`, `reg-confirmPassword`, `reg-city`, `reg-address`, `reg-cin` — OK
+- `aria-describedby` lie correctement aux IDs erreur : `reg-email-error`, `reg-phone-error`, `reg-password-rules`, `reg-confirm-error`, `reg-cin-error` — OK
+- `aria-invalid` sur email, phone, password, confirmPassword, cin — OK
+- `errorRef` avec `tabIndex={-1}` + focus management sur erreur soumission — OK
+- File inputs avec `aria-label="Photo CIN recto/verso"` — OK
+- **ISSUE** : CIN Recto/Verso utilisent `<span>` pour les labels au lieu de `<label htmlFor>`. L'input file n'a pas d'`id` reference.
+
+**Design tokens** : 100% tokens (`text-text-primary`, `bg-input-bg`, `border-border`, `text-primary-500`, `bg-surface`, etc.)
+- **VIOLATION** : Sidebar gauche utilise `animate-float`, `animate-fade-in`, `stagger-1/2/3` **sans** prefix `motion-safe:`. Feature cards avec `transition-all duration-300` sans `motion-safe:`.
+- Style inline `background: linear-gradient(...)` avec `var(--color-primary-*)` — techniquement des tokens CSS mais pas des classes Tailwind.
+
+**Redirections post-inscription** :
+- PRO → `/dashboard/kyc` — OK
+- CLIENT → `/` — OK
+
+**Securite** :
+- **ISSUE** : La page register n'utilise PAS `postFormData` de `@/lib/api`. Elle construit manuellement un `fetch()` avec `process.env.NEXT_PUBLIC_API_URL`. Contourne la logique auto-refresh-on-401. Inclut `credentials: 'include'` et `X-CSRF-PROTECTION: 1`.
+- Pas de toggle visibilite mot de passe (contrairement a reset-password)
+
+### API / Backend
+
+**Endpoint** : `POST /api/auth/register`
+**Fichier** : `apps/api/src/auth/auth.controller.ts` (ligne 93-230)
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | Aucun (public) | OK |
+| Rate Limiting | `@Throttle({ default: { limit: 5, ttl: 60_000 } })` — 5/min | OK |
+| DTO | `RegisterDto` (whitelist + forbidNonWhitelisted) | OK |
+| Role | `@IsIn(['CLIENT', 'PRO'])` — ADMIN bloque | OK |
+| Password | Min 10 chars, lowercase + uppercase + digit, max 128 | OK |
+| CIN | SHA-256 + salt (min 32 chars enforce au boot), `trim().toUpperCase()` | OK |
+| Fichiers | MIME + magic bytes + sharp re-encode + scan malware (PHP/script/MZ/ZIP) | OK |
+| Atomicite | `$transaction` pour User + ProProfile | OK |
+| Cleanup | Fichiers supprimes si transaction echoue | OK |
+| Anti-enumeration | "Donnees en conflit" generique | OK |
+
+**bcrypt** : cout 10 (standard minimum, 12 recommande pour production)
 
 ### DB
-- `User` (l.127-164) — Création avec email, phone, password hash, role, city, address
-- `ProProfile` (l.166-209) — Création si PRO avec cinNumber, kycUrls, kycStatus=PENDING
-- Transaction Prisma atomique (`$transaction`)
 
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Multi-step form solide avec validation à chaque étape
-- File upload avec preview, validation type/taille
-- Anti double submit
-- A11y complète
-- Design tokens
+- **User** : cree atomiquement dans `$transaction`
+- **ProProfile** : cree dans la meme transaction pour role PRO, avec `kycStatus: NOT_SUBMITTED`
+- CIN stocke uniquement comme `cinHash` (SHA-256 + salt)
+- Pas de contrainte DB forcant la presence d'un ProProfile pour un User role=PRO (application-level seulement)
 
-### Actuel (constaté)
-- **UI/Composants**: Excellent UX multi-étapes. Step 1 = sélection rôle avec cartes interactives. Step 2 = formulaire adaptatif selon rôle (CLIENT: +adresse, PRO: +CIN+photos). Design soigné mais hex en dur (`#F08C1B` etc.).
-- **Data fetching / submit**:
-  - ⚠️ Le front utilise `fetch()` directement (l.247) au lieu de `postFormData()` de lib/api.ts. Duplication de logique (construction URL, headers CSRF, credentials).
-  - FormData envoyé en multipart/form-data.
-  - Auto-login après register via `setAuth(data.user)`.
-- **Validations**:
-  - ✅ Validation inline complète : email regex, phone regex marocain, password strength (4 critères visuels), CIN regex, confirmation mot de passe
-  - ✅ Validation fichiers côté client (type MIME, taille 5Mo)
-  - ✅ Feedback visuel en temps réel (bordures rouges, messages d'erreur par champ)
-  - ⚠️ Pas de validation `firstName`/`lastName` minimum length côté front (le back exige min 2)
-- **Erreurs & UX**: ✅ `mapBackendError()` traduit les erreurs backend en messages UX français. ✅ `aria-live="assertive"` sur le container d'erreur global. ✅ Role `"alert"` sur les erreurs.
-- **A11y**:
-  - ✅ `htmlFor`/`id` présents sur tous les inputs du step 2
-  - ✅ `aria-describedby`, `aria-invalid` sur email, phone, password, CIN, confirm
-  - ✅ `role="alert"` et `aria-live` sur les erreurs
-  - ✅ Indicateurs visuels de critères mot de passe avec `aria-label`
-  - ⚠️ Input file CIN dans un `<label>` wrapper — le `<span>` de titre n'a pas de `htmlFor`
-  - ⚠️ `autoComplete` bien utilisé (`given-name`, `family-name`, `email`, `tel`, `new-password`)
-- **Perf**: OK. `Suspense` wrapping pour useSearchParams. Pas de lazy loading des fichiers (acceptable pour le MVP).
-- **Sécurité front**: ✅ `X-CSRF-PROTECTION: '1'` envoyé. ✅ Pas de secrets côté client. ⚠️ `process.env.NEXT_PUBLIC_API_URL` exposé côté client (normal pour Next.js mais à noter).
+### Problemes & recommandations
 
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[POST] /api/auth/register** → `AuthController.register()` → `AuthService.register()` → Guard: aucun (public)
-  - Request: `multipart/form-data` avec RegisterDto + fichiers cinFront/cinBack
-  - Response: `{ user: PublicUser }` + cookies accessToken + refreshToken
-  - Errors: 409 "Données en conflit" (email/phone/CIN dupliqué), 400 validations multiples, 429 Throttle
-  - Sécurité: `@Throttle({ default: { limit: 5, ttl: 60_000 } })` rate limit
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | HIGH | `motion-safe:` manquant sur animations sidebar | Ajouter prefix `motion-safe:` sur animate-float, animate-fade-in, stagger-*, transition-all |
+| 2 | MEDIUM | Register bypass `postFormData` (fetch manuelle) | Utiliser `postFormData` de `@/lib/api` |
+| 3 | LOW | CIN file labels en `<span>` au lieu de `<label htmlFor>` | Corriger association accessible |
+| 4 | LOW | Pas de toggle visibilite mot de passe | Ajouter comme sur reset-password |
+| 5 | LOW | Pas de caractere special exige dans le mot de passe | Considerer l'ajout |
+| 6 | INFO | bcrypt cout 10 | Augmenter a 12 pour production |
 
-### Attendu (référentiel)
-- Inscription atomique (transaction)
-- Validation robuste de tous les champs + fichiers
-- Protection contre les fichiers malveillants
-- Anti mass assignment
-- Unicité vérifiée avant insert
+### TODO
 
-### Actuel (constaté)
-- **Auth/AuthZ**: ✅ Route publique, pas de guard nécessaire. ✅ Auto-login après inscription (cookies httpOnly).
-- **Validations serveur**:
-  - ✅ RegisterDto: class-validator avec @IsEmail, phone regex marocain, password min 10/max 128 + complexité (maj+min+chiffre), firstName/lastName min 2, cityId regex `city_[a-z]+_\d{3}`, CIN regex
-  - ✅ Whitelist + forbidNonWhitelisted (anti mass assignment)
-  - ✅ Double validation dans controller + service (belt-and-suspenders)
-  - ⚠️ Le DTO `addressLine` est `@IsOptional()` mais le service valide "obligatoire pour CLIENT" manuellement. Le DTO ne peut pas exprimer une validation conditionnelle facilement avec class-validator.
-- **Fichiers (sécurité)**:
-  - ✅ Validation magic bytes (JPEG, PNG, WebP header check)
-  - ✅ Re-encoding via `sharp` → jpeg (neutralise les payloads cachés)
-  - ✅ Scan de contenu suspect (PHP, script, shebang, MZ/PE, ZIP)
-  - ✅ Vérification taille (max 5Mo) et fichier vide
-  - ✅ MIME type whitelist
-  - ✅ Rollback fichiers si transaction DB échoue
-- **Erreurs**: ⚠️ Message "Données en conflit" volontairement générique pour anti-enumération — mais le front `mapBackendError` essaie de distinguer email/phone/CIN, ce qui ne fonctionnera PAS car le back ne précise pas quel champ est en conflit. Le mapping côté front ne peut que tomber sur le fallback générique.
-- **Perf**: ✅ Vérifications d'unicité (email, phone, CIN) AVANT le hash bcrypt (évite travail inutile). ✅ Transaction atomique.
-- **Observabilité**: ⚠️ Pas de log explicite dans le flux register (ni succès ni échec, sauf les exceptions non catchées).
-- **Tests**: ❌ Aucun test.
-- **Sécurité**:
-  - ✅ Rate limit @Throttle 5 req/min
-  - ✅ Sharp re-encode les images (défense en profondeur)
-  - ✅ Scan anti-malware basique
-  - ⚠️ Fichiers stockés sur disque local (`uploads/kyc/`) — pas de CDN/S3, pas de cleanup automatique des fichiers orphelins
-  - ⚠️ Pas de limite sur le nombre total d'inscriptions (un attaquant pourrait créer des milliers de comptes)
+- [ ] Ajouter `motion-safe:` sur toutes les animations sidebar
+- [ ] Migrer fetch manuelle vers `postFormData`
+- [ ] Corriger labels accessibles pour CIN recto/verso
+- [ ] Ajouter toggle visibilite mot de passe
 
-## 5) Base de données — État attendu vs état actuel
-- **Tables**: `User`, `ProProfile` (via $transaction)
-- **Contraintes/index**:
-  - ✅ `User.phone @unique`, `User.email @unique`
-  - ✅ `ProProfile.cinNumber @unique`
-  - ✅ `ProProfile.userId @id` (1:1 avec User)
-  - ✅ `City.publicId @unique` (lookup par publicId)
-- **Migrations**: NON TROUVÉ — à vérifier dans `packages/database/prisma/migrations/`
-- **Requêtes observées**:
-  1. `user.findUnique(email)` — unicité email
-  2. `user.findUnique(phone)` — unicité phone
-  3. `city.findUnique(publicId)` — validation ville
-  4. `proProfile.findUnique(cinNumber)` — unicité CIN (si PRO)
-  5. `$transaction` → `user.create` + `proProfile.create`
-  - Total: 4-5 queries avant l'insert. Acceptable pour un register.
-- **Risques cohérence/perf**:
-  - ⚠️ Race condition: entre les checks d'unicité et le `$transaction`, un autre register pourrait insérer le même email/phone. Protégé par les contraintes @unique en DB (P2002 catch), mais le message d'erreur sera générique.
-  - ✅ Transaction atomique — pas de User orphelin sans ProProfile.
+## Score detaille — /auth/register
 
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping champs**:
-  - UI form → FormData (multipart) → RegisterDto (class-validator) → AuthService.register() → DB User + ProProfile
-  - ✅ Champs alignés : firstName, lastName, email, phone, password, role, cityId, addressLine, cinNumber, cinFront, cinBack
-- **Incohérences**:
-  - ⚠️ **Contrat Zod vs DTO**: `RegisterSchema` (contracts) exige `password.min(6)`, `RegisterDto` (API) exige `@MinLength(10)` + complexité. Le front valide min 10. **Le contrat Zod est désaligné** — il ne reflète pas les règles réelles.
-  - ⚠️ **cityId format**: Le front envoie le `publicId` (format `city_xxx_000`). Le DTO valide avec regex `city_[a-z]+_\d{3}`. Le service fait un `findUnique(publicId)` puis utilise l'`id` interne (cuid). ✅ Correct mais la couche d'indirection est fragile.
-  - ⚠️ **Error mapping**: Le front tente de distinguer les erreurs par sous-chaîne ("email", "phone", "cin") mais le back retourne systématiquement "Données en conflit" sans préciser le champ. Le mapping ne fonctionne donc que sur les erreurs de validation (400), pas sur les conflits (409).
-- **Gestion erreurs bout-en-bout**: ⚠️ Partiellement fonctionnelle — voir point ci-dessus.
-- **Risques sécurité**: ✅ Le back est autoritatif. Les validations front sont un confort UX, pas une sécurité.
+| Aspect | Score /5 | Justification |
+|--------|----------|---------------|
+| Frontend structure | 4/5 | Multi-step clean, mapBackendError thorough. 874 lignes = fichier large |
+| UX & states | 4/5 | Erreurs inline + globales, loading OK. Pas de toggle password |
+| Validation front | 4/5 | Regex email/phone/CIN, password rules, file type/size. Manuelle mais complete |
+| Securite auth | 4/5 | CSRF, file validation, CIN hashing. fetch manuelle bypass api.ts |
+| Backend protection | 5/5 | Rate limit, DTO whitelist, magic bytes, sharp rebuild, malware scan, atomic tx |
+| RBAC | 5/5 | ADMIN injection bloquee, role whitelist |
+| Redirections | 5/5 | PRO→/dashboard/kyc, CLIENT→/ correct |
+| DB coherence | 4/5 | Transaction atomique User+ProProfile. Pas de contrainte DB-level |
+| Tests | 3/5 | password-reset.service.spec.ts OK, pas de tests registration e2e |
 
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **[C1] Aucun test backend**: Flux d'inscription critique sans aucune couverture de test.
-- **[C2] Contrat Zod désaligné**: `RegisterSchema.password.min(6)` vs réalité `min(10) + maj + min + chiffre`. Risque de confusion pour les consommateurs du contrat.
-
-### IMPORTANTS
-- **[I1] Fetch direct au lieu de lib/api.ts**: Le register utilise `fetch()` directement (l.247) au lieu de `postFormData()`. Duplication de logique, pas de retry/refresh automatique.
-- **[I2] Error mapping 409 inefficace**: Le back retourne "Données en conflit" sans préciser email/phone/CIN. Le front ne peut pas afficher un message spécifique au champ en conflit.
-- **[I3] Hex en dur**: Même problème que login — violation CLAUDE.md.
-- **[I4] Pas de guard "déjà connecté"**: Un user authentifié peut accéder à /auth/register.
-- **[I5] Fichiers sur disque local**: Les photos CIN sont stockées localement, pas sur un service de stockage cloud. Risque de perte en cas de redéploiement.
-- **[I6] Pas de log sur inscription réussie**: Aucun log traçable pour auditer les inscriptions.
-
-### NICE-TO-HAVE
-- **[N1]** Ajouter un CAPTCHA ou challenge (honeypot minimum) contre les inscriptions automatisées.
-- **[N2]** Vérification email par lien de confirmation.
-- **[N3]** Preview des photos CIN avant upload.
-- **[N4]** Progress indicator visuel (step 1/2).
-
-## 8) Plan "Amélioration Backend" (spécifique /auth/register)
-### Quick wins (≤2h)
-- [ ] Aligner le contrat Zod `RegisterSchema` avec les règles réelles (password min 10 + complexité)
-- [ ] Ajouter un log `Logger.log` sur inscription réussie (rôle, ville, timestamp, sans PII)
-- [ ] Améliorer le message 409 pour inclure un hint du champ en conflit (ex: `{ field: 'email' }`)
-
-### Moyen (½–2 jours)
-- [ ] Écrire tests unitaires pour `AuthService.register()` (CLIENT happy, PRO happy, duplicates, transaction rollback)
-- [ ] Écrire tests d'intégration pour `POST /api/auth/register` (multipart, validation, 409, fichiers)
-- [ ] Refactorer le front pour utiliser `postFormData()` de lib/api.ts
-
-### Structurant (>2 jours)
-- [ ] Migrer le stockage fichiers KYC vers S3/MinIO/Cloudflare R2
-- [ ] Implémenter la vérification email (envoi lien + confirmation)
-- [ ] Ajouter un CAPTCHA sur l'inscription
-
-### Dépendances / risques
-- Le stockage cloud nécessite un service (S3, R2) + configuration + migration des fichiers existants
-- La vérification email nécessite un service SMTP
-- Le CAPTCHA nécessite une intégration (hCaptcha, Turnstile)
+### Score global page : 4.2 / 5
 
 ---
 
-# [/profile] — User Profile (global)
+## 3) /profile
 
-## 1) Résumé exécutif
-- **Rôle(s)**: CLIENT + PRO (authentification requise)
-- **Objectif métier**: Permettre à l'utilisateur connecté de consulter et modifier ses informations personnelles (nom, prénom, ville, adresse).
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 3 ; DB: 3 ; Intégration: 2 ; Sécurité: 3 ; Perf: 3 ; Tests/Obs: 0
-- **Fichiers clés**:
-  - `apps/web/src/app/profile/page.tsx`
-  - `apps/web/src/lib/api.ts` (getJSON, patchJSON)
-  - `apps/web/src/store/authStore.ts`
-  - `apps/web/src/components/Header.tsx`
-  - `apps/api/src/users/users.controller.ts`
-  - `apps/api/src/users/users.service.ts` (UpdateProfileDto, updateProfile)
-  - `apps/api/src/auth/jwt-auth.guard.ts`
-
-## 2) Cartographie technique (fichiers)
 ### Frontend
-- `apps/web/src/app/profile/page.tsx` — Page profil avec mode lecture/édition
-- `apps/web/src/components/Header.tsx` — Header avec navigation
-- `apps/web/src/store/authStore.ts` — Source de vérité user côté client
 
-### Backend
-- `apps/api/src/users/users.controller.ts` — `PATCH /api/users/me`
-- `apps/api/src/users/users.service.ts` — `updateProfile()` + `UpdateProfileDto`
-- `apps/api/src/auth/jwt-auth.guard.ts` — Guard JWT
+**Fichier** : `apps/web/src/app/profile/page.tsx` (468 lignes)
+
+**Mode vue** : firstName, lastName, city, address, avatar, role, nombre de reservations
+**Mode edition** : firstName, lastName, cityId (select), addressLine, avatarUrl (input URL)
+**Validation** : Aucune librairie. `required` natif HTML. Pas de validation client-side sur save.
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | `mounted` state anti-hydration + spinner redirect | OK |
+| Erreur | `toast.error()` via `@/store/toastStore` | Partiel (pas inline) |
+| Succes | `successMessage` inline + auto-clear 3s | OK |
+| Erreur villes | `console.error` silencieux + fallback `[]` | Manquant pour l'utilisateur |
+
+**Accessibilite** :
+- Labels `htmlFor` en mode edition : `profile-avatar`, `profile-firstname`, `profile-lastname`, `profile-city`, `profile-address` — OK
+- Bouton logout `aria-label="Se deconnecter"` — OK
+- Bouton modifier `aria-label="Modifier les informations personnelles"` — OK
+- **ISSUE** : Message de succes sans `role="alert"` ni `aria-live` → non annonce par les lecteurs d'ecran
+- **ISSUE** : Pas de rendu inline des erreurs de champs (tout passe par toast)
+- **ISSUE** : `animate-spin` sans prefix `motion-safe:` (ligne 165)
+
+**Design tokens** : 100% tokens (`bg-background`, `bg-surface`, `text-text-primary`, `border-border`, `bg-inverse-bg`, etc.)
+
+**Redirections** :
+- Non authentifie → `/auth/login` (client-side + middleware)
+- PRO → `/dashboard/profile` (client-side `router.replace`)
+- Apres logout → `/`
+
+**Securite** :
+- `patchJSON` de `@/lib/api` avec CSRF — OK
+- `avatarUrl` accepte des URLs arbitraires. `<img src={avatarUrl}>` pourrait etre utilise pour tracking (chargement d'images externes)
+
+### API / Backend
+
+**Endpoint** : `PATCH /api/users/me`
+**Fichier** : `apps/api/src/users/users.controller.ts` (ligne 26-35)
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | JwtAuthGuard + RolesGuard | OK |
+| Roles | `@Roles('CLIENT')` — PRO ne peut pas utiliser cette route | OK |
+| DTO | `UpdateProfileDto` (whitelist + forbidNonWhitelisted) | OK |
+| Mass assignment | Whitelist : cityId, firstName, lastName, addressLine, avatarUrl | OK |
+
+**Problemes backend** :
+- **MEDIUM** : La reponse `updateProfile` retourne l'ID interne CUID au lieu du `publicId` — fuite du pattern de separation ID public/interne
+- **MEDIUM** : `@IsUUID('4')` sur `cityId` dans `UpdateProfileDto` mais les City IDs sont des CUIDs → mismatch de validation (les updates de ville echoueront)
 
 ### DB
-- `User` — Mise à jour firstName, lastName, cityId, addressLine
 
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard client fiable
-- Mode lecture/édition avec validation
-- Gestion des 3 états (loading, ready, error)
-- A11y complète
-- Design tokens
+- User model mis a jour directement via `prisma.user.update`
+- `avatarUrl` sans validation `@IsUrl()` dans le DTO (seulement `@IsOptional()` + `validateUrl()` service-level)
 
-### Actuel (constaté)
-- **UI/Composants**: Mode dual lecture/édition. Affichage des infos + bouton "Modifier" → formulaire inline. Carte dédiée par rôle (PRO → dashboard, CLIENT → réservations). Section "Zone de danger" avec déconnexion. Design utilise `zinc-*` + `dark:` (design system différent de login/register !).
-- **Data fetching / submit**:
-  - Fetch villes: `getJSON('/public/cities')` dans un useEffect
-  - Save: `patchJSON('/users/me', data)` puis `setUser(updatedUser)` pour mettre à jour le store
-  - ⚠️ Pas de re-fetch du user complet après update — le front trust la réponse du PATCH
-- **Validations**:
-  - ❌ **Aucune validation côté front** — pas de regex, pas de min length, seul `required` HTML
-  - Le back valide (class-validator) mais le front ne donne pas de feedback inline
-- **Erreurs & UX**:
-  - ❌ Utilise `alert()` pour afficher les erreurs (l.100) — UX très pauvre
-  - ✅ Message succès avec bandeau vert + auto-dismiss 3s
-  - ⚠️ `catch (error: any)` — pas de typage d'erreur
-- **A11y**:
-  - ❌ `<label>` sans `htmlFor`/`id` sur TOUS les inputs du mode édition (violation CLAUDE.md)
-  - ❌ Pas d'`aria-live` sur le message succès
-  - ❌ Emojis utilisés comme icônes (👤📊📅⚠️) — non interprétables par les lecteurs d'écran, pas de `aria-hidden`
-  - ⚠️ Le `<select>` ville utilise `disabled={loadingCities}` mais pas de skeleton/spinner visible
-- **Perf**:
-  - ⚠️ Le fetch villes est fait à chaque visite de la page (pas de cache côté composant). Mais `getJSON` utilise le cache mémoire pour `/public/cities` (10min TTL) → OK en pratique.
-  - ⚠️ `mounted` state anti-hydration: retourne `null` au premier render → flash blanc potentiel.
-- **Sécurité front**: ✅ Guard client-side redirige vers login si non authentifié. ⚠️ Le guard utilise le store Zustand (client-side) — si le store est désynchronisé, le user voit un flash avant redirection. ✅ Logout appelle `/auth/logout` côté back.
-- **Incohérence design**: Cette page utilise `zinc-*` + `dark:` classes alors que login/register utilisent `slate-*` + `#F08C1B`. Pas de cohérence visuelle avec le reste du site.
+### Problemes & recommandations
 
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[PATCH] /api/users/me** → `UsersController.updateProfile()` → `UsersService.updateProfile()` → Guard: `JwtAuthGuard`
-  - Request DTO: `UpdateProfileDto { cityId?: UUID, firstName?: string(2-50, alpha), lastName?: string(2-50, alpha), addressLine?: string(5-200) }`
-  - Response: User avec city + proProfile sélects
-  - Errors: 404 "Utilisateur introuvable", 400 validation
-  - Sécurité: JwtAuthGuard (authentification requise)
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | MEDIUM | Reponse PATCH /users/me fuit l'ID interne | Mapper vers publicId |
+| 2 | MEDIUM | `@IsUUID('4')` sur cityId rejette les CUIDs | Corriger le validateur |
+| 3 | LOW | Message succes sans `aria-live` | Ajouter `role="alert"` |
+| 4 | LOW | Erreurs save via toast uniquement (pas inline) | Ajouter rendu erreur inline |
+| 5 | LOW | `animate-spin` sans `motion-safe:` | Corriger |
+| 6 | LOW | `avatarUrl` accepte URLs arbitraires sans sanitization | Valider cote serveur et/ou upload fichier |
 
-- **[GET] /api/public/cities** — Liste des villes (public, pas de guard)
+### TODO
 
-### Attendu (référentiel)
-- AuthZ: seul l'owner peut modifier son profil
-- Validation serveur complète
-- Pas de mass assignment
-- Réponse formatée comme PublicUser
+- [ ] Mapper la reponse vers publicId
+- [ ] Corriger validateur cityId (CUID ou publicId format)
+- [ ] Ajouter `role="alert"` sur le message de succes
+- [ ] Ajouter `motion-safe:` sur animate-spin
 
-### Actuel (constaté)
-- **Auth/AuthZ**: ✅ `JwtAuthGuard` protège la route. ✅ `req.user.id` utilisé comme userId — un user ne peut modifier que son propre profil (ownership implicite).
-- **Validations serveur**:
-  - ✅ `UpdateProfileDto`: class-validator avec whitelist + forbidNonWhitelisted
-  - ✅ `cityId`: `@IsUUID('4')` — valide un UUID v4
-  - ⚠️ **Incohérence cityId**: Le register utilise `publicId` (format `city_xxx_000`) mais le profile update attend un UUID v4 interne. **Le front envoie `user.cityId`** qui est le `publicId` retourné par `toPublicUser()`. Si le front envoie le publicId, le back essaiera de faire un `user.update({ cityId: publicId })` — **cela échouera silencieusement ou causera une erreur FK** car `cityId` en DB est le cuid interne, pas le publicId.
-  - ✅ firstName/lastName: regex alpha accentuée, length 2-50
-  - ✅ addressLine: length 5-200
-- **Erreurs**: ⚠️ Le service retourne directement le résultat Prisma — pas de mapping vers `PublicUser`. Le front reçoit un objet avec `city.id` (cuid interne) au lieu de `city.publicId`.
-- **Perf**: ✅ Une seule query Prisma pour le findUnique + update. Pas de N+1.
-- **Observabilité**: ❌ Aucun log dans le controller ni le service.
-- **Tests**: ❌ Aucun test.
-- **Sécurité**: ✅ Whitelist DTO. ✅ JwtAuthGuard. ❌ Pas de rate limit sur cette route.
+## Score detaille — /profile
 
-## 5) Base de données — État attendu vs état actuel
-- **Tables**: `User` — update direct
-- **Contraintes/index**: ✅ `User.id @id` (PK). ✅ `cityId` est une FK vers `City.id`.
-- **Requêtes observées**: `user.findUnique(id)` + `user.update(id, data)` — 2 queries. Le findUnique est probablement superflu (l'update avec WHERE id ferait la même chose et renverrait une erreur si non trouvé).
-- **Risques cohérence/perf**:
-  - ❌ **cityId mismatch critique**: Le front stocke `publicId` (ex: `city_casa_001`), le back attend un UUID. L'update Prisma va tenter de mettre un publicId dans la colonne `cityId` qui est une FK vers `City.id` (cuid). **Cela provoquera une erreur FK Prisma non gérée**.
-  - ⚠️ Le `dataToUpdate` est typé `any` — pas de sécurité de type TypeScript.
+| Aspect | Score /5 | Justification |
+|--------|----------|---------------|
+| Frontend structure | 4/5 | Mode vue/edition clean, CitySelect reutilise |
+| UX & states | 3/5 | Succes inline OK, erreurs via toast seulement, erreur villes silencieuse |
+| Validation front | 2/5 | Aucune validation client-side, `required` natif seulement |
+| Securite auth | 4/5 | CSRF, client-side + middleware guard. avatarUrl non sanitise |
+| Backend protection | 3/5 | Whitelist DTO OK. Fuite ID interne, cityId validation mismatch |
+| RBAC | 5/5 | `@Roles('CLIENT')` correct, PRO redirige vers /dashboard/profile |
+| Redirections | 5/5 | Non-auth, PRO redirect, logout — tous corrects |
+| DB coherence | 4/5 | Update direct OK. avatarUrl sans `@IsUrl()` dans DTO |
+| Tests | 2/5 | Pas de tests specifiques pour /profile ou PATCH /users/me |
 
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping champs**:
-  - UI → PATCH body: `{ firstName, lastName, cityId, addressLine }` → DTO `UpdateProfileDto` → DB `User.update`
-  - ❌ **cityId**: Le front envoie `user.cityId` qui est le **publicId** (`city_xxx_000` via `toPublicUser()`). Le DTO attend un `@IsUUID('4')`. **Le PATCH échouera à la validation** avec une erreur 400 sur cityId.
-- **Incohérences**:
-  - ❌ **Bug critique cityId**: Le register utilise publicId, le profil utilise un UUID. Le `toPublicUser()` retourne `city?.publicId ?? user.cityId` comme `cityId`. Le front stocke ce publicId. Quand le front renvoie ce publicId pour update, le DTO `@IsUUID('4')` le rejettera.
-  - ⚠️ **Réponse non formatée**: Le PATCH retourne un objet Prisma brut (avec `city.id` interne) au lieu de `PublicUser`. Le `setUser(updatedUser)` écrasera le store avec un format différent de ce que `toPublicUser()` produit.
-- **Gestion erreurs bout-en-bout**: ❌ Erreurs affichées via `alert()`, pas de mapping.
-- **Risques sécurité**: ⚠️ Le front utilise `patchJSON` qui envoie `X-CSRF-PROTECTION: '1'` mais le controller **n'appelle pas `requireCsrf()`**. Pas de protection CSRF explicite.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **[C1] Bug cityId mismatch**: Le front envoie un publicId (`city_xxx_000`), le DTO attend un UUID v4. Le PATCH de ville est **cassé**. L'update ville ne peut pas fonctionner.
-- **[C2] Réponse non formatée**: Le PATCH retourne un objet Prisma brut, pas un `PublicUser`. Le store Zustand sera corrompu avec un format incohérent (city.id vs city.publicId, pas de isPremium, pas de kycStatus).
-- **[C3] Aucun test**: Flux profil sans couverture.
-
-### IMPORTANTS
-- **[I1] alert() pour les erreurs**: UX inacceptable en production.
-- **[I2] A11y critique**: Labels sans htmlFor/id, emojis comme icônes sans aria-hidden.
-- **[I3] Pas de validation front**: Aucun feedback inline avant soumission.
-- **[I4] Design incohérent**: `zinc-*` + `dark:` mode ici vs `slate-*` + orange sur login/register.
-- **[I5] Pas de rate limit**: Aucune protection rate limit sur PATCH /users/me.
-
-### NICE-TO-HAVE
-- **[N1]** Squelette loading au lieu de flash blanc.
-- **[N2]** Confirmation avant déconnexion.
-- **[N3]** Modifier email/phone avec vérification.
-
-## 8) Plan "Amélioration Backend" (spécifique /profile)
-### Quick wins (≤2h)
-- [ ] **FIX CRITIQUE**: Changer `UpdateProfileDto.cityId` de `@IsUUID('4')` vers `@Matches(/^city_[a-z]+_\d{3}$/)` OU résoudre le publicId → id dans le service avant l'update
-- [ ] **FIX CRITIQUE**: Formater la réponse PATCH via `toPublicUser()` pour retourner un `PublicUser` cohérent
-- [ ] Ajouter `@Throttle` sur PATCH /users/me
-- [ ] Ajouter un log sur modification de profil
-
-### Moyen (½–2 jours)
-- [ ] Écrire tests unitaires pour `UsersService.updateProfile()` (happy path, cityId validation, user not found)
-- [ ] Refactorer le front : remplacer `alert()` par un bandeau d'erreur inline
-- [ ] Ajouter validation front (firstName/lastName min 2, addressLine min 5)
-
-### Structurant (>2 jours)
-- [ ] Unifier le format cityId dans toute l'application (convention unique publicId vs cuid)
-- [ ] Ajouter modification email/phone avec vérification (OTP ou lien)
-
-### Dépendances / risques
-- Le fix cityId doit être cohérent avec le register et tous les autres endpoints qui utilisent cityId
-- Le changement de format de réponse du PATCH pourrait impacter d'autres consommateurs
+### Score global page : 3.6 / 5
 
 ---
 
-# [/auth/forgot-password] — Forgot Password
+## 4) /auth/forgot-password
 
-## 1) Résumé exécutif
-- **Rôle(s)**: Public
-- **Objectif métier**: Permettre à un utilisateur ayant oublié son mot de passe de le réinitialiser.
-- **Statut global**: ❌ Risque — **FONCTIONNALITE INEXISTANTE**
-- **Scores (0–5)**: Front: 0 ; Back: 0 ; DB: 0 ; Intégration: 0 ; Sécurité: 0 ; Perf: N/A ; Tests/Obs: 0
-- **Fichiers clés**: AUCUN
-
-## 2) Cartographie technique (fichiers)
 ### Frontend
-- ❌ **AUCUNE PAGE** — `apps/web/src/app/auth/forgot-password/page.tsx` **n'existe pas**
-- Le lien existe dans `apps/web/src/app/auth/login/page.tsx:179` : `<Link href="/auth/forgot-password">`
 
-### Backend
-- ❌ **AUCUN ENDPOINT** — Recherche de `forgot-password`, `reset-password`, `resetPassword`, `forgotPassword` dans `apps/api/src/` : **0 résultat**
-- Pas de controller, pas de service, pas de DTO
+**Fichier** : `apps/web/src/app/auth/forgot-password/page.tsx` (175 lignes) — **CONFIRME** (existait pas dans l'audit initial)
+
+**Champs** : Un seul champ `identifier` (email ou telephone)
+**Validation** : Regex client-side — `EMAIL_REGEX` si contient `@`, `PHONE_REGEX` sinon. Verification champ vide.
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | Bouton disabled + Loader2 spinner | OK |
+| Erreur | `role="alert"` + `aria-live="assertive"` | OK |
+| Succes | `pageState === 'submitted'` avec message confirmation | OK |
+
+**Anti-enumeration UX** : Le message de succes dit "Si un compte est associe a cet identifiant..." — ne revele pas l'existence du compte. Excellent.
+
+**Accessibilite** :
+- `<label htmlFor="identifier">` correctement lie — OK
+- `autoFocus` sur l'input — OK
+- `aria-hidden="true"` sur icones decoratives — OK
+- Erreur avec `role="alert"` + `aria-live` — OK
+- **ISSUE** : Pas de `aria-describedby` liant l'input au message d'erreur
+- **ISSUE** : Pas de `aria-invalid` sur l'input en erreur
+- **VIOLATION** : `transition-all duration-200`, `transition-colors`, `animate-spin` sans `motion-safe:`
+
+**Design tokens** : 100% tokens — OK
+
+**Liens** :
+- Retour vers `/auth/login` — OK
+- Vers `/auth/register` — OK
+- Apres soumission, vers `/auth/login` — OK
+
+### API / Backend
+
+**Endpoint** : `POST /api/auth/forgot-password`
+**Fichier** : `apps/api/src/auth/auth.controller.ts` (ligne 314-324)
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | Aucun (public) | OK |
+| Rate Limiting | `@Throttle({ default: { limit: 3, ttl: 3_600_000 } })` — 3/heure | OK |
+| DTO | `ForgotPasswordDto` (whitelist + forbidNonWhitelisted) | OK |
+| Anti-enumeration | Toujours le meme message generique | OK |
+| Token | `crypto.randomBytes(32)` — 256 bits d'entropie | OK |
+| Stockage token | SHA-256 hash en DB uniquement | OK |
+| TTL | 15 minutes | OK |
+| Email | Via Resend (production) ou console.log (dev) | OK |
+
+**Problemes** :
+- **LOW** : Pas de limite de tokens en cours par utilisateur — un attaquant peut accumuler des tokens valides (max 3/h)
+- **LOW** : Les utilisateurs phone-only ne recoivent aucune notification (token cree mais aucun mecanisme SMS)
 
 ### DB
-- ❌ **PAS DE TABLE** — Pas de modèle `PasswordReset` ou `ResetToken` dans le schema Prisma
-- Pas de champ `resetToken`/`resetExpires` sur le modèle `User`
 
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Page avec formulaire email/téléphone
-- Message de confirmation (même si compte n'existe pas — anti-enumération)
-- Page de reset avec nouveau mot de passe (via token dans l'URL)
+**PasswordResetToken model** :
+| Champ | Type | Notes |
+|-------|------|-------|
+| `id` | String | CUID |
+| `tokenHash` | String | `@unique` — SHA-256 du token brut |
+| `userId` | String | FK vers User |
+| `expiresAt` | DateTime | TTL 15 min |
+| `usedAt` | DateTime? | Single-use enforcement |
+| `createdAt` | DateTime | `@default(now())` |
 
-### Actuel (constaté)
-- ❌ **PAGE 404** : Le lien `<Link href="/auth/forgot-password">` depuis la page login mène vers une page inexistante (404 Next.js). UX complètement cassée.
-- ❌ Aucune alternative de récupération de compte n'est proposée (pas de SMS, pas de support link pour ce cas).
+Index : `@@index([userId, expiresAt])`
+Migration : `20260217161317_add_password_reset_token` — correcte
 
-## 4) Backend — État attendu vs état actuel
-### Endpoints attendus (non existants)
-- `POST /api/auth/forgot-password` — Envoyer un email/SMS de reset
-- `POST /api/auth/reset-password` — Réinitialiser le mot de passe avec un token
+**Reset password** (`POST /api/auth/reset-password`) :
+- Token valide (hash match + non expire + non utilise)
+- Password mis a jour (bcrypt hash)
+- Token marque comme utilise (`usedAt`)
+- TOUS les refresh tokens revoques
+- Le tout dans une `$transaction` atomique
 
-### Actuel (constaté)
-- ❌ **AUCUN endpoint** de reset password dans le backend
-- ❌ Pas de service d'envoi d'email configuré (pas de module mail visible dans l'API)
-- ❌ Pas de table/modèle pour stocker les tokens de reset
+**Frontend reset** (`apps/web/src/app/auth/reset-password/page.tsx`, 282 lignes) :
+- 3 etats : `form`, `success`, `missing-token`
+- Validation password identique au register (10+ chars, lower/upper/digit)
+- Toggle visibilite mot de passe present (Eye/EyeOff) — OK
+- `role="alert"` pour erreurs — OK
+- **ISSUE** : Pas de `aria-describedby` liant le password aux regles
+- **VIOLATION** : `transition-all`, `animate-spin` sans `motion-safe:`
 
-## 5) Base de données — État attendu vs état actuel
-- ❌ Aucune table pour les tokens de réinitialisation
-- ❌ Pas de champ `resetToken`/`resetExpires` sur User
+### Problemes & recommandations
 
-## 6) Intégration Front ↔ Back ↔ DB
-- ❌ **Intégration inexistante** — lien mort côté front, aucun backend.
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | HIGH | `motion-safe:` manquant sur forgot-password et reset-password | Ajouter prefix |
+| 2 | LOW | Pas de `aria-invalid` / `aria-describedby` sur forgot-password | Ajouter |
+| 3 | LOW | Pas de `aria-describedby` sur reset-password regles | Ajouter |
+| 4 | LOW | Phone-only users ne recoivent pas le lien reset | Implementer SMS ou documenter la limitation |
+| 5 | LOW | Tokens non invalides quand un nouveau est genere | Invalider les anciens tokens |
+| 6 | LOW | Tokens expires jamais nettoyes en DB | Ajouter cron de cleanup |
 
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **[C1] Lien 404 en production**: Le lien "Mot de passe oublié" sur la page login mène à une 404. Utilisateur bloqué sans recours. **Impact direct sur la rétention utilisateur et le support**.
-- **[C2] Aucune récupération de compte**: Un utilisateur qui oublie son mot de passe n'a aucun moyen de récupérer son compte. C'est une dette critique de sécurité ET d'UX.
-- **[C3] Non-conformité sécurité**: L'absence de reset password est considérée comme une faille par les standards OWASP (A07:2021 — Identification and Authentication Failures).
+### TODO
 
-### IMPORTANTS
-- **[I1]** En attendant l'implémentation, retirer ou désactiver le lien "Mot de passe oublié" pour éviter la 404.
-- **[I2]** Proposer une alternative temporaire (ex: lien `mailto:support@khadamat.ma` avec sujet pré-rempli).
+- [ ] Corriger `motion-safe:` sur forgot-password et reset-password
+- [ ] Ajouter `aria-invalid` + `aria-describedby` sur forgot-password
+- [ ] Ajouter `aria-describedby` regles password sur reset-password
+- [ ] Evaluer SMS pour phone-only users
 
-### NICE-TO-HAVE
-- N/A — tout est critique pour cette fonctionnalité.
+## Score detaille — /auth/forgot-password + /auth/reset-password
 
-## 8) Plan "Amélioration Backend" (spécifique /auth/forgot-password)
-### Quick wins (≤2h)
-- [ ] **IMMEDIAT**: Remplacer le `<Link href="/auth/forgot-password">` par un `<a href="mailto:support@khadamat.ma?subject=Réinitialisation mot de passe">` temporaire
-- [ ] Ou supprimer le lien et afficher "Contactez le support" en attendant
+| Aspect | Score /5 | Justification |
+|--------|----------|---------------|
+| Frontend structure | 4/5 | Pages clean, etats bien geres, multi-state (form/submitted/missing-token) |
+| UX & states | 4/5 | Loading/error/success bien geres. Anti-enumeration UX excellent |
+| Validation front | 4/5 | Regex identifier, password rules client-side |
+| Securite auth | 5/5 | Token 256-bit, hashe, TTL 15min, single-use, session revocation, rate limit 3/h |
+| Backend protection | 5/5 | Anti-enumeration, DTO whitelist, atomic transaction, all tokens revoked |
+| RBAC | 5/5 | Endpoints publics, pas de guard necessaire |
+| Redirections | 4/5 | Liens corrects. Pas de redirect auto apres reset (OK par design) |
+| DB coherence | 4/5 | Token model correct, index, cascade. Pas de cleanup cron |
+| Tests | 4/5 | `password-reset.service.spec.ts` couvre 11 cas (enum, expiry, used, hash, revoke) |
 
-### Moyen (½–2 jours)
-- [ ] Créer le modèle DB `PasswordResetToken` (userId, tokenHash, expiresAt, used)
-- [ ] Créer `POST /api/auth/forgot-password` — génère un token, envoie par email
-- [ ] Créer `POST /api/auth/reset-password` — vérifie token, met à jour le password
-- [ ] Créer la page front `/auth/forgot-password` avec formulaire email
-- [ ] Créer la page front `/auth/reset-password?token=xxx` avec nouveau mot de passe
-
-### Structurant (>2 jours)
-- [ ] Configurer un service email (SendGrid, AWS SES, Resend)
-- [ ] Templates email de reset en français
-- [ ] Rate limit spécifique (1 email reset / 5 min par email)
-- [ ] Logs d'audit pour les demandes de reset (compliance)
-- [ ] Tests e2e du flux complet
-
-### Dépendances / risques
-- **Dépendance bloquante**: Nécessite un service d'envoi d'emails (SMTP/API)
-- Risque d'enumération: le endpoint doit retourner le même message que le compte existe ou non
-- Token doit être à usage unique, expirant (1h max), et stocké hashé en DB
+### Score global page : 4.3 / 5
 
 ---
 
-# Synthèse Phase 1 — Auth & Profil
+## Synthese RBAC & redirections
 
-## Problèmes transverses
+### Regles de redirection observees vs attendues
 
-### Sécurité
-- **Aucune récupération de mot de passe** (lien 404, aucun backend) — dette critique
-- **Lockout in-memory** — non persistant, non distribué, contournable
-- **Pas de CSRF check** sur login/register (le header est envoyé par le front mais jamais vérifié côté back)
-- **Pas de vérification email** — les comptes sont créés avec des emails non vérifiés
-- **Fichiers KYC sur disque local** — risque de perte, pas de CDN
+| # | Scenario | Attendu | Frontend | Backend | Match ? |
+|---|----------|---------|----------|---------|---------|
+| 1 | Non-auth → `/dashboard` | Login redirect | middleware.ts : `/auth/login?returnTo=...` | JwtAuthGuard 401 | OUI |
+| 2 | Non-auth → `/client/bookings` | Login redirect | middleware.ts : `/auth/login?returnTo=...` | JwtAuthGuard 401 | OUI |
+| 3 | Non-auth → `/profile` | Login redirect | middleware.ts : `/auth/login?returnTo=...` | Pas de route backend `/profile` | FRONTEND-ONLY |
+| 4 | CLIENT → `/dashboard` | Redirect away | DashboardLayout : `role !== 'PRO'` → `/` | `@Roles('PRO')` → 403 | PARTIEL |
+| 5 | PRO → `/client/bookings` | Bloque | client/bookings : `role !== 'CLIENT'` → `/dashboard` | `GET /bookings` sert les 2 roles | **GAP** — backend autorise |
+| 6 | PRO PENDING → `/dashboard/bookings` | Waiting room | DashboardLayout : `KycPendingState` | `KycApprovedGuard` 403 sur ecritures ; lectures OK | PARTIEL |
+| 7 | PRO REJECTED → `/dashboard/services` | Redirect KYC | DashboardLayout : force `/dashboard/kyc` | 403 sur KYC-gated writes | PARTIEL |
+| 8 | PRO non-premium → `/dashboard` | Redirect bookings | dashboard/page.tsx : `!isPremium` → `/dashboard/bookings` + menu masque | **AUCUN** — `GET /dashboard/stats` sert tous | **GAP** |
+| 9 | Login CLIENT | → `/` | login/page.tsx : `router.push('/')` | Pas de redirect backend | OK |
+| 10 | Login PRO | → `/dashboard` | login/page.tsx : `router.push('/dashboard')` | Pas de redirect backend | OK |
+| 11 | Register CLIENT | → `/` | register/page.tsx : `router.push('/')` | Pas de redirect backend | OK |
+| 12 | Register PRO | → `/dashboard/kyc` | register/page.tsx : `router.push('/dashboard/kyc')` | Pas de redirect backend | OK |
+| 13 | Auth user → `/auth/login` | Redirect away | middleware.ts : → `/` | Pas d'equivalent backend | OK |
+| 14 | Login `?returnTo=` → retour | Redirect vers page originale | **CASSE** — lit `next`, middleware envoie `returnTo` | N/A | **CRITIQUE** |
 
-### Contrats API
-- **Désalignement Zod <-> class-validator**: `RegisterSchema.password.min(6)` vs `RegisterDto.@MinLength(10)`. Le contrat partagé ne reflète pas les règles réelles du backend.
-- **cityId dual format**: `publicId` (`city_xxx_000`) utilisé partout côté front/contrats, mais `UpdateProfileDto` attend un `@IsUUID('4')` interne — **bug cassant** sur la modification de ville.
-- **Réponse PATCH /users/me** non formatée en `PublicUser` — corrompt le store client.
+### Matrice RBAC backend complete
 
-### Cohérence rôles/redirections
-- **Pas de guard "déjà connecté"** sur login/register — un user authentifié peut y accéder
-- **Doublon page profil**: `/profile` (tous users) et `/dashboard/profile` (PRO only) — confusion UX et maintenance
-- Redirections post-auth correctes (PRO → dashboard, CLIENT → home)
+| Route | Methode | Guards | Roles | KYC | Premium |
+|-------|---------|--------|-------|-----|---------|
+| `POST /auth/register` | POST | Aucun | Tous | Non | Non |
+| `POST /auth/login` | POST | Aucun | Tous | Non | Non |
+| `POST /auth/refresh` | POST | CSRF check | Tous | Non | Non |
+| `POST /auth/logout` | POST | CSRF check | Tous | Non | Non |
+| `POST /auth/forgot-password` | POST | Aucun | Tous | Non | Non |
+| `POST /auth/reset-password` | POST | Aucun | Tous | Non | Non |
+| `GET /auth/me` | GET | Jwt | Tous auth | Non | Non |
+| `PATCH /users/me` | PATCH | Jwt + Roles | CLIENT | Non | Non |
+| `GET /pro/me` | GET | Jwt + Roles | PRO | Non | Non |
+| `PATCH /pro/profile` | PATCH | Jwt + Roles + KycApproved | PRO | **OUI** | Non |
+| `PUT /pro/services` | PUT | Jwt + Roles + KycApproved | PRO | **OUI** | Non |
+| `PUT /pro/availability` | PUT | Jwt + Roles + KycApproved | PRO | **OUI** | Non |
+| `POST /pro/portfolio` | POST | Jwt + Roles + KycApproved | PRO | **OUI** | **OUI** (service) |
+| `DELETE /pro/portfolio/:id` | DELETE | Jwt + Roles + KycApproved | PRO | **OUI** | **OUI** (service) |
+| `POST /bookings` | POST | Jwt | Tous auth | Non | Non |
+| `GET /bookings` | GET | Jwt | Tous auth | Non | Non |
+| `PATCH /bookings/:id/status` | PATCH | Jwt + KycApproved | Tous auth | **OUI** (PRO) | Non |
+| `PATCH /bookings/:id/cancel` | PATCH | Jwt | Tous auth | Non | Non |
+| `GET /dashboard/stats` | GET | Jwt | Tous auth | Non | Non |
+| `POST /payment/checkout` | POST | Jwt + Roles | PRO | Non | Non |
 
-### Dette technique
-- **Design incohérent**: login/register utilisent `slate-*` + `#F08C1B` (hex en dur), profile utilise `zinc-*` + `dark:` mode. Aucun ne suit les design tokens CLAUDE.md.
-- **Register n'utilise pas `postFormData()`** de lib/api.ts — fetch direct avec duplication
-- **`alert()` pour les erreurs** dans /profile — UX non professionnelle
-- **A11y** non conforme sur login et profile (labels sans htmlFor, pas d'aria-live)
+### Gaps identifies
 
-### Manques tests/observabilité
-- ❌ **ZERO fichier .spec.ts** dans tout `apps/api/src/` — aucun test unitaire ni d'intégration sur aucune fonctionnalité
-- ❌ Pas de `requestId` dans les logs
-- ❌ Pas de log sur inscription réussie, modification de profil, ou logout
-- ❌ Pas de monitoring/alerting visible
-
-## Risques majeurs (Top 5)
-
-1. **Mot de passe oublié inexistant** — Lien 404 visible en prod. Perte d'utilisateurs, surcharge support, non-conformité sécurité OWASP. **Impact: critique UX + sécurité.**
-
-2. **Bug cityId sur /profile** — Le PATCH /users/me est cassé pour la modification de ville. `@IsUUID('4')` rejette le publicId envoyé par le front. **Impact: fonctionnalité cassée.**
-
-3. **Zéro tests** — Aucun test sur l'ensemble du backend. Un changement accidentel sur auth (hash, validation, cookies) cassera le système sans détection. **Impact: stabilité critique.**
-
-4. **Contrats Zod désalignés** — Le contrat partagé (`packages/contracts`) ne reflète pas les règles réelles du backend. Toute nouvelle application (mobile, partenaire) se basant sur ces contrats échouera. **Impact: scalabilité du monorepo.**
-
-5. **Lockout in-memory + pas de CSRF** — Protection bruteforce perdue au redémarrage. Pas de CSRF vérifié côté back malgré le header envoyé. **Impact: sécurité.**
-
-## Plan backend priorisé (Phase 2 — améliorations)
-
-### Priorité 0 (immédiat — avant toute feature)
-- [ ] **FIX** Bug cityId: aligner `UpdateProfileDto.cityId` avec le format publicId OU résoudre dans le service
-- [ ] **FIX** Réponse PATCH /users/me: formater via `toPublicUser()` pour retourner un `PublicUser` cohérent
-- [ ] **FIX** Lien "Mot de passe oublié": remplacer par `mailto:support@` temporaire ou supprimer
-- [ ] **ALIGN** Contrat Zod `RegisterSchema.password` -> min 10 + complexité (aligner avec RegisterDto)
-- [ ] Ajouter `@Throttle` sur PATCH /users/me
-
-### Priorité 1 (semaine prochaine)
-- [ ] Écrire les premiers tests unitaires: `AuthService.login()`, `AuthService.register()`, `UsersService.updateProfile()`
-- [ ] Écrire les tests d'intégration: `POST /auth/login`, `POST /auth/register`, `PATCH /users/me`
-- [ ] Ajouter un cron de nettoyage des RefreshToken expirés
-- [ ] Ajouter des logs structurés (register success, profile update, logout) avec requestId
-- [ ] Migrer `FailedLoginService` vers Redis (ou au minimum persister en DB)
-
-### Priorité 2 (sprint suivant)
-- [ ] Implémenter le flux complet "Mot de passe oublié" (modèle DB, endpoints, pages front, service email)
-- [ ] Configurer un service d'envoi d'emails (SendGrid/SES/Resend)
-- [ ] Implémenter la vérification email post-inscription
-- [ ] Migrer le stockage KYC vers S3/R2
-- [ ] Unifier le format `cityId` dans toute l'application (convention unique)
-- [ ] Ajouter CAPTCHA/honeypot sur register
-- [ ] Harmoniser le design system (tokens CSS au lieu de hex en dur)
-
----
----
-
-# PHASE 2 — Parcours CLIENT (Discovery → Booking → Suivi)
+| # | Gap | Severite | Action |
+|---|-----|----------|--------|
+| 1 | `GET /dashboard/stats` sans `@Roles('PRO')` | MEDIUM | Ajouter `@Roles('PRO')` |
+| 2 | `GET /dashboard/stats` sans premium check | MEDIUM | Ajouter check isPremium (guard ou service) |
+| 3 | `POST /bookings` sans `@Roles('CLIENT')` | LOW | Ajouter guard (check service existe mais defense-in-depth) |
+| 4 | `POST /payment/checkout` sans KycApprovedGuard | LOW | Ajouter guard |
+| 5 | Avatar/setup gate frontend-only | LOW | Documenter ou ajouter check backend |
+| 6 | Param redirect `returnTo`/`next` mismatch | CRITIQUE | Corriger immediatement |
 
 ---
 
-# [/] — Homepage
+## Contrat technique Auth & Session (actualise)
 
-## 1) Résumé exécutif
-- **Rôle(s)**: Public + CLIENT/PRO si connecté
-- **Objectif métier**: Point d'entrée principal. Permettre la recherche par ville + catégorie, présenter la plateforme, convertir visiteurs en utilisateurs.
-- **Statut global**: ✅ OK (composant le mieux structuré du site)
-- **Scores (0–5)**: Front: 5 ; Back: 4 ; DB: 4 ; Intégration: 4 ; Sécurité: 4 ; Perf: 4 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/page.tsx`
-  - `apps/web/src/components/home/Hero.tsx`
-  - `apps/web/src/components/home/Categories.tsx`
-  - `apps/web/src/components/home/FeaturedPros.tsx`
-  - `apps/web/src/components/home/Footer.tsx`
-  - `apps/web/src/components/Navbar.tsx`
-  - `apps/api/src/catalog/catalog.controller.ts`
-  - `apps/api/src/catalog/catalog.service.ts`
+### Methode auth
+- JWT (access token 15 min) + Refresh token (7 jours) en cookies httpOnly
+- `sameSite: strict`, `secure: true` en production
+- Refresh token scope `/api/auth` uniquement
 
-## 2) Cartographie technique (fichiers)
+### Stockage tokens
+- **Cote client** : Aucun token en localStorage/sessionStorage/Zustand. 100% cookie-based.
+- **Cote serveur** : RefreshToken hashe SHA-256 en DB, PasswordResetToken hashe SHA-256 en DB
+
+### Refresh strategy
+- Auto-refresh dans `baseFetch` (`apps/web/src/lib/api.ts`) : sur 401, `POST /auth/refresh` puis retry
+- Deduplication via `refreshPromise` partage (evite appels concurrents)
+- Header `x-retry` empeche boucle infinie
+
+### Expiration
+| Token | TTL | Configurable |
+|-------|-----|-------------|
+| Access JWT | 15 min | `JWT_ACCESS_EXPIRES` env |
+| Refresh | 7 jours | `JWT_REFRESH_EXPIRES` env |
+| Password Reset | 15 min | Hardcode |
+
+### Logout
+- Revoque TOUS les refresh tokens du user (global logout)
+- Clear cookies accessToken + refreshToken
+- Access token reste valide jusqu'a expiration (15 min max, pas de blacklist serveur)
+
+### CSRF
+- Custom header `X-CSRF-PROTECTION: 1` sur toutes les requetes non-publiques
+- `sameSite: strict` sur les cookies
+
+### Headers securite (Helmet)
+| Header | Valeur |
+|--------|--------|
+| CSP | `default-src 'self'`, `img-src 'self' data:`, `script-src 'self'`, `frame-ancestors 'none'` |
+| HSTS | maxAge 1 an, includeSubDomains, preload |
+| X-Frame-Options | DENY |
+| X-Content-Type-Options | nosniff |
+| Referrer-Policy | no-referrer |
+
+### CORS
+- Origins whitelist depuis `CORS_ORIGINS` env
+- Credentials: true
+- Fail-closed si CORS_ORIGINS vide
+- Preflight cache 600s
+
+### Rate limiting
+| Endpoint | Limite | TTL |
+|----------|--------|-----|
+| Global | 60 req | 60s |
+| Login | 5 req | 60s |
+| Register | 5 req | 60s |
+| Forgot-password | 3 req | 1h |
+| Reset-password | 5 req | 1h |
+
+### Password
+- Hachage : bcryptjs, cout 10
+- Politique : min 10 chars, minuscule + majuscule + chiffre, max 128
+- Comparaison constante : DUMMY_HASH quand user non trouve
+- Lockout : 5 echecs → 15 min (en memoire)
+
+### Replay detection
+- Reuse d'un refresh token revoque → revocation globale de TOUS les tokens utilisateur
+- Warning log (throttle 1/user/60s)
+
+---
+
+## Securite supplementaire
+
+### Tests existants
+| Fichier | Couverture |
+|---------|-----------|
+| `password-reset.service.spec.ts` | 11 cas : anti-enum, token hash, expire, used, revoke all |
+| `booking.service.spec.ts` | Tests booking existants |
+| `rbac.e2e-spec.ts` | Tests RBAC (PATCH /users/me roles, KYC gate PRO) |
+| `kyc-submit.spec.ts` | Tests KYC submission |
+
+### Ce qui manque en tests
+- Tests e2e login flow (redirect, lockout, refresh)
+- Tests e2e register flow (role param, file upload, conflict)
+- Tests matrice RBAC complete (dashboard/stats, bookings create)
+- Tests middleware.ts redirections
+
+### Observabilite
+- `FailedLoginService` log les tentatives echouees
+- Replay detection log les warnings
+- Pas d'alerting securite configure (pas de webhook/notification sur anomalies)
+
+---
+
+## Score global Phase 1 (actualise)
+
+| Page | Score |
+|------|-------|
+| /auth/login | 3.8 / 5 |
+| /auth/register | 4.2 / 5 |
+| /profile | 3.6 / 5 |
+| /auth/forgot-password + reset | 4.3 / 5 |
+
+### **Score moyen Phase 1 : 4.0 / 5** (Bon)
+
+**Progression depuis audit initial** :
+- Forgot-password : 0/5 → 4.3/5 (implemente)
+- Middleware : inexistant → operationnel (edge SSR)
+- Design tokens : violations → 100% migre
+- KycApprovedGuard : inexistant → applique sur routes PRO
+- `@Roles('CLIENT')` sur PATCH /users/me : ajoute
+
+**Axes d'amelioration restants** :
+1. Corriger le mismatch param redirect (`returnTo` / `next`)
+2. Corriger `aria-describedby` references cassees
+3. Unifier `motion-safe:` sur toutes les animations
+4. Persister lockout pour multi-instance
+5. Ajouter guards manquants (`GET /dashboard/stats`, `POST /bookings`)
+
+---
+
+## Annexe — Fichiers audites Phase 1 (re-audit)
+
+**Frontend** :
+- `apps/web/src/app/auth/login/page.tsx`
+- `apps/web/src/app/auth/register/page.tsx`
+- `apps/web/src/app/auth/forgot-password/page.tsx`
+- `apps/web/src/app/auth/reset-password/page.tsx`
+- `apps/web/src/app/profile/page.tsx`
+- `apps/web/src/components/auth/LoginForm.tsx` (dead code)
+- `apps/web/src/components/dashboard/DashboardLayout.tsx`
+- `apps/web/src/components/dashboard/KycPendingState.tsx`
+- `apps/web/src/middleware.ts`
+- `apps/web/src/store/authStore.ts`
+- `apps/web/src/lib/api.ts`
+
+**Backend** :
+- `apps/api/src/auth/auth.module.ts`
+- `apps/api/src/auth/auth.controller.ts`
+- `apps/api/src/auth/auth.service.ts`
+- `apps/api/src/auth/jwt.strategy.ts`
+- `apps/api/src/auth/jwt-auth.guard.ts`
+- `apps/api/src/auth/guards/roles.guard.ts`
+- `apps/api/src/auth/guards/kyc-approved.guard.ts`
+- `apps/api/src/auth/decorators/roles.decorator.ts`
+- `apps/api/src/auth/failed-login.service.ts`
+- `apps/api/src/auth/refresh-token-cleanup.service.ts`
+- `apps/api/src/auth/dto/forgot-password.dto.ts`
+- `apps/api/src/auth/dto/reset-password.dto.ts`
+- `apps/api/src/auth/password-reset.service.spec.ts`
+- `apps/api/src/users/users.controller.ts`
+- `apps/api/src/users/users.service.ts`
+- `apps/api/src/main.ts`
+- `apps/api/src/pro/pro.controller.ts`
+- `apps/api/src/booking/booking.controller.ts`
+- `apps/api/src/dashboard/dashboard.controller.ts`
+- `apps/api/src/payment/payment.controller.ts`
+- `apps/api/src/kyc/kyc.controller.ts`
+
+**Database** :
+- `packages/database/prisma/schema.prisma`
+- `packages/database/prisma/migrations/20260217161317_add_password_reset_token/migration.sql`
+
+**Configuration** :
+- `apps/api/.env` (structure verifiee, secrets non exposes)
+- 
+# Phase 2 — Parcours public & Funnel CLIENT (audit)
+
+> **Date** : 2026-02-19
+> **Scope** : `/` → `/pros` → `/pro/[publicId]` → `/book/[proId]` → `/client/bookings`
+
+## Resume executif
+
+- **Statut global** : ⚠️ A ameliorer
+- **Points forts** :
+  - Architecture ID publics coherente bout-en-bout (publicId partout, jamais d'ID interne expose)
+  - Booking creation atomique ($transaction) avec detection de collision de creneaux
+  - Pattern Winner-Takes-All elegant pour gestion des reservations concurrentes
+  - Etats loading/empty/error bien geres sur la homepage (Hero, Categories, FeaturedPros)
+  - Securite ownership : clientId/proId extraits du JWT, jamais du body
+  - BookingEvent audit trail complet sur chaque action
+  - Server-side cache (cache-manager) sur cities, categories, pros/v2
+  - CSRF + httpOnly cookies sur toutes les mutations authentifiees
+- **Risques majeurs** :
+  1. **CRITIQUE** : `/client/bookings` — mismatch contrat reponse : backend renvoie `{ data, meta }`, frontend attend un array plat → page probablement cassee
+  2. **CRITIQUE** : `/book/[proId]` pas dans le middleware matcher → auth client-side seulement, pas de returnTo apres login
+  3. **CRITIQUE** : WhatsApp CTA sur succes booking toujours "Numero indisponible" (credentials: 'omit' sur /public/*)
+  4. **HIGH** : `/pros` utilise endpoint v1 sans cache, sans tri, sans pagination meta
+  5. **HIGH** : Systeme de penalites defini en DB mais jamais implemente dans le code
+- **Recommandations top 5** :
+  1. Corriger le contrat `GET /bookings` : frontend doit lire `response.data` au lieu du array brut
+  2. Ajouter `/book` au middleware matcher + passer `?next=` dans le redirect login
+  3. Envoyer credentials sur `/public/pros/:id` depuis la booking page pour recuperer le phone
+  4. Migrer `/pros` vers l'endpoint v2 (cache, tri premium-first, pagination)
+  5. Implementer le systeme de penalites ou retirer les champs DB inutilises
+
+---
+
+## 1) / (Homepage)
+
 ### Frontend
-- `apps/web/src/app/page.tsx` — Server component, composition de sections
-- `apps/web/src/components/home/Hero.tsx` — Formulaire recherche ville+catégorie (client component)
-- `apps/web/src/components/home/Categories.tsx` — Grille catégories dynamiques
-- `apps/web/src/components/home/FeaturedPros.tsx` — Pros mis en avant
-- `apps/web/src/components/Navbar.tsx` — Navigation globale
-- `apps/web/src/components/home/Footer.tsx` — Pied de page
 
-### Backend
-- `apps/api/src/catalog/catalog.controller.ts` — `GET /public/cities`, `GET /public/categories`, `GET /public/pros`
-- `apps/api/src/catalog/catalog.service.ts` — `getCities()`, `getCategories()`, `getPros()`
+**Fichier** : `apps/web/src/app/page.tsx` (Server Component)
+
+**Composants** :
+
+| Composant | Fichier | Type | Role |
+|-----------|---------|------|------|
+| `Navbar` | `components/Navbar.tsx` | Client | Nav sticky, dropdown accessible, menu mobile avec focus trap |
+| `Hero` | `components/home/Hero.tsx` | Client | Formulaire recherche ville + categorie, combobox autosuggest |
+| `HeroSkeleton` | `components/home/HeroSkeleton.tsx` | Server | Skeleton Suspense pendant chargement Hero |
+| `TrustStrip` | `components/home/TrustStrip.tsx` | Server | 3 badges de confiance (statique) |
+| `Categories` | `components/home/Categories.tsx` | Client | Grille categories depuis API |
+| `FeaturedPros` | `components/home/FeaturedPros.tsx` | Client | Pros mis en avant via /public/pros/v2 |
+| `Testimonials` | `components/home/Testimonials.tsx` | Client | Carousel temoignages (donnees en dur) |
+| `HowItWorks` | `components/home/HowItWorks.tsx` | Server | 3 etapes (statique) |
+| `PricingSection` | `components/home/PricingSection.tsx` | Client | Tarifs Premium/Boost (masque pour CLIENT) |
+| `SecuritySection` | `components/home/SecuritySection.tsx` | Server | KYC/securite (statique) |
+| `ProCTA` | `components/home/ProCTA.tsx` | Server | CTA inscription PRO |
+| `Footer` | `components/home/Footer.tsx` | Client | Navigation + newsletter + legal |
+
+**Appels API** :
+
+| Composant | Endpoint | Declenchement | Params |
+|-----------|----------|---------------|--------|
+| Hero | `GET /public/cities` | useEffect mount | Aucun |
+| Hero | `GET /public/categories` | useEffect mount (parallele) | Aucun |
+| Categories | `GET /public/categories` | useEffect mount | Aucun |
+| FeaturedPros | `GET /public/pros/v2` | mount + changement ville | `?cityId=X&page=1&limit=4` |
+| Footer | `POST /newsletter/subscribe` | submit form | `{ email }` |
+
+**Etats** :
+- Hero : HeroSkeleton (loading) → formulaire (ready) → erreur + bouton "Reessayer" (error) — OK
+- Categories : CategorySkeleton x8 (loading) → EmptyState (vide) → erreur + retry (error) — OK
+- FeaturedPros : ProCardSkeleton x4 (loading) → EmptyState (vide) → erreur + retry (error) — OK
+
+**Accessibilite** :
+- Navbar : `role="navigation"`, `aria-label`, `aria-expanded`, `aria-controls`, focus trap mobile, `focus-visible` — Excellent
+- Hero : `role="combobox"`, `aria-expanded`, `aria-activedescendant`, `aria-autocomplete="list"`, `role="listbox"` + `role="option"`, labels `htmlFor` — Excellent
+- Bouton submit : `disabled` + `title` tooltip + `aria-label` — conforme CLAUDE.md
+- Testimonials : `aria-roledescription="carousel"`, keyboard nav (ArrowLeft/Right), `aria-live="polite"`, pause au hover/focus — Excellent
+- `motion-safe:`/`useReducedMotion()` utilises sur Hero, Testimonials — OK
+
+**Design tokens** : 100% tokens, aucun hex en dur — OK
+
+### API / Backend
+
+**`GET /public/cities`** (`catalog.controller.ts` → `catalog.service.ts`)
+- Public, pas de guard. Cache serveur 10 min (`catalog:cities`). Retourne `{ id: publicId, name, slug }[]`. Pas d'ID interne expose. OK.
+
+**`GET /public/categories`** (`catalog.controller.ts` → `catalog.service.ts`)
+- Public, pas de guard. Cache serveur 10 min (`catalog:categories`). Retourne `{ id: publicId, name, slug }[]`. OK.
+
+**`GET /public/pros/v2`** (`catalog.controller.ts` → `catalog.service.ts`)
+- Public. Params : `cityId?`, `categoryId?`, `page?` (def 1), `limit?` (def 20, max 50)
+- Validation : regex `isEntityId()` sur cityId/categoryId
+- Tri : `isPremium DESC, boostActiveUntil DESC, createdAt DESC` (monetisation-first)
+- Cache serveur 2 min, cle composite
+- 2 queries paralleles : findMany + count
+- Retourne `{ data: PublicProCard[], meta: { page, limit, total, totalPages, hasNext, hasPrev } }`
 
 ### DB
-- `City`, `Category`, `User+ProProfile` (lecture seule)
 
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- SEO: metadata, balises structurées
-- Routing: recherche → /pros?cityId=X&categoryId=Y
-- A11y complète (hero form, keyboard, aria)
-- Design tokens
-- Loading states (skeleton)
-- Performance (lazy, Suspense)
+- `City` : `id` (cuid), `publicId` (unique), `name` (unique), `slug` (unique)
+- `Category` : meme structure
+- `ProProfile` : pas d'index explicite sur `cityId` (FK implicite potentiel)
+- `ProService` : `@@index([categoryId])` pour le filtre services
 
-### Actuel (constaté)
-- **UI/Composants**: Page composée de 9 sections. Layout propre. Design tokens utilisés (`bg-background`, `text-text-primary`). Hero est le composant le mieux structuré du projet.
-- **Data fetching**: `Promise.all` pour cities + categories dans Hero. `Suspense` + `HeroSkeleton` pour le loading.
-- **Validations**: Hero requiert ville + catégorie sélectionnées avant soumission. Bouton `disabled` + `title` tooltip si incomplet. ✅ Conforme CLAUDE.md.
-- **Erreurs & UX**: ✅ Gestion erreur fetch avec retry button. ✅ État vide ("Aucun résultat"). ✅ Fuzzy search sur catégories.
-- **A11y**:
-  - ✅ Labels avec `htmlFor`/`id`
-  - ✅ ARIA `combobox`, `listbox`, `option`, `aria-expanded`, `aria-controls`, `aria-activedescendant`
-  - ✅ Navigation clavier (ArrowUp/Down, Enter, Escape)
-  - ✅ `prefers-reduced-motion` respecté
-  - ✅ Focus management
-- **Perf / SEO**:
-  - ✅ `export const metadata: Metadata` — titre + description SEO
-  - ✅ Server component au niveau page, client component uniquement pour Hero
-  - ✅ `Suspense` avec fallback skeleton
-  - ⚠️ Les sections Categories, FeaturedPros ne sont pas lazy-loadées (pas de `dynamic()` ou `Suspense` individuel)
-- **NON TROUVÉ**: Pas de `sitemap.xml` ni `robots.txt` configurés.
+### Problemes & recommandations
 
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/public/cities** → `CatalogController.getCities()` → `CatalogService.getCities()` → Auth: aucun
-  - Response: `PublicCity[]` — `{ id: publicId, name, slug }`
-  - Cache: 10 min (cache-manager)
-- **[GET] /api/public/categories** → `CatalogController.getCategories()` → `CatalogService.getCategories()` → Auth: aucun
-  - Response: `PublicCategory[]` — `{ id: publicId, name, slug }`
-  - Cache: 10 min
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | MEDIUM | Doublon `GET /public/categories` (Hero + Categories appellent chacun au mount) | Partager les donnees via props ou context |
+| 2 | MEDIUM | FeaturedPros attend `{ total, page, limit }` top-level, backend renvoie dans `meta` | Corriger le type frontend pour lire `res.meta.total` |
+| 3 | LOW | Hero + FeaturedPros couples via CustomEvent DOM | Considerer un store partage |
+| 4 | LOW | Categories links vers `/pros?categoryId=X` sans cityId (perd le contexte ville) | Propager le cityId selectionne |
+| 5 | INFO | `/public/stats/home` existe mais n'est appele par aucun composant | Utiliser pour TrustStrip ou supprimer |
 
-### Attendu (référentiel)
-- Endpoints publics performants, cache
-- Pas de données sensibles exposées
-- Rate limit basique
+### TODO
 
-### Actuel (constaté)
-- **Auth/AuthZ**: ✅ Endpoints publics, pas de guard. Correct.
-- **Validations serveur**: N/A (lecture seule, pas d'input).
-- **Erreurs**: ✅ Standard NestJS exceptions.
-- **Perf**: ✅ Cache server-side via `cache-manager` (10min cities, 10min categories). ✅ Cache client-side via `lib/api.ts` (10min TTL).
-- **Observabilité**: ⚠️ Pas de log sur les requêtes publiques (acceptable pour les reads).
-- **Tests**: ❌ Aucun test.
-- **Sécurité**: ⚠️ Pas de `@Throttle` sur les endpoints publics. Risque de scraping/DoS.
+- [ ] Partager les categories entre Hero et Categories (eviter double fetch)
+- [ ] Corriger FeaturedPros pour lire `res.meta.total`
+- [ ] Propager cityId dans les liens Categories
 
-## 5) Base de données — État attendu vs état actuel
-- **Tables**: `City` (lecture), `Category` (lecture)
-- **Contraintes/index**: ✅ `City.publicId @unique`, `City.name @unique`, `City.slug @unique`. Idem pour Category.
-- **Requêtes observées**: `city.findMany(orderBy: name)`, `category.findMany(orderBy: name)` — Full table scan mais tables petites (< 100 rows).
-- **Risques**: Aucun risque significatif. Tables statiques.
+## Score detaille — /
 
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping**: ✅ `City.publicId` → API `id` → Front `cityId`. Cohérent.
-- **Incohérences**: Aucune.
-- **Gestion erreurs**: ✅ Hero gère erreur fetch + retry.
-- **Risques sécurité**: ✅ Aucune donnée sensible exposée.
+| Axe | Note /5 | Justification |
+|-----|---------|---------------|
+| Fonctionnel | 4 | Happy path complet. Doublon fetch, FeaturedPros total undefined |
+| Securite & acces | 5 | Public, IDs publics, aucune fuite de donnees sensibles |
+| Integration & coherence data | 4 | Types alignes globalement. Mismatch meta FeaturedPros |
+| UX & accessibilite | 5 | Tous les etats geres, ARIA complet, carousel accessible, reduced-motion |
+| Performance & robustesse | 4 | Cache serveur, AbortController. Doublon fetch, 4 appels mount |
 
-## 7) Problèmes & recommandations
-### CRITIQUES
-- Aucun problème critique.
-
-### IMPORTANTS
-- **[I1] Pas de rate limit** sur les endpoints publics — scraping possible.
-- **[I2] Aucun test backend** pour les endpoints catalog.
-- **[I3] Pas de sitemap.xml/robots.txt** — impact SEO.
-
-### NICE-TO-HAVE
-- **[N1]** Lazy-load les sections sous le fold (Categories, FeaturedPros, etc.).
-- **[N2]** Ajouter des données structurées JSON-LD (LocalBusiness, Service).
-- **[N3]** Ajouter Open Graph / Twitter Card meta.
-
-## 8) Plan "Amélioration Backend" (spécifique /)
-### Quick wins (≤2h)
-- [ ] Ajouter `@Throttle` sur `/public/cities` et `/public/categories` (ex: 30 req/min)
-- [ ] Ajouter `sitemap.xml` et `robots.txt`
-
-### Moyen (½–2 jours)
-- [ ] Écrire tests unitaires pour `CatalogService.getCities()`, `getCategories()`
-- [ ] Ajouter Open Graph et JSON-LD structured data
-
-### Structurant (>2 jours)
-- [ ] Implémenter ISR (Incremental Static Regeneration) pour la homepage
-
-### Dépendances / risques
-- Aucune dépendance bloquante.
+### Score global page : 4.4 / 5
 
 ---
 
-# [/pros] — Liste des professionnels
+## 2) /pros (?cityId=X&categoryId=Y)
 
-## 1) Résumé exécutif
-- **Rôle(s)**: Public + CLIENT/PRO si connecté
-- **Objectif métier**: Afficher la liste filtrée des professionnels disponibles par ville et catégorie.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 2 ; Back: 4 ; DB: 3 ; Intégration: 3 ; Sécurité: 3 ; Perf: 2 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/pros/page.tsx`
-  - `apps/web/src/components/ProCard.tsx`
-  - `apps/web/src/components/Header.tsx`
-  - `apps/api/src/catalog/catalog.controller.ts` (getPros)
-  - `apps/api/src/catalog/catalog.service.ts` (getPros, getProsV2)
-  - `packages/contracts/src/schemas/public.ts` (PublicProCard)
-
-## 2) Cartographie technique (fichiers)
 ### Frontend
-- `apps/web/src/app/pros/page.tsx` — Server component, SSR fetch
-- `apps/web/src/components/ProCard.tsx` — Card individuelle
 
-### Backend
-- `apps/api/src/catalog/catalog.controller.ts:37-73` — `GET /public/pros` (v1)
-- `apps/api/src/catalog/catalog.service.ts:62-85` — `getPros()` (v1)
-- `apps/api/src/catalog/catalog.service.ts:88-132` — `getProsV2()` (v2 avec pagination + tri monétisation)
+**Fichier** : `apps/web/src/app/pros/page.tsx` (Async Server Component)
+
+**Appel API** : `GET /public/pros` (v1) — server-side avec `cache: 'no-store'`
+- Params construits depuis `searchParams.cityId` et `searchParams.categoryId`
+- Fetch directe (`fetch()`) sans passer par `api.ts`
+
+**Etats** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | **AUCUN** — pas de `loading.tsx`, pas de Suspense. Browser loading indicator seulement | Manquant |
+| Vide | "Aucun professionnel trouve pour ces criteres." | OK |
+| Erreur | Banniere rouge generique. **Pas de bouton retry** | Insuffisant |
+| Succes | Grille ProCards 1/2/3 colonnes responsive | OK |
+
+**Composant ProCard** (`components/ProCard.tsx`) :
+- Lien vers `/pro/${pro.id}` (publicId)
+- Affiche : prenom, ville, verification, services avec tarifs
+
+**Problemes majeurs** :
+- **Utilise l'endpoint v1** (`GET /public/pros`) au lieu de v2 :
+  - Pas de pagination metadata → pas de "page suivante"
+  - Pas de tri → pros premium/boostes non priorises
+  - Pas de cache serveur → chaque requete hit la DB directement
+  - Limit max 100 (v2 = 50)
+- **Pas de filtres UI** : aucun dropdown ville/categorie sur la page. L'utilisateur doit revenir a la homepage pour changer ses criteres
+- **Header.tsx** au lieu de Navbar.tsx : dropdown sans `aria-expanded`, sans `role="menu"`, sans keyboard nav
+
+### API / Backend
+
+**`GET /public/pros`** (v1) — `catalog.controller.ts` → `catalog.service.ts`
+- Public. Params : `cityId?`, `categoryId?`, `page?` (def 1), `limit?` (def 20, max 100)
+- Validation : `isEntityId()` regex
+- **Pas de orderBy** (ordre arbitraire DB)
+- **Pas de cache serveur**
+- Retourne `PublicProCard[]` (array plat, pas de meta pagination)
+- Where : `role=PRO, status=ACTIVE, kycStatus=APPROVED` + filtres optionnels
+- `phone` selectionne mais pas retourne dans le mapping → defense-in-depth risque
 
 ### DB
-- `User` + `ProProfile` + `ProService` + `City` + `Category` (joins)
 
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Pagination / scroll infini
-- Filtres visibles (ville, catégorie)
-- SEO (metadata dynamique)
-- Loading skeleton
-- État vide / erreur
+- `ProProfile` : pas d'index explicite sur `cityId`
+- `ProService` : `@@index([categoryId])` OK pour le filtre
+- `@@unique([proUserId, categoryId])` sur ProService — 1 service par categorie par pro
 
-### Actuel (constaté)
-- **UI/Composants**: Layout basique. Titre + compteur + grille 3 colonnes. ProCard montre nom, ville, services, badge "Vérifié".
-- **Data fetching**: ✅ Server-side fetch (`cache: 'no-store'`). ⚠️ Utilise la V1 de l'API (`/public/pros`) qui ne retourne PAS de total ni de pagination.
-- **Validations**: N/A (pas de formulaire).
-- **Erreurs & UX**: ✅ État erreur affiché. ✅ État vide ("Aucun professionnel trouvé").
-- **A11y**:
-  - ⚠️ Design `zinc-*` + `dark:` au lieu des design tokens
-  - ⚠️ Pas de skip-to-content link
-  - ✅ Grille responsive
-- **Perf / SEO**:
-  - ❌ **PAS DE PAGINATION** — charge TOUS les pros en une seule requête. Si 10 000 pros, la page charge tout.
-  - ❌ Pas de metadata dynamique (pas de `generateMetadata` basé sur les filtres)
-  - ❌ `cache: 'no-store'` — pas de cache SSR, chaque visite = nouvelle requête.
-  - ❌ Pas de skeleton / loading state (SSR, mais lent si beaucoup de pros)
-- **NON TROUVÉ**:
-  - Pas de tri (par prix, par note, par proximité)
-  - Pas de filtres UI visibles (les filtres viennent uniquement des query params du Hero)
-  - Pas de bouton "retour aux filtres"
+### Problemes & recommandations
 
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/public/pros?cityId=X&categoryId=Y** → `CatalogController.getPros()` → `CatalogService.getPros()` → Auth: aucun
-  - Request: Query params `cityId` (optional), `categoryId` (optional), `page` (default 1), `limit` (default 20)
-  - Response V1: `PublicProCard[]` (array sans total)
-  - Response V2: `{ data: PublicProCard[], total, page, limit }`
-  - Errors: 400 si cityId/categoryId invalide
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | HIGH | Endpoint v1 sans cache, sans tri, sans pagination meta | Migrer vers v2 |
+| 2 | MEDIUM | Pas de loading state (`loading.tsx` manquant) | Creer `apps/web/src/app/pros/loading.tsx` |
+| 3 | MEDIUM | Header.tsx accessibilite deficiente vs Navbar.tsx | Unifier sur Navbar ou corriger Header |
+| 4 | MEDIUM | `phone` over-selectionne dans `proSelectFields()` | Retirer `phone: true` du select v1/v2 card |
+| 5 | LOW | Pas de filtres UI (ville/categorie) sur la page | Ajouter barre de filtres |
+| 6 | LOW | Pas de bouton retry sur l'erreur | Ajouter |
+| 7 | LOW | Pas de breadcrumb ni navigation retour | Ajouter |
 
-### Attendu (référentiel)
-- Pagination avec total
-- Tri (monétisation + pertinence)
-- Cache serveur
-- Index DB optimisés
-- Rate limit
+### TODO
 
-### Actuel (constaté)
-- **Auth/AuthZ**: ✅ Endpoint public, correct.
-- **Validations serveur**: ✅ Page >= 1, limit 1-100. ✅ cityId/categoryId regex validé.
-- **Logique métier**: ✅ V2 trie par `isPremium desc, boostActiveUntil desc, createdAt desc` (monétisation-first). ✅ V2 retourne `total` pour pagination.
-- **Erreurs**: ✅ 400 si IDs invalides.
-- **Perf**: ✅ V2 a un cache de 2min. ✅ `Promise.all([findMany, count])` parallélisé. ⚠️ Le front n'utilise PAS V2.
-- **Observabilité**: ✅ `Logger.log` avec compteur de résultats.
-- **Tests**: ❌ Aucun test.
-- **Sécurité**: ⚠️ Pas de `@Throttle`. ⚠️ Le phone est sélectionné dans `proSelectFields()` (l.225) mais masqué dans `mapToPublicProCard()` (non retourné dans la card). OK mais fragile.
+- [ ] Migrer /pros vers endpoint v2
+- [ ] Creer loading.tsx skeleton
+- [ ] Unifier Header/Navbar
+- [ ] Ajouter filtres ville/categorie sur la page
+- [ ] Ajouter bouton retry sur erreur
 
-## 5) Base de données — État attendu vs état actuel
-- **Tables**: `User` JOIN `ProProfile` JOIN `ProService` JOIN `City` JOIN `Category`
-- **Contraintes/index**:
-  - ✅ `ProService.@@index([categoryId])` — index sur le filtre catégorie
-  - ✅ `ProService.@@unique([proUserId, categoryId])` — unicité service par pro
-  - ⚠️ **Pas d'index composite** `ProProfile(cityId, isPremium)` pour optimiser le tri monétisation + filtre ville
-  - ⚠️ **Pas d'index** sur `ProProfile.isPremium` ni `ProProfile.boostActiveUntil` (utilisés dans l'ORDER BY)
-- **Requêtes observées**: `user.findMany` avec WHERE multi-join + ORDER BY multi-champ. Potentiellement lent sans index composites.
-- **Risques**: ⚠️ N+1 potentiel si Prisma ne batch pas les relations (services, city). Prisma fait du batching automatique en général, mais à surveiller avec EXPLAIN.
+## Score detaille — /pros
 
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping**: ✅ API retourne `PublicProCard { id, firstName, lastName (masqué), city, isVerified, services }`. Front consomme directement.
-- **Incohérences**:
-  - ❌ **Le front utilise V1** (`/public/pros`) mais **V2 existe** avec pagination + cache + tri. Le front ne bénéficie pas de la pagination.
-  - ⚠️ Le `lastName` est masqué côté API (`B.`) mais le contrat Zod `PublicProCardSchema` ne l'impose pas au niveau du type.
-- **Gestion erreurs**: ✅ Catch fetch error → affichage bandeau.
-- **Risques sécurité**: ✅ Pas de PII exposée dans la liste. Le phone n'est pas dans la réponse.
+| Axe | Note /5 | Justification |
+|-----|---------|---------------|
+| Fonctionnel | 3 | Happy path OK. Pas de pagination, pas de tri, pas de filtres UI |
+| Securite & acces | 5 | Public, IDs publics, phone non expose |
+| Integration & coherence data | 3 | v1 vs v2 inconsistance. Types alignes. Pas de meta pagination |
+| UX & accessibilite | 2 | Pas de loading, pas de retry, Header non accessible, pas de filtres |
+| Performance & robustesse | 2 | Pas de cache, pas de tri, limit 100, pas d'index cityId explicite |
 
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **[C1] Pas de pagination côté front**: Charge TOUS les pros. Avec la croissance, la page sera inutilisable (DOM explosion, temps de réponse).
-- **[C2] Front utilise V1 au lieu de V2**: V2 existe avec pagination, total, cache, tri monétisation — mais n'est pas consommée.
-
-### IMPORTANTS
-- **[I1] Pas d'index DB** pour le tri `isPremium + boostActiveUntil`. Perf dégradée avec le volume.
-- **[I2] Pas de rate limit** sur `/public/pros`.
-- **[I3] Pas de filtres UI** visibles — l'utilisateur ne peut pas changer ville/catégorie sans retourner au Hero.
-- **[I4] Hex en dur** + `dark:` mode incohérent avec le reste.
-- **[I5] Pas de metadata SEO** dynamique.
-
-### NICE-TO-HAVE
-- **[N1]** Ajouter un tri (prix, note, distance).
-- **[N2]** Infinite scroll ou "Load more".
-- **[N3]** Carte géographique.
-
-## 8) Plan "Amélioration Backend" (spécifique /pros)
-### Quick wins (≤2h)
-- [ ] Migrer le front vers `/public/pros/v2` avec pagination
-- [ ] Ajouter `@Throttle` sur `/public/pros` et `/public/pros/v2`
-- [ ] Ajouter index composite `ProProfile(cityId, isPremium)` dans le schema Prisma
-
-### Moyen (½–2 jours)
-- [ ] Ajouter pagination UI (boutons page précédente/suivante ou infinite scroll)
-- [ ] Ajouter filtres UI (ville, catégorie) persistants sur la page
-- [ ] Écrire tests pour `CatalogService.getPros()` et `getProsV2()`
-
-### Structurant (>2 jours)
-- [ ] Implémenter la recherche full-text (Elasticsearch/MeiliSearch) si le volume de pros croît
-- [ ] Ajouter `generateMetadata` dynamique pour SEO
-
-### Dépendances / risques
-- L'ajout d'index nécessite une migration Prisma.
-- La migration V1→V2 côté front est simple (ajuster le fetch + ajouter le rendu pagination).
+### Score global page : 3.0 / 5
 
 ---
 
-# [/pro/[id]] — Profil public du pro
+## 3) /pro/[publicId]
 
-## 1) Résumé exécutif
-- **Rôle(s)**: Public + CLIENT/PRO si connecté (phone démasqué si booking existant)
-- **Objectif métier**: Afficher le profil public d'un professionnel avec ses services et un CTA de réservation.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 3 ; Perf: 2 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/pro/[id]/page.tsx`
-  - `apps/web/src/components/ProBookingCTA.tsx`
-  - `apps/api/src/catalog/catalog.controller.ts:85-100` (getProDetail)
-  - `apps/api/src/catalog/catalog.service.ts:134-187` (getProDetail)
-  - `packages/contracts/src/schemas/public.ts` (PublicProProfile)
-
-## 2) Cartographie technique (fichiers)
 ### Frontend
-- `apps/web/src/app/pro/[id]/page.tsx` — Server component, SSR fetch
-- `apps/web/src/components/ProBookingCTA.tsx` — CTA réservation (client component)
 
-### Backend
-- `apps/api/src/catalog/catalog.controller.ts` — `GET /public/pros/:id` avec OptionalJwtGuard
-- `apps/api/src/catalog/catalog.service.ts:134-187` — `getProDetail()` avec logique phone masqué/démasqué
+**Fichiers** :
+- `apps/web/src/app/pro/[publicId]/page.tsx` (Server Component RSC)
+- `apps/web/src/app/pro/[publicId]/ProDetailClient.tsx` (Client — favoris toggle)
+- `apps/web/src/app/pro/[publicId]/loading.tsx` (Skeleton Suspense)
+- `apps/web/src/components/ProBookingCTA.tsx` (Client — CTA conditionnel)
+
+**Appels API** :
+
+| Appel | Endpoint | Declenchement | Params |
+|-------|----------|---------------|--------|
+| Fetch profil pro | `GET /public/pros/{publicId}` | Server-side RSC | `publicId` depuis URL |
+| Check favoris | `GET /favorites` | Client mount si CLIENT auth | Aucun |
+| Toggle favori | `POST/DELETE /favorites/{proId}` | Click bouton | `proId` (publicId) |
+
+**Etats** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | `loading.tsx` skeleton Suspense (avatar, services, CTA) | OK |
+| 404 | `notFound()` → page 404 Next.js | OK |
+| Erreur reseau | **`notFound()`** aussi → masque la vraie erreur | Bug |
+| Succes | Profil complet : header, portfolio (premium), services, avis, CTA | OK |
+
+**CTA conditionnel (ProBookingCTA)** :
+- Non connecte → "Se connecter" (lien `/auth/login` **sans** param `next` → perd le contexte)
+- CLIENT → "Reserver maintenant" (lien `/book/{proId}?categoryId={categoryId}`)
+- PRO → "Reservation impossible" (message explicatif)
+
+**Accessibilite** :
+- Bouton favori : `aria-label` dynamique ("Retirer/Ajouter aux favoris") — OK
+- Images portfolio : alt generique "Realisation {n}" — acceptable
+- `loading.tsx` : `animate-pulse` **sans** `motion-safe:` — violation CLAUDE.md
+
+### API / Backend
+
+**`GET /public/pros/:id`** — `catalog.controller.ts` → `catalog.service.ts`
+- Guard : `OptionalJwtGuard` (auth optionnelle, ne throw jamais)
+- Lookup par `proProfile.publicId`
+- Phone expose seulement si : owner OU client avec booking actif
+- LastName masque (initiale seulement)
+- Portfolio expose seulement si premium
+- Retourne `PublicProProfile` : `{ id (publicId), firstName, lastName (initiale), city, isVerified, bio, isPremium, ratingAvg, ratingCount, completedBookingsCount, lastReviews, portfolio, services, phone? }`
 
 ### DB
-- `User` + `ProProfile` + `ProService` + `City` + `Category` + `Booking` (pour vérifier éligibilité phone)
 
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Profil complet (avatar, nom, ville, services, prix)
-- CTA réservation contextuel (auth-aware)
-- SEO (metadata dynamique)
-- Pas de PII exposée publiquement
+- `ProProfile` : lookup par `publicId` (unique index) — OK
+- `ProService` : inclus avec category name/publicId
+- `Review` : aggregation via `_avg` et `_count` — efficace
+- `Booking` : jointure pour le check "client a un booking" (phone visibility)
 
-### Actuel (constaté)
-- **UI/Composants**: Layout propre. Avatar initiale, nom complet, badge vérifié, ville, liste services avec prix formaté, CTA réservation.
-- **Data fetching**: Server-side fetch (`cache: 'no-store'`). `notFound()` si 404 ou erreur.
-- **Erreurs & UX**: ✅ 404 Next.js si pro non trouvé. ⚠️ Les erreurs réseau → `notFound()` aussi (masque les erreurs serveur).
-- **A11y**: ⚠️ `zinc-*` + `dark:`, emojis comme icônes (📍, ✓). ⚠️ Pas d'aria-hidden sur les emojis.
-- **Perf / SEO**:
-  - ❌ `export const dynamic = 'force-dynamic'` + `revalidate = 0` — **aucun cache SSR**. Chaque visite = requête au backend.
-  - ❌ Pas de `generateMetadata()` — titre/description génériques.
-  - ❌ Pas de données structurées (JSON-LD Service/Person).
-- **Sécurité front**:
-  - ⚠️ Le SSR fetch n'envoie PAS de cookie d'authentification → le backend ne peut pas identifier le user → le phone sera TOUJOURS masqué en SSR. Le `ProBookingCTA` est un client component qui pourrait re-fetch, mais ne le fait pas.
-  - ⚠️ L'id dans l'URL est le cuid interne de la DB, pas un publicId. Enumeration possible.
+### Problemes & recommandations
 
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/public/pros/:id** → `CatalogController.getProDetail()` → `CatalogService.getProDetail()` → Guard: `OptionalJwtGuard`
-  - Request: path param `id` (cuid)
-  - Response: `PublicProProfile { id, firstName, lastName (masqué), city, isVerified, services[], phone? }`
-  - Phone: démasqué si `currentUserId === proId` OU si le user a un booking PENDING/CONFIRMED/WAITING/COMPLETED avec ce pro
-  - Errors: 404 "Pro introuvable"
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | MEDIUM | Erreur reseau traitee comme 404 (notFound()) | Distinguer network error vs 404 |
+| 2 | MEDIUM | CTA "Se connecter" sans param `next` → perte de contexte apres login | Ajouter `?next=/pro/{publicId}` |
+| 3 | LOW | `animate-pulse` dans loading.tsx sans `motion-safe:` | Corriger |
+| 4 | LOW | Alt images portfolio generique | Ameliorer si caption disponible |
 
-### Attendu (référentiel)
-- Données publiques uniquement (pas d'email)
-- Phone conditionnel (après booking)
-- Cache (profil quasi-statique)
-- SEO friendly
+### TODO
 
-### Actuel (constaté)
-- **Auth/AuthZ**: ✅ `OptionalJwtGuard` — pas d'erreur si non connecté, user = null. ✅ Phone conditionnel basé sur ownership ou booking éligible.
-- **Validations serveur**: ⚠️ Pas de validation du format de `id` (le controller passe directement à `findUnique`). Un id invalide retournera 404 (acceptable mais pas optimal).
-- **Logique métier**:
-  - ✅ Phone masqué par défaut, démasqué uniquement pour owner ou client avec booking actif
-  - ✅ Filtre `status: ACTIVE` + `role: PRO`
-  - ⚠️ Le `lastName` est masqué en initiale (`B.`) dans `mapToPublicProCard` mais le schéma ne l'impose pas
-  - ⚠️ Le `phone` est sélectionné dans la requête DB même quand non nécessaire
-- **Erreurs**: ✅ 404 si pro non trouvé.
-- **Perf**: ⚠️ Pas de cache serveur (contrairement à getPros). ⚠️ La vérification phone fait une requête supplémentaire `booking.count()` si user authentifié.
-- **Observabilité**: ⚠️ Pas de log spécifique.
-- **Tests**: ❌ Aucun test.
-- **Sécurité**:
-  - ⚠️ **Email non sélectionné** — correct, pas d'exposition.
-  - ⚠️ **Phone sélectionné mais conditionnel** — le masquage est en code, pas en requête DB. Si un bug apparaît dans la logique, le phone fuiterait.
-  - ⚠️ `id` = cuid DB interne exposé dans l'URL. Pas de publicId pour les pros.
+- [ ] Distinguer erreur reseau de 404 dans le catch
+- [ ] Ajouter `?next=` sur le lien "Se connecter" du CTA
+- [ ] Corriger `motion-safe:` dans loading.tsx
 
-## 5) Base de données — État attendu vs état actuel
-- **Tables**: `User` + `ProProfile` + `ProService` + `Category` + `Booking`
-- **Contraintes/index**: ✅ `User.id @id` — lookup rapide. ✅ `Booking.@@index([proId])` pour le count.
-- **Requêtes**:
-  1. `user.findUnique(id, role: PRO, status: ACTIVE)` + joins — 1 query
-  2. `booking.count(proId, clientId, status IN [...])` — 1 query (si authentifié)
-  - Total: 1-2 queries. Acceptable.
-- **Risques**: Aucun risque majeur.
+## Score detaille — /pro/[publicId]
 
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping**: API retourne `PublicProProfile` → Front affiche directement. ProBookingCTA reçoit `proId` + `services[]`.
-- **Incohérences**:
-  - ⚠️ **Phone jamais visible en SSR**: Le fetch server-side ne passe pas de cookies → `currentUserId = null` → phone toujours masqué. Le CTA client-side ne re-fetch pas le profil.
-  - ⚠️ **Le CTA utilise `services[0].categoryId`** pour le lien booking. Si le pro a plusieurs services, seul le premier est pré-sélectionné.
-  - ⚠️ Le booking CTA propose un `<select>` pour choisir le service, mais le lien ne contient qu'un seul `categoryId`.
-- **Risques sécurité**: ✅ Pas de PII exposée dans le cas normal.
+| Axe | Note /5 | Justification |
+|-----|---------|---------------|
+| Fonctionnel | 4 | Profil complet, portfolio premium, avis. Erreur reseau = 404 |
+| Securite & acces | 5 | OptionalJwtGuard, phone conditionnel, lastName masque, publicId |
+| Integration & coherence data | 5 | publicId coherent partout, types alignes, CTA params corrects |
+| UX & accessibilite | 3 | Skeleton OK, favori accessible. CTA login perd contexte, animate-pulse sans motion-safe |
+| Performance & robustesse | 4 | Server-side fetch, cache backend. Single query avec includes |
 
-## 7) Problèmes & recommandations
-### CRITIQUES
-- Aucun problème critique bloquant.
-
-### IMPORTANTS
-- **[I1] Pas de cache SSR** — `force-dynamic` désactive tout cache. Chaque visite = requête backend. Impact perf avec trafic.
-- **[I2] Pas de SEO dynamique** — Pas de `generateMetadata()`. Les pages pro ne sont pas optimisées pour les moteurs de recherche.
-- **[I3] Phone jamais visible en SSR** — La logique de démasquage ne fonctionne qu'en contexte authentifié côté serveur, ce qui n'arrive jamais vu que le fetch SSR n'envoie pas de cookies.
-- **[I4] cuid exposé dans l'URL** — Pas de publicId pour les pros. Enumeration possible.
-- **[I5] Aucun test**.
-
-### NICE-TO-HAVE
-- **[N1]** Ajouter `generateMetadata()` avec nom du pro + ville + services.
-- **[N2]** Ajouter cache court (revalidate: 60) au lieu de force-dynamic.
-- **[N3]** Ajouter avis / reviews sur le profil.
-
-## 8) Plan "Amélioration Backend" (spécifique /pro/[id])
-### Quick wins (≤2h)
-- [ ] Ajouter cache court sur `getProDetail()` (2-5 min)
-- [ ] Valider le format `id` dans le controller (regex cuid)
-- [ ] Ne sélectionner `phone` dans la requête DB que si `currentUserId` est présent
-
-### Moyen (½–2 jours)
-- [ ] Ajouter `generateMetadata()` pour SEO dynamique
-- [ ] Introduire un `publicId` pour les pros (slug ou ID public)
-- [ ] Écrire tests pour `getProDetail()` (public, avec auth, phone masqué/démasqué)
-
-### Structurant (>2 jours)
-- [ ] Implémenter ISR ou revalidate pour les profils pro
-- [ ] Ajouter un système d'avis/reviews
-
-### Dépendances / risques
-- Le publicId nécessite une migration de schema + update de tous les liens/routes.
+### Score global page : 4.2 / 5
 
 ---
 
-# [/book/[proId]] — Réservation (client)
+## 4) /book/[proId] (?categoryId=X) [CLIENT]
 
-## 1) Résumé exécutif
-- **Rôle(s)**: CLIENT uniquement (auth requis)
-- **Objectif métier**: Permettre au client de choisir une date/créneau et créer une réservation avec un professionnel.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 3 ; Perf: 3 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/book/[proId]/page.tsx`
-  - `apps/web/src/lib/api.ts` (getJSON, postJSON)
-  - `apps/web/src/store/authStore.ts`
-  - `apps/api/src/booking/booking.controller.ts`
-  - `apps/api/src/booking/booking.service.ts` (getAvailableSlots, createBooking)
-  - `packages/contracts/src/schemas/booking.ts` (GetSlotsSchema, CreateBookingSchema)
-
-## 2) Cartographie technique (fichiers)
 ### Frontend
-- `apps/web/src/app/book/[proId]/page.tsx` — Client component, flow complet
 
-### Backend
-- `apps/api/src/booking/booking.controller.ts` — `GET /public/slots`, `POST /bookings`
-- `apps/api/src/booking/booking.service.ts:34-135` — `getAvailableSlots()`
-- `apps/api/src/booking/booking.service.ts:155-249` — `createBooking()`
+**Fichier** : `apps/web/src/app/book/[proId]/page.tsx` (Client Component `'use client'`)
+
+**Appels API** :
+
+| Appel | Endpoint | Declenchement | Params |
+|-------|----------|---------------|--------|
+| Fetch pro | `GET /public/pros/{proId}` | mount apres hydration | `proId` depuis URL |
+| Fetch creneaux | `GET /public/slots` | mount + changement date | `proId`, `selectedDate`, `categoryId` |
+| Creer booking | `POST /bookings` | click "Valider la reservation" | `{ proId, categoryId, date, time }` |
+
+**Auth guard** :
+- Client-side uniquement via `useAuthStore` → `router.push('/auth/login')` si non auth
+- **`/book/[proId]` N'EST PAS dans le middleware matcher** → pas de protection server-side
+- Le redirect login n'inclut PAS de param `returnTo`/`next` → **l'utilisateur perd le contexte booking**
+- Meme si un param etait passe : middleware utilise `returnTo`, login lit `next` → mismatch
+
+**Role check** : si `user.role !== 'CLIENT'` → ecran de blocage "Acces reserve aux clients" + bouton logout — OK
+
+**categoryId** : extrait de `searchParams.get('categoryId')`. Si absent → ecran erreur "Categorie manquante". Pas de validation format client-side (le backend valide via Zod).
+
+**Etats** (tres complets) :
+| Etat | Implementation |
+|------|---------------|
+| Hydration pending | `null` (ecran blanc) |
+| Non authentifie | Spinner + "Redirection..." |
+| Non CLIENT | Avertissement + logout |
+| categoryId manquant | Erreur + lien retour |
+| Pro loading | Spinner |
+| Pro erreur/introuvable | "Professionnel non trouve" + retour |
+| Slots loading | Spinner dans section |
+| 0 creneaux | "Aucun creneau disponible ce jour" |
+| Creneaux disponibles | Grille de boutons time |
+| Booking erreur 409 | "Creneau deja pris, choisir un autre" |
+| Booking erreur 400 CITY_REQUIRED | Toast + redirect /profile |
+| Booking erreur 400 CITY_MISMATCH | Erreur inline + redirect 3s |
+| Booking erreur 400 ADDRESS_REQUIRED | Toast + redirect /profile |
+| Booking erreur 403 | "Ce professionnel n'est pas disponible" |
+| Booking succes | Ecran succes + WhatsApp CTA + "Voir mes reservations" |
+| Envoi en cours | Bouton "Envoi en cours..." disabled |
+
+**Accessibilite** :
+- **VIOLATION** : `<label>` date sans `htmlFor`, `<input>` date sans `id`
+- **VIOLATION** : Boutons creneaux sans `aria-label` (seulement le texte "09:00") ni `aria-pressed`/`aria-selected`
+- **MANQUANT** : Pas de `aria-live` sur la zone d'erreur booking
+- **VIOLATION** : `animate-spin` sans `motion-safe:`
+
+### API / Backend
+
+**`GET /public/slots`** — `booking.controller.ts` → `booking.service.ts`
+- Public, pas de guard
+- Validation Zod : `proId` (publicId ou cuid), `date` (YYYY-MM-DD), `categoryId` (publicId)
+- Algorithme : weekday → WeeklyAvailability → creneaux horaires → soustrait CONFIRMED existants → filtre passes
+- **Design** : seuls les bookings CONFIRMED bloquent. PENDING ne bloque PAS → 2 clients peuvent voir le meme creneau
+- Retourne `string[]` ex: `["09:00", "10:00", "14:00"]`
+
+**`POST /bookings`** — `booking.controller.ts` → `booking.service.ts`
+- Guard : `JwtAuthGuard`
+- Validation Zod : `proId`, `categoryId`, `date` (YYYY-MM-DD), `time` (HH:MM)
+- Role : CLIENT uniquement (extraite du JWT, pas du body)
+- Validations dans `$transaction` :
+  1. Resolve proId/categoryId (publicId → interne)
+  2. User existe + a cityId + addressLine
+  3. ProProfile existe + kycStatus = APPROVED
+  4. City match (client.cityId === pro.cityId)
+  5. ProService actif pour la categorie
+  6. Pas de CONFIRMED existant sur le creneau
+  7. WeeklyAvailability correspond au jour
+  8. Creneau dans la plage horaire
+  9. Creneau dans le futur
+  10. Creation booking status PENDING
+  11. Creation BookingEvent (audit)
+- Post-transaction : `eventEmitter.emit('booking.created')`
+- **Securite** : clientId = `req.user.id` (JWT), pas de IDOR possible
+
+**Erreurs misleading** :
+- "Creneau deja pris" (code `SLOT_TAKEN`) est retourne pour PLUSIEURS cas differents : creneau confirme, service inactif, hors plage horaire, dans le passe. Rend le debug difficile et confond l'utilisateur.
 
 ### DB
-- `ProService`, `WeeklyAvailability`, `Booking`, `User`, `ProProfile`, `Category`
 
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard CLIENT strict
-- Sélection date → fetch slots → sélection slot → confirmation
-- Anti double submit
-- Gestion erreurs (conflit, ville mismatch, etc.)
-- A11y
-
-### Actuel (constaté)
-- **UI/Composants**: Flow linéaire: date picker → grille de slots → confirmation → écran succès WhatsApp. Design `zinc-*` + `dark:`.
-- **Data fetching**:
-  - Fetch pro: `getJSON('/public/pros/{proId}')` au mount
-  - Fetch slots: `getJSON('/public/slots?proId=X&date=Y&categoryId=Z')` à chaque changement de date
-  - Submit: `postJSON('/bookings', { proId, categoryId, date, time })`
-- **Validations**:
-  - ✅ `categoryId` requis (vient des query params)
-  - ✅ Date min=aujourd'hui, max=+30 jours
-  - ✅ Slot requis avant soumission
-  - ✅ `disabled={submitting}` sur le bouton — anti double submit
-- **Erreurs & UX**:
-  - ✅ Gestion spécifique: 409 (créneau pris), CITY_REQUIRED, CITY_MISMATCH, ADDRESS_REQUIRED
-  - ⚠️ `alert()` utilisé pour CITY_REQUIRED et ADDRESS_REQUIRED — UX pauvre
-  - ✅ Redirection vers `/profile` si info manquante
-  - ✅ Écran succès avec lien WhatsApp
-- **A11y**:
-  - ⚠️ `<label>` date sans `id` sur l'input (pas de `htmlFor`)
-  - ⚠️ Emojis (✅❌⚠️📅📍💬) comme icônes sans `aria-hidden`
-  - ⚠️ Boutons slot sans `aria-pressed` ou `aria-selected`
-  - ⚠️ Pas d'annonce screen reader quand les slots changent
-- **Perf**: ✅ Slots re-fetchés automatiquement au changement de date. Pas de debounce nécessaire (date picker = événement discret).
-- **Sécurité front**:
-  - ✅ Guard CLIENT côté front (rôle vérifié)
-  - ⚠️ Le `proId` vient de l'URL (user-controlled). Le back doit valider.
-  - ⚠️ **Phone du pro exposé** dans l'écran succès via `pro.phone` (l.326). Ce phone vient de `getJSON('/public/pros/{proId}')` qui est un endpoint PUBLIC non authentifié. **Le phone ne devrait pas être dans cette réponse pour les visiteurs non auth.**
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/public/slots?proId=X&date=Y&categoryId=Z** → `BookingController.getSlots()` → `BookingService.getAvailableSlots()` → Auth: aucun
-  - Request: Query params validés par `GetSlotsSchema` (Zod)
-  - Response: `string[]` (ex: `["09:00", "10:00", "14:00"]`)
-  - Logique: WeeklyAvailability → filtrer par CONFIRMED bookings → exclure passés
-
-- **[POST] /api/bookings** → `BookingController.createBooking()` → `BookingService.createBooking()` → Guard: `JwtAuthGuard`
-  - Request DTO: `CreateBookingSchema` — `{ proId, categoryId, date, time }`
-  - Response: Booking créé avec relations
-  - Errors: 403 (pas CLIENT), 400 (CITY_REQUIRED, ADDRESS_REQUIRED, CITY_MISMATCH), 409 (créneau pris), 404 (pro non trouvé)
-
-### Attendu (référentiel)
-- Double-check disponibilité avant création (anti double booking)
-- Transaction si écriture
-- Ownership: seul le CLIENT crée ses bookings
-- Validation géographique (même ville)
-- Idempotence si possible
-
-### Actuel (constaté)
-- **Auth/AuthZ**:
-  - ✅ `JwtAuthGuard` sur `POST /bookings`
-  - ✅ Rôle CLIENT vérifié dans le service
-  - ✅ `clientUserId` extrait de `req.user.id` (pas du body — pas de spoofing)
-- **Validations serveur**:
-  - ✅ Zod validation: proId (cuid), date (YYYY-MM-DD), time (HH:MM), categoryId (regex)
-  - ✅ Service actif vérifié pour le pro/catégorie
-  - ✅ Ville du client == ville du pro
-  - ✅ Adresse client requise
-  - ✅ **Double-check**: `getAvailableSlots()` rappelé avant création pour confirmer la dispo
-- **Logique métier**:
-  - ✅ Slots: seuls les CONFIRMED bloquent (PENDING ne bloque pas)
-  - ✅ Durée multi-heures gérée dans le calcul des slots
-  - ✅ Slots passés exclus (comparaison avec `now`)
-  - ✅ Booking créé avec `status: PENDING`, `expiresAt: +24h`
-  - ✅ Événement émis après création
-  - ⚠️ **PAS DE TRANSACTION** pour `createBooking()` — race condition possible entre le double-check et le create. Deux clients pourraient théoriquement booker le même slot simultanément.
-  - ⚠️ **Pas d'idempotence** — un même client peut créer plusieurs PENDING pour le même pro/date/time.
-- **Erreurs**: ✅ Messages spécifiques (CITY_REQUIRED, CITY_MISMATCH, etc.). ✅ 409 pour conflit.
-- **Perf**: ✅ 3-4 queries pour la création (user, proProfile, availableSlots, create). Acceptable.
-- **Observabilité**: ⚠️ Pas de log explicite dans `createBooking()`.
-- **Tests**: ❌ Aucun test.
-- **Sécurité**:
-  - ✅ Anti mass assignment: Zod whitelist
-  - ⚠️ Pas de rate limit sur `POST /bookings` — un client pourrait spammer des réservations
-  - ⚠️ Pas de `@Throttle` sur `GET /public/slots` — scraping des disponibilités
-
-## 5) Base de données — État attendu vs état actuel
-- **Tables**: `Booking` (écriture), `ProService`, `WeeklyAvailability`, `User`, `ProProfile` (lecture)
-- **Contraintes/index**:
-  - ✅ `Booking.@@index([proId, timeSlot])` — optimal pour la recherche de conflits
-  - ✅ `Booking.@@index([clientId])` — pour `getMyBookings`
-  - ✅ `WeeklyAvailability.@@unique([proUserId, dayOfWeek])` — lookup rapide
-  - ✅ `ProService.@@unique([proUserId, categoryId])` — validation service
-- **Requêtes observées**:
-  - `getAvailableSlots`: 3 queries (proService, weeklyAvailability, bookings)
-  - `createBooking`: 4-5 queries (user, proProfile, availableSlots, create)
-- **Risques**:
-  - ⚠️ **Race condition**: `createBooking` n'est PAS dans une transaction. Le double-check (`getAvailableSlots`) peut passer pour deux requêtes simultanées, et les deux créeront un PENDING. Ce n'est pas bloquant car seul le CONFIRMED bloque les slots, mais cela crée des PENDING fantômes.
-  - ⚠️ Pas de contrainte `@@unique([proId, timeSlot, status])` — rien n'empêche en DB d'avoir 2 bookings CONFIRMED au même créneau (la logique est applicative, pas en DB).
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping**:
-  - Front: `{ proId, categoryId, date, time }` → Back Zod: `CreateBookingSchema` → DB: `Booking.create()`
-  - ✅ Champs alignés
-- **Incohérences**:
-  - ⚠️ Le `proId` dans l'URL front est le cuid DB (`params.proId`). Le back fait `findUnique(userId: dto.proId)` sur ProProfile. ✅ Cohérent (ProProfile.userId = User.id).
-  - ⚠️ **Phone dans l'écran succès**: Le front fetch `/public/pros/{proId}` sans auth. Si le backend masque le phone sans auth, le lien WhatsApp sera cassé. Si le backend expose le phone publiquement, c'est un problème de PII.
-- **Gestion erreurs**: ✅ Mapping spécifique (409, CITY_REQUIRED, etc.) → messages UX en français. ⚠️ `alert()` pour certains cas.
-- **Risques sécurité**: ⚠️ Phone potentiellement exposé publiquement.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **[C1] Race condition booking**: `createBooking()` n'est pas dans une transaction. Deux clients simultanés pourraient créer des PENDING identiques. Bien que seuls les CONFIRMED bloquent, cela crée de la confusion.
-- **[C2] Phone exposé publiquement**: Le front fetch le profil pro via un endpoint PUBLIC pour afficher le lien WhatsApp post-booking. Le phone ne devrait être visible qu'après création du booking (re-fetch authentifié).
-
-### IMPORTANTS
-- **[I1] Pas de rate limit** sur `POST /bookings` ni `GET /public/slots`.
-- **[I2] Pas d'idempotence** — même client, même créneau, même pro = multiples PENDING.
-- **[I3] `alert()` pour CITY_REQUIRED/ADDRESS_REQUIRED** — UX pauvre.
-- **[I4] A11y**: labels, aria, emojis.
-- **[I5] Aucun test**.
-
-### NICE-TO-HAVE
-- **[N1]** Ajouter contrainte DB `@@unique([proId, clientId, timeSlot, status])` pour anti-doublon.
-- **[N2]** Ajouter un mécanisme d'idempotence (idempotency key).
-- **[N3]** Ajouter une confirmation modale avant soumission.
-
-## 8) Plan "Amélioration Backend" (spécifique /book/[proId])
-### Quick wins (≤2h)
-- [ ] Ajouter `@Throttle` sur `POST /bookings` (ex: 5/min) et `GET /public/slots` (ex: 30/min)
-- [ ] Ajouter un log sur chaque booking créé (proId, clientId, date, time)
-- [ ] Retourner le phone du pro dans la réponse de `POST /bookings` (au lieu de le chercher publiquement)
-
-### Moyen (½–2 jours)
-- [ ] Wrapper `createBooking()` dans une `$transaction` avec double-check intégré
-- [ ] Ajouter une contrainte d'unicité applicative (ex: max 1 PENDING par client/pro/timeSlot)
-- [ ] Écrire tests unitaires pour `getAvailableSlots()` et `createBooking()`
-- [ ] Écrire tests d'intégration pour `POST /bookings` (happy path, conflit, mauvaise ville, etc.)
-
-### Structurant (>2 jours)
-- [ ] Implémenter un mécanisme d'idempotence (header `Idempotency-Key`)
-- [ ] Ajouter contrainte DB `@@unique` ou `@@index` pour prévenir les doublons en DB
-
-### Dépendances / risques
-- La transaction nécessite de repenser l'ordre des opérations (lock optimiste ou pessimiste).
-- L'unicité DB nécessite une migration.
-
----
-
-# [/client/bookings] — Mes réservations (client)
-
-## 1) Résumé exécutif
-- **Rôle(s)**: CLIENT uniquement (auth requis)
-- **Objectif métier**: Afficher et gérer les réservations du client avec onglets par statut + actions sur les modifications proposées par le pro.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 4 ; Perf: 2 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/client/bookings/page.tsx`
-  - `apps/web/src/components/BookingStatusBadge.tsx`
-  - `apps/web/src/lib/api.ts` (getJSON, patchJSON)
-  - `apps/api/src/booking/booking.controller.ts` (getMyBookings, respondToModification)
-  - `apps/api/src/booking/booking.service.ts` (getMyBookings, respondToModification)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/client/bookings/page.tsx` — Client component, dashboard par onglets
-- `apps/web/src/components/BookingStatusBadge.tsx` — Badge statut
-
-### Backend
-- `apps/api/src/booking/booking.controller.ts` — `GET /bookings`, `PATCH /bookings/:id/respond`
-- `apps/api/src/booking/booking.service.ts:262-328` — `getMyBookings()`
-- `apps/api/src/booking/booking.service.ts:634-782` — `respondToModification()`
-
-### DB
-- `Booking` + relations (Category, City, ProProfile+User, Client)
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard CLIENT strict
-- Onglets par statut
-- Pagination
-- Actions contextuelles (accepter/refuser modification)
-- Anti double submit
-
-### Actuel (constaté)
-- **UI/Composants**: Dashboard avec 4 onglets: "En attente" (PENDING), "À valider" (WAITING_FOR_CLIENT), "Confirmé" (CONFIRMED), "Historique" (multi-statuts). Badges de compteur dynamiques. Actions accepter/refuser pour WAITING_FOR_CLIENT.
-- **Data fetching**:
-  - `getJSON('/bookings')` au mount — charge TOUS les bookings
-  - Après action: re-fetch complet `getJSON('/bookings')`
-- **Validations**: N/A (pas de formulaire de saisie).
-- **Erreurs & UX**:
-  - ❌ `alert()` pour toutes les erreurs ET les succès (l.78-86) — UX très pauvre
-  - ✅ `disabled` sur les boutons pendant l'action
-  - ✅ `updatingBooking` state empêche le double click
-- **A11y**:
-  - ⚠️ Onglets: pas de `role="tablist"`, `role="tab"`, `role="tabpanel"`, `aria-selected`
-  - ⚠️ Emojis (📅👤⏱️✅❌) sans `aria-hidden`
-  - ⚠️ `zinc-*` + `dark:` au lieu des design tokens
-- **Perf**:
-  - ❌ **PAS DE PAGINATION** — charge TOUS les bookings. Filtrage client-side. Si un client a 500 bookings, tout est chargé en mémoire.
-  - ❌ Re-fetch complet après chaque action (au lieu de mettre à jour localement).
-  - ⚠️ Calcul des compteurs d'onglets fait sur chaque render (`.filter()` x4 sur tous les bookings x2 : une fois pour les badges, une fois pour le filtrage).
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/bookings?page=1&limit=20** → `BookingController.getMyBookings()` → `BookingService.getMyBookings()` → Guard: `JwtAuthGuard`
-  - Request: page/limit query params
-  - Response: `BookingDashboardItem[]` — bookings avec catégorie, ville, pro (firstName, lastName, phone, city)
-  - Ownership: `WHERE clientId = userId` (backend autoritatif)
-  - Pagination: supportée côté back (skip/take) mais **non utilisée côté front**
-
-- **[PATCH] /api/bookings/:id/respond** → `BookingController.respondToModification()` → `BookingService.respondToModification()` → Guard: `JwtAuthGuard`
-  - Request DTO: `RespondDto { accept: boolean }`
-  - Response: Booking mis à jour
-  - Ownership: `booking.clientId === userId` vérifié dans le service
-  - Logique: accept → CONFIRMED (avec vérification conflits + transaction), refuse → DECLINED
-
-### Attendu (référentiel)
-- Ownership serveur strict (seuls les bookings du client)
-- Pagination
-- Transactions pour les confirmations
-- Anti double booking
-
-### Actuel (constaté)
-- **Auth/AuthZ**:
-  - ✅ `JwtAuthGuard` sur les deux endpoints
-  - ✅ `getMyBookings`: filtre `clientId = userId` — ownership serveur. Le client ne voit QUE ses bookings.
-  - ✅ `respondToModification`: vérifie `booking.clientId === userId` — ownership stricte
-  - ✅ Role check: `userRole !== 'CLIENT'` → 403
-- **Validations serveur**:
-  - ✅ `accept` validé comme boolean (class-validator)
-  - ✅ Statut `WAITING_FOR_CLIENT` vérifié avant action
-- **Logique métier**:
-  - ✅ Si accept: transaction atomique avec vérification conflits + nettoyage bookings concurrents + auto-complete back-to-back
-  - ✅ Si refuse: simple update en DECLINED + événement émis
-  - ✅ Bonne machine à états booking
-- **Erreurs**: ✅ Messages appropriés (404, 403, 400).
-- **Perf**:
-  - ✅ Pagination supportée côté back (`skip/take`)
-  - ⚠️ Le front n'utilise PAS la pagination (fetch all)
-  - ⚠️ Les bookings retournent `pro.user.phone` — PII exposée dans le listing (le client voit le phone du pro pour TOUS les bookings, pas seulement les CONFIRMED)
-- **Observabilité**: ⚠️ Pas de log explicite.
-- **Tests**: ❌ Aucun test.
-- **Sécurité**:
-  - ✅ Ownership stricte serveur
-  - ⚠️ Phone du pro exposé dans TOUS les bookings (même PENDING) — devrait être masqué sauf CONFIRMED/COMPLETED
-
-## 5) Base de données — État attendu vs état actuel
-- **Tables**: `Booking` + joins (Category, City, ProProfile, User)
-- **Contraintes/index**:
-  - ✅ `Booking.@@index([clientId])` — optimal pour le filtre ownership
-  - ✅ `Booking.@@index([clientId, cityId, categoryId, timeSlot])` — index composite
-  - ✅ `Booking.@@index([proId, timeSlot])` — pour vérification conflits
-- **Requêtes**: `booking.findMany(clientId, skip, take, orderBy: timeSlot desc)` + joins. 1 query Prisma (batching).
-- **Risques**: ⚠️ Sans pagination côté front, le back retourne potentiellement beaucoup de données.
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping**: ✅ `BookingDashboardItem` (contracts) → Front affiche directement.
-- **Incohérences**:
-  - ❌ **Pagination inutilisée**: Le back supporte `page/limit` mais le front ne les envoie pas → default = page 1, limit 20. Donc le front ne charge que les 20 premiers bookings, mais l'UI n'a pas de "page suivante". **Les anciens bookings au-delà de 20 ne sont jamais visibles.**
-  - ⚠️ **Statut `CANCELLED_AUTO_OVERLAP`** géré dans l'onglet historique côté front mais le back ne le crée pas via `respondToModification` — il est créé indirectement par le processus de confirmation (nettoyage des concurrents). Cohérent mais implicite.
-  - ⚠️ **Phone du pro** visible pour tous les statuts.
-- **Gestion erreurs**: ❌ `alert()` pour tout.
-- **Risques sécurité**: ⚠️ PII phone dans le listing.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **[C1] Pagination cassée**: Le front ne passe PAS `page/limit` → le back retourne les 20 premiers. Il n'y a pas de pagination UI. **Les bookings au-delà de 20 sont invisibles pour le client.**
-- **[C2] Phone du pro exposé pour tous les statuts**: Dans `getMyBookings`, le `pro.user.phone` est retourné pour TOUS les bookings, y compris PENDING et DECLINED. Le phone ne devrait être visible que pour CONFIRMED/COMPLETED.
-
-### IMPORTANTS
-- **[I1] `alert()` partout**: Erreurs et succès via `alert()`. UX non professionnelle.
-- **[I2] Pas de tabs ARIA**: Les onglets n'ont pas de rôles ARIA (`tablist`, `tab`, `tabpanel`).
-- **[I3] Re-fetch complet après chaque action**: Devrait utiliser un update local optimiste.
-- **[I4] Aucun test**.
-- **[I5] Pas d'annulation CLIENT**: Le client ne peut pas annuler une réservation PENDING (pas de bouton).
-
-### NICE-TO-HAVE
-- **[N1]** Ajouter un bouton "Annuler" pour les bookings PENDING côté client.
-- **[N2]** Ajouter polling ou WebSocket pour les mises à jour en temps réel.
-- **[N3]** Ajouter une modale de confirmation avant accepter/refuser.
-
-## 8) Plan "Amélioration Backend" (spécifique /client/bookings)
-### Quick wins (≤2h)
-- [ ] **FIX CRITIQUE**: Masquer `pro.user.phone` dans `getMyBookings` sauf pour les statuts CONFIRMED/COMPLETED
-- [ ] Ajouter un log sur les réponses aux modifications (accept/refuse)
-
-### Moyen (½–2 jours)
-- [ ] Implémenter la pagination côté front (boutons page ou infinite scroll) en utilisant le `page/limit` existant côté back
-- [ ] Ajouter un endpoint `PATCH /bookings/:id/cancel` pour annulation client PENDING
-- [ ] Écrire tests unitaires pour `getMyBookings()` et `respondToModification()`
-- [ ] Refactorer le front: remplacer `alert()` par des bandeaux d'erreur/succès inline
-
-### Structurant (>2 jours)
-- [ ] Retourner le `total` dans `getMyBookings` (comme getProsV2) pour permettre la pagination complète
-- [ ] Ajouter WebSocket/SSE pour les mises à jour en temps réel des statuts
-
-### Dépendances / risques
-- Le masquage du phone nécessite un ajustement dans le select Prisma de `getMyBookings`.
-- L'annulation client nécessite une logique métier (pénalités, délai minimum).
-
----
-
-# Synthèse Phase 2 — Parcours CLIENT (Discovery → Booking → Suivi)
-
-## Problèmes transverses
-
-### Contrats API (search/list/detail/booking)
-- **V1 vs V2**: Le front utilise encore V1 `/public/pros` (sans pagination) alors que V2 existe avec pagination, total, et cache. Migration nécessaire.
-- **Inconsistance validation**: Certains endpoints utilisent Zod (booking), d'autres class-validator (auth, users). Devrait être unifié.
-- **Phone conditionnellement exposé**: La logique de masquage du phone est fragmentée entre `getProDetail` (conditionnel) et `getMyBookings` (toujours exposé).
-
-### Cohérence des statuts booking
-- ✅ Machine à états bien définie: PENDING → CONFIRMED/DECLINED/EXPIRED/WAITING_FOR_CLIENT → COMPLETED/CANCELLED_*
-- ✅ Logique Winner-Takes-All correcte (confirmation annule les concurrents)
-- ✅ Auto-complete back-to-back implémenté
-- ⚠️ Pas d'expiration automatique des PENDING (le `expiresAt` est stocké mais aucun cron ne le traite)
-- ⚠️ Pas d'annulation client PENDING
-
-### Sécurité (PII, ownership, auth)
-- ✅ Ownership vérifiée côté serveur pour toutes les opérations d'écriture (booking creation, status update, respond)
-- ✅ Rôles vérifiés côté service (CLIENT pour créer/répondre, PRO pour confirmer/modifier)
-- ⚠️ **Phone exposé publiquement** dans certains flux (booking page fetch public + listing bookings)
-- ⚠️ **Pas de rate limit** sur aucun endpoint Phase 2 (public slots, booking creation, listing)
-- ⚠️ **cuid DB exposé** dans les URLs (pas de publicId pour les pros ni les bookings)
-
-### Performance (index, pagination, N+1)
-- ❌ **Pagination non utilisée côté front** — ni /pros ni /client/bookings n'utilisent la pagination
-- ⚠️ **Pas d'index** `ProProfile(cityId, isPremium)` pour le tri monétisation
-- ✅ Index principaux présents sur Booking (proId, clientId, timeSlot)
-- ✅ Cache serveur sur cities, categories, pros v2
-
-### Tests/observabilité
-- ❌ **ZERO test** dans tout le backend — aucun fichier .spec.ts trouvé
-- ⚠️ Logs minimaux (compteurs dans catalog, rien dans booking)
-- ❌ Pas de requestId, pas de métriques, pas de traces
-
-## Risques majeurs (Top 5)
-
-1. **Pagination absente côté front** — /pros charge TOUS les pros, /client/bookings n'affiche que les 20 premiers sans navigation. Avec la croissance, le site sera inutilisable. **Impact: scalabilité critique.**
-
-2. **Race condition booking** — `createBooking()` n'est pas dans une transaction. Deux requêtes simultanées peuvent créer des PENDING identiques. Pas de contrainte DB anti-doublon. **Impact: intégrité données.**
-
-3. **Phone du pro exposé indûment** — Visible publiquement via le profil pro (pour le lien WhatsApp) et dans le listing bookings (tous statuts). Devrait être conditionnel au statut CONFIRMED/COMPLETED. **Impact: vie privée / PII.**
-
-4. **Zéro tests** — Aucun test sur le flow booking le plus critique de la plateforme. Le moteur de disponibilité, la création de booking, et la machine à états sont non testés. **Impact: stabilité.**
-
-5. **Pas d'expiration automatique des PENDING** — `expiresAt` est stocké en DB mais aucun cron/scheduler n'existe pour expirer les bookings PENDING. Les pros reçoivent des demandes fantômes. **Impact: UX pro + intégrité données.**
-
-## Plan backend priorisé (Phase suivante — améliorations)
-
-### Priorité 0 (immédiat)
-- [ ] **FIX** Masquer `pro.user.phone` dans `getMyBookings` sauf CONFIRMED/COMPLETED
-- [ ] **FIX** Retourner le phone du pro dans la réponse de `POST /bookings` (au lieu du fetch public)
-- [ ] **FIX** Implémenter pagination côté front pour /pros (migrer vers V2) et /client/bookings
-- [ ] Ajouter `@Throttle` sur `POST /bookings` (5/min), `GET /public/slots` (30/min), `GET /public/pros` (30/min)
-
-### Priorité 1
-- [ ] Wrapper `createBooking()` dans une `$transaction` avec double-check atomique
-- [ ] Écrire les premiers tests: `getAvailableSlots()`, `createBooking()`, `getMyBookings()`, `respondToModification()`
-- [ ] Implémenter un cron d'expiration des PENDING (`expiresAt < NOW()` → status = EXPIRED)
-- [ ] Ajouter index composite `ProProfile(cityId, isPremium)` pour le tri monétisation
-- [ ] Ajouter endpoint `PATCH /bookings/:id/cancel` pour annulation client PENDING
-- [ ] Ajouter `total` dans la réponse de `getMyBookings` pour pagination complète
-
-### Priorité 2
-- [ ] Introduire un `publicId` pour les pros (slug ou UUID public) au lieu du cuid DB
-- [ ] Ajouter `generateMetadata()` dynamique pour /pro/[id] (SEO)
-- [ ] Implémenter ISR ou cache court sur les profils pro
-- [ ] Ajouter mécanisme d'idempotence sur `POST /bookings`
-- [ ] Unifier la stratégie de validation (tout Zod OU tout class-validator)
-- [ ] Ajouter WebSocket/SSE pour les mises à jour temps réel des bookings
-
----
-
-# PHASE 3 — Dashboard PRO (hors paiement)
-
-- [/dashboard/bookings — Réservations pro](#dashboardbookings--réservations-pro)
-- [/dashboard/history — Historique pro](#dashboardhistory--historique-pro)
-- [/dashboard/availability — Disponibilités pro](#dashboardavailability--disponibilités-pro)
-- [/dashboard/services — Gestion services pro](#dashboardservices--gestion-services-pro)
-- [/dashboard/profile — Profil pro (dashboard)](#dashboardprofile--profil-pro-dashboard)
-- [/dashboard/kyc — Vérification KYC](#dashboardkyc--vérification-kyc)
-
----
-
-# [/dashboard/bookings] — Réservations pro
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (auth requis)
-- **Objectif métier**: Permettre au PRO de gérer ses réservations entrantes : accepter, refuser, modifier la durée, et marquer comme terminées.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 4 ; Perf: 2 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/bookings/page.tsx`
-  - `apps/web/src/components/dashboard/DashboardLayout.tsx`
-  - `apps/web/src/components/BookingStatusBadge.tsx`
-  - `apps/web/src/lib/api.ts` (getJSON, patchJSON)
-  - `apps/api/src/booking/booking.controller.ts`
-  - `apps/api/src/booking/booking.service.ts`
-  - `packages/contracts/src/schemas/booking.ts`
-  - `packages/database/prisma/schema.prisma` (Booking)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/bookings/page.tsx` — Page complète PRO bookings, client-side
-- `apps/web/src/components/dashboard/DashboardLayout.tsx` — Layout partagé avec auth guard + prison UX
-- `apps/web/src/components/BookingStatusBadge.tsx` — Badge de statut réutilisable
-
-### Backend
-- `apps/api/src/booking/booking.controller.ts:108-121` — `GET /api/bookings` → `getMyBookings()`
-- `apps/api/src/booking/booking.controller.ts:140-148` — `PATCH /api/bookings/:id/status` → `updateBookingStatus()`
-- `apps/api/src/booking/booking.controller.ts:168-177` — `PATCH /api/bookings/:id/duration` → `updateBooking()`
-- `apps/api/src/booking/booking.controller.ts:220-227` — `PATCH /api/bookings/:id/complete` → `completeBooking()`
-- `apps/api/src/booking/booking.service.ts:262-328` — `getMyBookings()` avec pagination back
-- `apps/api/src/booking/booking.service.ts:345-492` — `updateBookingStatus()` avec transaction Winner-Takes-All
-- `apps/api/src/booking/booking.service.ts:512-616` — `updateBooking()` (modification durée)
-- `apps/api/src/booking/booking.service.ts:800-857` — `completeBooking()`
-
-### DB
-- `schema.prisma` — `Booking` (l.233-283), index `[proId, timeSlot]`, `[proId]`
-- `BookingStatus` enum : PENDING, CONFIRMED, DECLINED, CANCELLED_BY_CLIENT, CANCELLED_BY_CLIENT_LATE, CANCELLED_BY_PRO, CANCELLED_AUTO_OVERLAP, EXPIRED, COMPLETED, WAITING_FOR_CLIENT
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard PRO strict avec redirection
-- Tabs fonctionnels (PENDING, CONFIRMED, CANCELLED*)
-- Actions : Accept/Refuse sur PENDING, Modifier Durée, Terminer sur CONFIRMED passés
-- Pagination pour listes longues
-- Loading/empty/error states
-- A11y complète (labels, focus, keyboard)
-
-### Actuel (constaté)
-- **UI/Composants** : 3 onglets (En attente / Confirmé / Annulé). Boutons Accept/Refuse sur PENDING. Modale "Modifier Durée" avec select 1-8h. Bouton "Terminer" visible seulement si `timeSlot < now`. BookingStatusBadge pour les statuts. Design zinc-*.
-- **Data fetching** : `getJSON('/bookings')` — charge TOUS les bookings d'un coup sans pagination front (le backend supporte page/limit, mais le front ne passe aucun paramètre → default 20). Pas de retry. Pas d'abort controller.
-- **Validations** : Pas de validation côté client avant submit. Le bouton disabled pendant l'opération est correct.
-- **Erreurs & UX** : Utilise `alert()` pour toutes les erreurs et succès — pas de toast/banner inline. `confirm()` natif pour complétion.
-- **A11y** : ❌ Aucun `aria-label` sur les boutons d'action. La modale n'a pas de `role="dialog"` ni `aria-modal`. Le label de la modale n'a pas de `htmlFor`/`id`. Les onglets n'utilisent pas `role="tablist"`/`role="tab"`. Pas de focus trap dans la modale.
-- **Perf** : Tout chargé côté client. Re-fetch complet après chaque action. Pas de cache, pas d'optimistic update. Le statut WAITING_FOR_CLIENT n'est pas affiché dans les onglets (bookings dans ce statut sont invisibles).
-- **NON TROUVÉ** : Pas de gestion du statut `EXPIRED` côté front (pas de tab, pas d'affichage). Pas de bouton de rafraîchissement manuel. Client phone affiché sans masquage.
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/bookings** → `BookingController.getMyBookings()` → `BookingService.getMyBookings()` → auth: JwtAuthGuard
-  - Request DTO : query `page` (opt, default 1), `limit` (opt, default 20)
-  - Response DTO : `BookingDashboardItem[]` (pas de total/meta pagination renvoyé)
-  - Errors : 400 (pagination invalide)
-  - Pagination : Supportée back mais pas de `total` renvoyé → front ne peut pas paginer
-  - Sécurité : ownership via `where: { proId: userId }` — OK
-
-- **[PATCH] /api/bookings/:id/status** → `BookingController.updateBookingStatus()` → `BookingService.updateBookingStatus()` → auth: JwtAuthGuard
-  - Request DTO : `{ status: 'CONFIRMED' | 'DECLINED' }` (Zod via UpdateBookingStatusSchema)
-  - Response DTO : `{ id, status, timeSlot, proId }`
-  - Errors : 403 (ownership), 400 (statut invalide), 404 (not found), 400 (créneau indisponible)
-  - Sécurité : ownership `booking.proId !== userId` — OK. Winner-Takes-All en transaction.
-
-- **[PATCH] /api/bookings/:id/duration** → `BookingController.updateBookingDuration()` → `BookingService.updateBooking()` → auth: JwtAuthGuard
-  - Request DTO : `{ duration: 1-8 }` (class-validator DTO)
-  - Response DTO : `{ id, status, timeSlot, duration, isModifiedByPro }`
-  - Errors : 403 (role/ownership), 400 (statut/déjà modifié), 409 (conflit créneaux)
-  - Sécurité : ownership check OK. `isModifiedByPro` flag = une seule modif.
-
-- **[PATCH] /api/bookings/:id/complete** → `BookingController.completeBooking()` → `BookingService.completeBooking()` → auth: JwtAuthGuard
-  - Request DTO : aucun body
-  - Response DTO : `{ id, status, timeSlot, completedAt }`
-  - Errors : 403 (role/ownership), 400 (statut/créneau futur), 404
-  - Sécurité : ownership + vérification timeSlot passé — OK
-
-### Attendu (référentiel)
-- Pagination avec total pour UI
-- Ownership strict sur toutes les mutations
-- Transactions pour les confirmations
-- Logs d'audit pour les changements de statut
-
-### Actuel (constaté)
-- **Auth/AuthZ** : JwtAuthGuard sur tous les endpoints. Role check dans le service (pas via guard pour bookings, mais vérifié manuellement). Ownership vérifié systématiquement.
-- **Validations serveur** : Zod pour status, class-validator pour duration. Mélange de stratégie de validation.
-- **Logique métier** : CONFIRMED utilise `$transaction` avec Winner-Takes-All (annule les PENDING/WAITING concurrents). DECLINED = update simple. Duration modification = vérification créneaux consécutifs + flag `isModifiedByPro`.
-- **Erreurs** : Messages génériques français. Pas de codes d'erreur structurés.
-- **Perf** : `getMyBookings` renvoie bookings avec joins (category, city, client). Pagination back OK (skip/take) mais pas de count total renvoyé. Index `[proId, timeSlot]` et `[proId]` existent — couvrent les requêtes principales.
-- **Observabilité** : EventEmitter pour CREATED/CONFIRMED/CANCELLED/MODIFIED. Pas de requestId. `console.error` dans `autoCompletePreviousBooking`.
-- **Tests** : ❌ ZÉRO test pour BookingService ou BookingController.
-- **Sécurité** : Pas de rate limiting sur les PATCH (un PRO pourrait spam accept/refuse). Le `bookingId` est un cuid exposé directement (pas de publicId).
-
-## 5) Base de données — État attendu vs état actuel
-- **Tables** : Booking (233-283), BookingEvent (285-299)
-- **Contraintes/index** : `@@index([proId, timeSlot])`, `@@index([proId])`, `@@index([clientId])` — adéquats pour les requêtes PRO.
-- **Migrations** : NON TROUVÉ — vérifier `packages/database/prisma/migrations/`.
-- **Requêtes observées** : `findMany` avec `skip/take/orderBy` pour listing, `findUnique` + `update` dans transaction pour confirmation, `findMany` pour conflits.
-- **Risques** : Pas de `@@index([status, proId])` pour filtrer par statut (le front filtre en mémoire). `autoCompletePreviousBooking` fait un `findMany` + N updates hors transaction.
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Front → `GET /bookings` (aucun param) → Back (default page=1, limit=20) → DB `findMany({where: {proId}, skip: 0, take: 20})`. Le type `BookingDashboardItem` du contrat est utilisé côté front.
-- **Incohérences** :
-  - Le back renvoie max 20 bookings mais le front affiche comme si c'était exhaustif (pas de "charger plus").
-  - Le statut `WAITING_FOR_CLIENT` n'apparaît dans aucun onglet front → bookings invisibles.
-  - `CANCELLED_AUTO_OVERLAP` n'est pas dans la liste du filtre "cancelled" front → bookings invisibles.
-  - Client phone exposé en clair dans la réponse API et affiché sans masquage.
-- **Gestion erreurs** : APIError → `alert()`. Erreurs réseau = `console.error` + `setBookings([])`.
-- **Risques sécurité** : Phone PII du client affiché sans condition de statut. Pas de CSRF protection spécifique sur les PATCH (mais les cookies sont httpOnly + X-CSRF-PROTECTION header via api.ts).
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : Statut `WAITING_FOR_CLIENT` invisible dans les onglets → le PRO ne voit pas les bookings en attente de réponse client après modification de durée
-- **C2** : `CANCELLED_AUTO_OVERLAP` non listé dans le filtre "cancelled" → bookings disparus de l'UI
-- **C3** : Pas de pagination front : si un PRO a >20 bookings, les anciens sont tronqués sans indication
-
-### IMPORTANTS
-- **I1** : `alert()` / `confirm()` natifs → UX pauvre, pas accessible, bloquant
-- **I2** : Phone client affiché en clair sur tous les statuts → devrait être masqué sauf CONFIRMED
-- **I3** : Aucun test backend pour le flux booking (accept/refuse/duration/complete)
-- **I4** : Pas de `total` dans la réponse paginée → impossible d'implémenter pagination front
-- **I5** : Mélange Zod (status) / class-validator (duration) sur le même controller
-
-### NICE-TO-HAVE
-- Optimistic updates pour les actions Accept/Refuse
-- Polling ou SSE pour les nouveaux bookings
-- `role="tablist"` / `role="tab"` pour les onglets
-- Focus trap dans la modale de durée
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard/bookings)
-### Quick wins (≤2h)
-- [ ] Renvoyer `{ data: bookings[], total: number, page, limit }` depuis `getMyBookings`
-- [ ] Ajouter `WAITING_FOR_CLIENT` et `CANCELLED_AUTO_OVERLAP` dans les filtres front
-- [ ] Masquer le phone client sauf si statut CONFIRMED ou COMPLETED
-- [ ] Ajouter `@Throttle` sur les PATCH bookings (rate limit mutations)
-
-### Moyen (½–2 jours)
-- [ ] Tests unitaires pour BookingService (accept, refuse, duration, complete, ownership)
-- [ ] Implémenter pagination front avec "charger plus" ou navigation par page
-- [ ] Remplacer `alert()`/`confirm()` par des composants inline (toast/modal)
-- [ ] Unifier la validation : tout Zod ou tout class-validator dans booking controller
-
-### Structurant (>2 jours)
-- [ ] Ajouter index composite `@@index([proId, status])` pour filtrage par statut côté DB
-- [ ] Cron job pour expiration automatique des PENDING (expiresAt dépassé)
-- [ ] Tests e2e pour le flux complet booking PRO
-- [ ] WebSocket/SSE pour les notifications temps réel de nouveaux bookings
-
-### Dépendances / risques
-- La pagination front dépend du `total` dans la réponse back
-- Le cron d'expiration nécessite un scheduler (NestJS @Cron)
-- L'ajout du statut `WAITING_FOR_CLIENT` dans les onglets nécessite un 4e tab ou un sous-filtre
-
----
-
-# [/dashboard/history] — Historique pro
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (auth requis)
-- **Objectif métier**: Afficher l'historique des réservations terminées/annulées/expirées du PRO.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 2 ; Back: 3 ; DB: 4 ; Intégration: 2 ; Sécurité: 4 ; Perf: 2 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/history/page.tsx`
-  - `apps/web/src/components/dashboard/DashboardLayout.tsx`
-  - `apps/web/src/components/BookingStatusBadge.tsx`
-  - `apps/api/src/booking/booking.controller.ts` (GET /bookings)
-  - `apps/api/src/booking/booking.service.ts` (getMyBookings)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/history/page.tsx` — Page historique, client-side
-- Réutilise les mêmes composants que /dashboard/bookings (DashboardLayout, BookingStatusBadge)
-
-### Backend
-- **Même endpoint** que /dashboard/bookings : `GET /api/bookings` → `getMyBookings()`
-- Pas d'endpoint dédié pour l'historique — le filtrage est fait côté client
-
-### DB
-- Même table `Booking` — même indexes
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Liste paginée des réservations passées
-- Filtrage par statut terminal (COMPLETED, DECLINED, CANCELLED*, EXPIRED)
-- Tri par date décroissant
-- Recherche/filtrage
-
-### Actuel (constaté)
-- **UI/Composants** : Liste simple sans onglets. Filtre côté client sur les statuts terminaux. Affiche catégorie + date + statut + client name. Durée affichée si >1h.
-- **Data fetching** : `getJSON('/bookings')` — charge TOUT via le même endpoint que bookings actifs. Filtre en mémoire : `COMPLETED, DECLINED, CANCELLED_BY_CLIENT, CANCELLED_BY_CLIENT_LATE, CANCELLED_BY_PRO, CANCELLED_AUTO_FIRST_CONFIRMED, EXPIRED`.
-- **Validations** : Aucune (lecture seule).
-- **Erreurs & UX** : `console.error` + `setBookings([])` en cas d'erreur. Pas de message d'erreur visible pour l'utilisateur.
-- **A11y** : Pas de `role="list"` sémantique. Emojis dans le contenu (📅, 👤, ⏱️) sans `aria-hidden`.
-- **Perf** : Même problème que bookings — charge tout (max 20) puis filtre. Si le PRO a 20 bookings actifs, l'historique peut être vide car les 20 premiers sont des actifs.
-- **NON TROUVÉ** :
-  - `CANCELLED_AUTO_OVERLAP` n'est PAS dans le filtre (même problème que bookings)
-  - `CANCELLED_AUTO_FIRST_CONFIRMED` est listé mais ce statut n'existe PAS dans l'enum DB → code mort potentiel
-  - Pas de filtre par période / recherche
-  - Pas de phone client affiché (bien — contrairement à /dashboard/bookings)
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/bookings** — Même endpoint que bookings actifs
-  - Pas de filtre `status` côté backend → renvoie TOUS les statuts mélangés
-  - Pagination default (page=1, limit=20) → l'historique peut être incomplet
-
-### Attendu (référentiel)
-- Endpoint dédié ou filtre `status` en query param pour ne charger que l'historique
-- Pagination avec total
-- Tri par date décroissant (déjà le cas)
-
-### Actuel (constaté)
-- **Auth/AuthZ** : OK (JwtAuthGuard, ownership implicite via `proId = userId`)
-- **Validations** : Pas de filtre status → le client filtre en mémoire
-- **Logique métier** : Aucune logique spécifique — simple lecture
-- **Erreurs** : Pas d'erreur spécifique à l'historique
-- **Perf** : Le back renvoie max 20 bookings tous statuts confondus. Si 15 sont PENDING/CONFIRMED, seulement 5 apparaissent dans l'historique. Pas de filtre DB optimisé.
-- **Observabilité** : Aucune
-- **Tests** : ❌ ZÉRO
-- **Sécurité** : OK — lecture seule, ownership implicite
-
-## 5) Base de données — État attendu vs état actuel
-- Identique à /dashboard/bookings
-- **Risque perf** : Pas d'index sur `status` → le filtre DB (s'il existait) ferait un scan partiel. `@@index([proId, status])` serait bénéfique.
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Front → `GET /bookings` → Back (all statuses, max 20) → Front filtre en JS → Affiche uniquement les terminaux.
-- **Incohérences** :
-  - Front liste `CANCELLED_AUTO_FIRST_CONFIRMED` qui n'existe pas dans l'enum Prisma. L'enum contient `CANCELLED_AUTO_OVERLAP`.
-  - Front filtre post-fetch → l'historique peut être vide même si des bookings historiques existent au-delà de la page 1
-  - Pas de `total` → impossible de savoir s'il y a plus de données
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : L'historique partage les mêmes 20 bookings paginés avec la page active → un PRO actif avec beaucoup de PENDING ne voit rien dans l'historique
-- **C2** : Statut `CANCELLED_AUTO_FIRST_CONFIRMED` n'existe pas dans l'enum DB → code mort, confusion
-
-### IMPORTANTS
-- **I1** : Pas de filtre `status` côté backend → gaspillage réseau et pagination incorrecte
-- **I2** : Aucun message d'erreur visible pour l'utilisateur en cas d'échec de chargement
-- **I3** : Pas de filtre par période (mois/année) pour un historique long
-
-### NICE-TO-HAVE
-- Export CSV de l'historique
-- Statistiques résumées (taux de complétion, revenus estimés)
-- Recherche par nom de client
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard/history)
-### Quick wins (≤2h)
-- [ ] Ajouter query param `status` (ou `statusIn`) à `GET /bookings` pour filtrer côté DB
-- [ ] Corriger le front : `CANCELLED_AUTO_FIRST_CONFIRMED` → `CANCELLED_AUTO_OVERLAP`
-- [ ] Ajouter un message d'erreur visible en cas d'échec de chargement
-- [ ] Renvoyer `{ data, total, page, limit }` pour la pagination
-
-### Moyen (½–2 jours)
-- [ ] Créer un endpoint dédié `GET /bookings/history` avec filtres période/statut
-- [ ] Ajouter index composite `@@index([proId, status])` en Prisma
-- [ ] Implémenter pagination front (infinite scroll ou pages)
-
-### Structurant (>2 jours)
-- [ ] Ajouter filtres avancés (par période, catégorie, ville)
-- [ ] Stats résumées côté backend (agrégations)
-
-### Dépendances / risques
-- Le filtre `statusIn` nécessite une mise à jour du controller et du Zod schema
-- L'index composite nécessite une migration Prisma
-
----
-
-# [/dashboard/availability] — Disponibilités pro
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (auth requis)
-- **Objectif métier**: Permettre au PRO de définir ses horaires de travail hebdomadaires (jours actifs + heures début/fin par jour).
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 4 ; Perf: 4 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/availability/page.tsx`
-  - `apps/web/src/lib/timeHelpers.ts` (timeToMinutes, minutesToTime, DAYS_OF_WEEK)
-  - `apps/api/src/pro/pro.controller.ts:109-116` (PUT /pro/availability)
-  - `apps/api/src/pro/pro.service.ts:354-396` (updateAvailability)
-  - `packages/contracts/src/schemas/pro.ts` (AvailabilitySlotSchema, UpdateAvailabilitySchema)
-  - `packages/database/prisma/schema.prisma` (WeeklyAvailability l.316-335)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/availability/page.tsx` — Page disponibilités, client-side
-- `apps/web/src/lib/timeHelpers.ts` — Conversion HH:MM ↔ minutes
-
-### Backend
-- `apps/api/src/pro/pro.controller.ts:109-116` — `PUT /api/pro/availability`
-- `apps/api/src/pro/pro.service.ts:354-396` — `updateAvailability()` (REPLACE ALL strategy)
-- `packages/contracts/src/schemas/pro.ts:111-134` — `AvailabilitySlotSchema` + `UpdateAvailabilitySchema`
-
-### DB
-- `WeeklyAvailability` (l.316-335) — `@@unique([proUserId, dayOfWeek])`
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- 7 jours affichés avec toggle actif/inactif
-- Sélecteur heure début/fin (format HH:MM)
-- Validation : début < fin, pas de chevauchements
-- Sauvegarde avec feedback clair
-
-### Actuel (constaté)
-- **UI/Composants** : 7 jours affichés via `DAYS_OF_WEEK`. Toggle checkbox avec style custom. Champs `<input type="time">` pour début/fin (affichés si jour actif). Valeurs par défaut 09:00-18:00 pour les jours non configurés.
-- **Data fetching** : `getJSON('/pro/me')` → extrait `availability` du dashboard. Après save, re-fetch `/pro/me` pour confirmer. `putJSON('/pro/availability', payload)` pour sauvegarder.
-- **Validations** : ❌ Aucune validation front que `startTime < endTime`. Le Zod schema backend valide `startMin < endMin` via refine, mais le front ne prévient pas l'utilisateur avant submit. ❌ Pas de validation que les heures sont dans des plages raisonnables (ex: un PRO pourrait mettre 00:00-01:00).
-- **Erreurs & UX** : Messages inline error/success (pas d'alert() — mieux que bookings). Bouton disabled pendant save.
-- **A11y** : Les labels des inputs time n'ont pas de `htmlFor`/`id`. Le toggle checkbox est `sr-only` (bien) mais le label parent n'a pas de `for`. Le toggle fonctionne au clavier (peer-focus visible).
-- **Perf** : Seuls les jours actifs sont envoyés → payload léger. Re-fetch complet du dashboard après save (lourd pour juste confirmer les dispos).
-- **NON TROUVÉ** : Pas de guard auth dans la page elle-même (délégué à `DashboardLayout`). Pas de gestion des exceptions de disponibilité (jours fériés, vacances).
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/pro/me** → `ProController.getMyDashboard()` → `ProService.getMyDashboard()` → auth: JwtAuthGuard + RolesGuard('PRO')
-  - Renvoie tout le dashboard dont `availability: WeeklyAvailability[]`
-
-- **[PUT] /api/pro/availability** → `ProController.updateAvailability()` → `ProService.updateAvailability()` → auth: JwtAuthGuard + RolesGuard('PRO')
-  - Request DTO : `AvailabilitySlotInput[]` (Zod : dayOfWeek 0-6, startMin 0-1439, endMin 0-1439, isActive boolean)
-  - Response DTO : `WeeklyAvailability[]` créés
-  - Errors : 404 (profil non trouvé)
-  - Sécurité : `req.user.id` utilisé directement → ownership implicite
-
-### Attendu (référentiel)
-- Validation chevauchements interdits
-- Transaction pour REPLACE ALL
-- Cohérence avec le slot generator (getAvailableSlots)
-
-### Actuel (constaté)
-- **Auth/AuthZ** : JwtAuthGuard + RolesGuard('PRO') au niveau controller. Ownership implicite via `req.user.id`.
-- **Validations serveur** : Zod valide chaque slot individuellement (dayOfWeek range, startMin < endMin). ❌ Pas de validation inter-slots : un PRO pourrait envoyer deux slots pour le même jour (un second slot écraserait via REPLACE ALL mais le premier deleteMany les supprime tous, puis createMany les recrée — pas de conflit unique si 2 slots même jour puisque le unique constraint est `[proUserId, dayOfWeek]` → Prisma lèverait une erreur P2002 si duplicate dayOfWeek dans le payload).
-- **Logique métier** : Stratégie REPLACE ALL dans une transaction : 1) deleteMany, 2) createMany, 3) findMany pour retourner les nouvelles données. Correct et atomique.
-- **Erreurs** : 404 si profil non trouvé. L'erreur P2002 pour dayOfWeek dupliqué dans le payload n'est pas catchée → erreur 500.
-- **Perf** : Transaction légère (max 7 slots par PRO). Pas de N+1.
-- **Observabilité** : Aucun log. Pas d'événement émis.
-- **Tests** : ❌ ZÉRO test pour updateAvailability.
-- **Sécurité** : OK — ownership strict via userId du JWT.
-
-## 5) Base de données — État attendu vs état actuel
-- **Table** : `WeeklyAvailability` — id, proUserId, dayOfWeek, startMin, endMin, isActive, timestamps
-- **Contraintes** : `@@unique([proUserId, dayOfWeek])` — un seul slot par jour par PRO
-- **Index** : Unique constraint sert d'index. Pas d'index additionnel nécessaire (max 7 rows par PRO).
-- **Requêtes** : deleteMany + createMany dans transaction — efficace.
-- **Risques** : Pas de validation DB que `startMin < endMin` (dépend de Zod). ❌ Pas de check DB pour `0 ≤ dayOfWeek ≤ 6`.
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Front `HH:MM` → `timeToMinutes()` → API `startMin/endMin` (int) → DB `Int`. Reconversion `minutesToTime()` au fetch.
-- **Incohérences** :
-  - Front envoie seulement les jours actifs (`filter(slot => slot.isActive)`) → les jours inactifs sont supprimés de la DB (deleteMany supprime tout, createMany ne recrée que les actifs). C'est voulu mais un toggle ON→OFF→ON perd la config précédente (restaure les defaults 09:00-18:00).
-  - La cohérence avec `getAvailableSlots()` est assurée : le slot generator lit WeeklyAvailability pour le même dayOfWeek.
-- **Risques** : Si un PRO sauvegarde des dispos vides (tout inactif), tous les créneaux sont supprimés. Pas de confirmation "Aucun jour actif — êtes-vous sûr ?"
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : Aucune validation front `startTime < endTime` → le PRO peut sauvegarder 18:00-09:00, qui sera rejeté par Zod mais avec un message d'erreur non explicite
-
-### IMPORTANTS
-- **I1** : Pas de gestion des dayOfWeek dupliqués dans le payload → erreur 500 non catchée
-- **I2** : Labels sans htmlFor/id sur les inputs time
-- **I3** : Toggle ON→OFF→ON perd la configuration horaire précédente
-- **I4** : Pas de confirmation quand toutes les dispos sont désactivées
-- **I5** : Zéro test backend
-
-### NICE-TO-HAVE
-- Exceptions ponctuelles (jours fériés, vacances) — modèle `AvailabilityException` existe en DB mais pas d'UI
-- Prévisualisation des slots résultants ("un client verra ces créneaux")
-- Undo/rollback des changements
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard/availability)
-### Quick wins (≤2h)
-- [ ] Ajouter validation front `startTime < endTime` avant submit
-- [ ] Catch l'erreur P2002 pour dayOfWeek dupliqué → message clair
-- [ ] Ajouter htmlFor/id sur les labels time
-- [ ] Ajouter confirmation quand 0 jours actifs
-
-### Moyen (½–2 jours)
-- [ ] Dé-dupliquer les dayOfWeek dans le service avant createMany (prendre le dernier)
-- [ ] Tests unitaires pour updateAvailability
-- [ ] Conserver la config horaire des jours désactivés (champ séparé ou envoi de tous les jours)
-- [ ] Log d'audit des changements de disponibilité
-
-### Structurant (>2 jours)
-- [ ] UI pour les `AvailabilityException` (jours fériés, vacances)
-- [ ] Prévisualisation des slots disponibles après modification
-- [ ] Timezone-awareness (Morocco DST) — actuellement assumé UTC+1
-
-### Dépendances / risques
-- Les AvailabilityException nécessitent un nouveau controller/service
-- La gestion des timezones est un chantier transverse qui affecte aussi booking
-
----
-
-# [/dashboard/services] — Gestion services pro
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (auth requis)
-- **Objectif métier**: Permettre au PRO de sélectionner les catégories de services qu'il propose, définir le type de tarification (fixe ou fourchette) et les prix.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 4 ; Perf: 3 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/services/page.tsx`
-  - `apps/api/src/pro/pro.controller.ts:87-94` (PUT /pro/services)
-  - `apps/api/src/pro/pro.service.ts:261-342` (updateServices)
-  - `packages/contracts/src/schemas/pro.ts` (ProServiceSchema, UpdateServicesSchema)
-  - `packages/database/prisma/schema.prisma` (ProService l.211-231)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/services/page.tsx` — Page services, client-side
-
-### Backend
-- `apps/api/src/pro/pro.controller.ts:87-94` — `PUT /api/pro/services`
-- `apps/api/src/pro/pro.service.ts:261-342` — `updateServices()` (REPLACE ALL strategy)
-- `packages/contracts/src/schemas/pro.ts:44-100` — `ProServiceSchema` + `UpdateServicesSchema`
-
-### DB
-- `ProService` (l.211-231) — `@@unique([proUserId, categoryId])`, `@@index([categoryId])`
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Liste de toutes les catégories disponibles
-- Toggle actif/inactif par catégorie
-- Saisie prix (fixe ou fourchette) par service actif
-- Validation : prix positifs, min < max pour RANGE
-- Règle métier gratuit : max 1 service si non premium
-
-### Actuel (constaté)
-- **UI/Composants** : Toutes les catégories affichées avec toggle. Sélecteur FIXED/RANGE. Inputs prix avec `type="number"` min=0. Design cohérent avec le reste du dashboard.
-- **Data fetching** : `Promise.all([getJSON('/public/categories'), getJSON('/pro/me')])` — bon parallélisme. `putJSON('/pro/services', payload)` pour save. Re-fetch après save pour confirmation.
-- **Validations** : ❌ Pas de validation front que `minPriceMad < maxPriceMad`. ❌ Pas de validation que le prix est raisonnable (un PRO pourrait mettre 0 ou 999999). Les inputs ont `min="0"` mais `required` est set uniquement sur les champs visibles. ❌ Pas d'avertissement si le PRO (gratuit) active plus d'un service — l'erreur viendrait du back.
-- **Erreurs & UX** : Messages inline error/success. Bouton disabled pendant save.
-- **A11y** : Labels sans `htmlFor`/`id`. Le toggle est identique à la page availability (sr-only checkbox, peer styles). Le select `pricingType` n'a pas d'id lié au label.
-- **Perf** : `parseInt` pour convertir les prix string → int. Pas de debounce. Re-fetch dashboard complet après save.
-- **NON TROUVÉ** : Pas d'indication UI de la limite gratuit (1 service max).
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/public/categories** → `CatalogController.getCategories()` → cached, public
-- **[GET] /api/pro/me** → `ProController.getMyDashboard()` → inclut `services: ProService[]`
-- **[PUT] /api/pro/services** → `ProController.updateServices()` → `ProService.updateServices()`
-  - Request DTO : `ProServiceInput[]` (Zod : categoryId regex, pricingType enum, prices, isActive)
-  - Response DTO : `ProService[]` avec category includes
-  - Errors : 404 (profil non trouvé / catégories invalides), 400 (limite gratuit dépassée)
-  - Sécurité : JwtAuthGuard + RolesGuard('PRO') + ownership implicite via userId
-
-### Attendu (référentiel)
-- Validation complète des prix
-- Règle métier : limite services gratuits
-- Transaction REPLACE ALL
-- Cohérence avec /pro/[id] (profil public)
-
-### Actuel (constaté)
-- **Auth/AuthZ** : JwtAuthGuard + RolesGuard('PRO'). Ownership implicite.
-- **Validations serveur** : Zod `refine` valide : FIXED → fixedPriceMad requis ; RANGE → min+max requis + min < max. ✅ Règle métier : `!isPremium && categoryPublicIds.length > 1` → 400. ✅ Vérifie que toutes les catégories existent. ✅ Map publicId → internalId.
-- **Logique métier** : Transaction REPLACE ALL : deleteMany + createMany + findMany. Correct et atomique. Déduplique les categoryIds avec `[...new Set()]`.
-- **Erreurs** : Messages en français. L'erreur "limité à 1 service" est claire.
-- **Perf** : Transaction simple. `findMany` avec includes pour le retour. Pas de N+1.
-- **Observabilité** : Aucun log. Pas d'événement émis.
-- **Tests** : ❌ ZÉRO.
-- **Sécurité** : Les prix ne sont pas bornés côté Zod (juste `positive()`) — un PRO pourrait mettre fixedPriceMad = 999999999.
-
-## 5) Base de données — État attendu vs état actuel
-- **Table** : `ProService` — id, proUserId, categoryId, isActive, pricingType, minPriceMad, maxPriceMad, fixedPriceMad, timestamps
-- **Contraintes** : `@@unique([proUserId, categoryId])` — un seul service par catégorie par PRO
-- **Index** : `@@index([categoryId])` — pour les requêtes de recherche par catégorie
-- **Requêtes** : deleteMany + createMany dans transaction
-- **Risques** : `pricingType` est `String?` en DB (pas d'enum) → possibilité de valeurs incohérentes si un autre chemin écrit en DB. `fixedPriceMad`, `minPriceMad`, `maxPriceMad` sont `Int?` → pas de CHECK constraint.
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Front `ServiceFormData` (string prices) → `parseInt` → API `ProServiceInput` (int prices) → DB `Int?`. CategoryId = publicId format `cat_xxx_000` → résolu en internalId côté service.
-- **Incohérences** :
-  - Front envoie `undefined` pour les prix non pertinents (fixedPriceMad si RANGE) → Zod les passe en `undefined` → Prisma les stocke comme `null`. OK.
-  - ❌ Si le PRO switch de RANGE à FIXED, les anciens min/maxPriceMad ne sont pas nettoyés côté DB (le REPLACE ALL recrée tout, donc c'est OK via deleteMany).
-  - La cohérence avec `/pro/[id]` (profil public) est assurée : les deux lisent les mêmes ProService rows.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- Aucun problème critique identifié (le flux fonctionne correctement)
-
-### IMPORTANTS
-- **I1** : Pas de validation front `minPriceMad < maxPriceMad` → erreur Zod non explicite
-- **I2** : Pas d'indication UI de la limite gratuit (1 service) avant submit
-- **I3** : Labels sans htmlFor/id
-- **I4** : Prix non borné en haut (Zod permet des valeurs irréalistes)
-- **I5** : Zéro test backend
-- **I6** : `pricingType` est un `String?` en DB au lieu d'un enum Prisma
-
-### NICE-TO-HAVE
-- Drag-and-drop pour réordonner les services
-- Prévisualisation du profil public
-- Historique des changements de prix
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard/services)
-### Quick wins (≤2h)
-- [ ] Validation front `min < max` pour RANGE avant submit
-- [ ] Afficher la limite "1 service max (compte gratuit)" dans l'UI
-- [ ] Ajouter htmlFor/id sur labels
-- [ ] Borner les prix Zod : `.max(100000)` pour éviter les valeurs aberrantes
-
-### Moyen (½–2 jours)
-- [ ] Tests unitaires pour updateServices (limite gratuit, catégories invalides, prix)
-- [ ] Migrer `pricingType` vers un enum Prisma
-- [ ] Log d'audit des changements de services
-
-### Structurant (>2 jours)
-- [ ] Historique des prix (table dédiée)
-- [ ] Modération des prix (alerter si prix anormalement élevé/bas)
-
-### Dépendances / risques
-- La migration de `pricingType` String → enum nécessite une migration Prisma avec transformation de données
-- La borne de prix max devrait être alignée avec le business (quel est le prix max raisonnable pour un service au Maroc ?)
-
----
-
-# [/dashboard/profile] — Profil pro (dashboard)
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (auth requis)
-- **Objectif métier**: Permettre au PRO de modifier son téléphone de contact et sa ville depuis le dashboard.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 3 ; Perf: 4 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/profile/page.tsx`
-  - `apps/api/src/pro/pro.controller.ts:63-70` (PATCH /pro/profile)
-  - `apps/api/src/pro/pro.service.ts:143-249` (updateProfile)
-  - `packages/contracts/src/schemas/pro.ts` (UpdateProProfileSchema)
-  - `apps/web/src/store/authStore.ts` (setUser)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/profile/page.tsx` — Page profil dashboard, client-side
-
-### Backend
-- `apps/api/src/pro/pro.controller.ts:63-70` — `PATCH /api/pro/profile`
-- `apps/api/src/pro/pro.service.ts:143-249` — `updateProfile()` (transaction User + ProProfile)
-- `packages/contracts/src/schemas/pro.ts:15-27` — `UpdateProProfileSchema`
-
-### DB
-- `User` (phone, cityId), `ProProfile` (cityId, whatsapp) — synchronisation duale
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Formulaire pour modifier téléphone et ville
-- Validation phone format marocain
-- Dropdown ville depuis l'API
-- Synchronisation avec le store global
-
-### Actuel (constaté)
-- **UI/Composants** : Formulaire simple : téléphone (input tel) + ville (select dropdown). Affichage "Ville actuelle" sous le select. Bouton submit disabled pendant save.
-- **Data fetching** : `Promise.all([getJSON('/pro/me'), getJSON('/public/cities')])`. `patchJSON('/pro/profile', formData)` pour save. Après save, met à jour le store authStore via `setUser()`.
-- **Validations** : Pattern HTML `^(06|07)\d{8}$` sur le téléphone (validation navigateur). `required` sur les deux champs. ❌ Pas de validation JS côté client — dépend du pattern HTML. Le pattern front (`06|07`) est différent du pattern back Zod (`06|07` aussi, OK) mais différent du RegisterDto qui accepte aussi `05` et `+212` → incohérence.
-- **Erreurs & UX** : Messages inline error/success. Bon pattern UX.
-- **A11y** : ✅ `htmlFor` + `id` présents sur les deux champs (phone, cityId). Bon.
-- **Perf** : Deux appels parallèles au chargement. Un seul PATCH au save. Store global mis à jour → synchronisé.
-- **NON TROUVÉ** :
-  - Pas de champs firstName/lastName/email dans ce formulaire — non modifiables depuis le dashboard.
-  - La page `/profile` (globale) et `/dashboard/profile` sont deux pages différentes. Doublon partiel.
-  - Les villes dans le dropdown utilisent `city.id` (publicId retourné par `/public/cities`). Le formData envoie `cityId` = publicId → le back résout via `city.findUnique({ where: { publicId } })` → OK.
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/pro/me** → Dashboard complet
-- **[GET] /api/public/cities** → Liste des villes (cached)
-- **[PATCH] /api/pro/profile** → `ProService.updateProfile()`
-  - Request DTO : `{ phone?: string, cityId?: string, whatsapp?: string }` (Zod UpdateProProfileSchema)
-  - Response DTO : `{ user: {...}, profile: {...} }` avec city resolved
-  - Errors : 404 (profil non trouvé), 400 (ville invalide / données invalides)
-  - Sécurité : JwtAuthGuard + RolesGuard('PRO') + ownership implicite
-
-### Attendu (référentiel)
-- Transaction pour synchroniser User + ProProfile
-- Vérification unicité phone
-- Résolution publicId → internalId pour cityId
-
-### Actuel (constaté)
-- **Auth/AuthZ** : JwtAuthGuard + RolesGuard('PRO'). Ownership via `req.user.id`.
-- **Validations serveur** : Zod valide phone regex `(06|07)\d{8}`, cityId regex `city_[a-z]+_\d{3}`. Vérification unicité phone en DB (exclut l'utilisateur courant). Vérification existence ville.
-- **Logique métier** : ✅ Transaction atomique met à jour User (cityId, phone) ET ProProfile (cityId, whatsapp) simultanément. Résolution publicId → internalId correcte.
-- **Erreurs** : Messages génériques "Données invalides" (pas de leak d'info sur qui a déjà le phone).
-- **Perf** : Transaction simple. Pas de N+1.
-- **Observabilité** : Aucun log.
-- **Tests** : ❌ ZÉRO.
-- **Sécurité** : ❌ Le champ `whatsapp` est dans le DTO (rétrocompatibilité) mais le front ne l'envoie pas. Si quelqu'un envoie manuellement un whatsapp via Postman, il serait mis à jour sans validation supplémentaire.
-
-## 5) Base de données — État attendu vs état actuel
-- **Tables** : `User` (phone unique, cityId FK), `ProProfile` (cityId FK, whatsapp)
-- **Contraintes** : phone unique sur User, cityId FK vers City
-- **Synchronisation** : La transaction met à jour les deux tables — cohérent.
-- **Risques** : Si la transaction échoue après update User mais avant update ProProfile → rollback OK ($transaction).
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Front `formData.cityId` (publicId string) → Back résout via `city.findUnique({ where: { publicId } })` → DB `User.cityId` et `ProProfile.cityId` (internalId).
-- **Incohérences** :
-  - ❌ Le dashboard profile modifie `phone` et `cityId`. La page `/profile` (globale) modifie `firstName`, `lastName`, `cityId` via un endpoint DIFFÉRENT (`PATCH /users/me` avec un DTO qui attend `@IsUUID('4')` pour cityId). Le PRO a deux pages qui modifient des champs qui se chevauchent (cityId) avec des validations différentes.
-  - Le phone pattern du dashboard (`06|07`) exclut le `05` et le `+212` qui sont acceptés à l'inscription → un PRO inscrit avec 05xxx ou +212xxx ne peut pas re-sauvegarder sans changer de numéro.
-- **Risques sécurité** : Le champ `whatsapp` deprecated est toujours accepté par le backend.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : Doublon partiel avec `/profile` (page globale) — même champ `cityId` modifiable avec des validations DIFFÉRENTES (publicId regex ici vs @IsUUID('4') dans users controller)
-- **C2** : Phone pattern `(06|07)` exclut les numéros `05` et `+212` valides à l'inscription → PRO bloqué si inscrit avec ces formats
-
-### IMPORTANTS
-- **I1** : Champ `whatsapp` deprecated toujours accepté par le backend → surface d'attaque inutile
-- **I2** : Zéro test backend pour updateProfile
-- **I3** : Pas de modification firstName/lastName/email depuis le dashboard
-
-### NICE-TO-HAVE
-- Unifier `/profile` et `/dashboard/profile` en une seule page
-- Historique des modifications de profil
-- Vérification par SMS du nouveau numéro
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard/profile)
-### Quick wins (≤2h)
-- [ ] Supprimer le champ `whatsapp` du UpdateProProfileSchema (breaking: vérifier qu'aucun client ne l'utilise)
-- [ ] Aligner le regex phone : accepter `05` et `+212` comme à l'inscription
-- [ ] Documenter la différence entre `/profile` et `/dashboard/profile`
-
-### Moyen (½–2 jours)
-- [ ] Tests unitaires pour updateProfile (phone unicité, city résolution, transaction)
-- [ ] Unifier les endpoints `/users/me` et `/pro/profile` ou clarifier les responsabilités
-- [ ] Corriger `/users/me` pour accepter publicId au lieu de UUID pour cityId
-
-### Structurant (>2 jours)
-- [ ] Unifier les deux pages profil en une seule avec un formulaire complet
-- [ ] Ajouter vérification SMS pour changement de numéro
-- [ ] Log d'audit pour toute modification de profil
-
-### Dépendances / risques
-- Supprimer `whatsapp` du schema est un breaking change pour les éventuels clients API externes
-- L'unification des pages profil nécessite une refonte UX
-
----
-
-# [/dashboard/kyc] — Vérification KYC
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (auth requis)
-- **Objectif métier**: Permettre au PRO de soumettre son dossier KYC (CIN recto/verso + numéro) pour vérification d'identité. Gérer les re-soumissions après rejet.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 3 ; Perf: 4 ; Tests/Obs: 2
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/kyc/page.tsx`
-  - `apps/api/src/kyc/kyc.controller.ts`
-  - `apps/api/src/kyc/kyc.service.ts`
-  - `apps/api/src/kyc/kyc.dto.ts` (SubmitKycSchema)
-  - `apps/api/src/kyc/multer.config.ts`
-  - `packages/database/prisma/schema.prisma` (ProProfile.kyc*, KycAccessLog)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/kyc/page.tsx` — Page KYC, client-side
-
-### Backend
-- `apps/api/src/kyc/kyc.controller.ts` — 4 endpoints : upload, submit, resubmit, status, getFile
-- `apps/api/src/kyc/kyc.service.ts` — Logique KYC (submit, resubmit, status, file access)
-- `apps/api/src/kyc/kyc.dto.ts` — Zod schema SubmitKycSchema
-- `apps/api/src/kyc/multer.config.ts` — Config upload (5MB, jpg/png/webp, UUID naming)
-
-### DB
-- `ProProfile` — champs KYC : cinNumber (unique), kycStatus (enum), kycCinFrontUrl, kycCinBackUrl, kycSelfieUrl, kycRejectionReason
-- `KycAccessLog` — table d'audit (userId, filename, result, ip)
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Affichage du statut KYC actuel (NOT_SUBMITTED, PENDING, APPROVED, REJECTED)
-- Formulaire de soumission (cinNumber + 2 fichiers)
-- Gestion re-soumission après rejet
-- Upload sécurisé (taille, format)
-- PII protégé
-
-### Actuel (constaté)
-- **UI/Composants** :
-  - Badge statut contextuel (4 états visuels distincts).
-  - Alerte rouge proéminente si REJECTED avec motif de rejet.
-  - Waiting room si PENDING (spinner + message "sous 24-48h").
-  - Formulaire visible uniquement si NOT_SUBMITTED ou REJECTED.
-  - File inputs avec preview nom + taille.
-  - Info box avec formats/taille acceptés.
-- **Data fetching** :
-  - `getJSON('/kyc/status')` pour le statut.
-  - Submit via `fetch()` direct (pas via `postFormData` de lib/api.ts) avec FormData multipart.
-  - ❌ Le front envoie `cinNumber` + `cinFront` (file) + `cinBack` (file) dans un FormData directement à `/kyc/submit` ou `/kyc/resubmit`. Mais le backend `/kyc/submit` attend un JSON body avec `cinNumber`, `frontUrl`, `backUrl` (des URLs, pas des fichiers). Le front utilise `/kyc/resubmit` avec des fichiers quand status=REJECTED, mais pour la première soumission, le workflow attendu par le backend est : upload séparé via `/kyc/upload` → récupérer l'URL → envoyer les URLs à `/kyc/submit`. **Le front bypasse ce workflow et envoie directement les fichiers à `/kyc/submit`** → cela devrait échouer puisque `/kyc/submit` n'a pas de FileInterceptor.
-  - CEPENDANT : en relisant, le front envoie un FormData à `/kyc/submit` mais l'endpoint attend un JSON body validé par Zod (cinNumber, frontUrl, backUrl). Le FormData contiendrait `cinNumber` comme texte et `cinFront`/`cinBack` comme fichiers → le Zod schema ne recevrait pas les URLs → **BUG potentiel sur la première soumission**.
-  - Pour la re-soumission (REJECTED), l'endpoint `/kyc/resubmit` a bien un `FileFieldsInterceptor` → le multipart est géré. OK.
-- **Validations** : `required` sur les inputs. CIN auto-uppercase via `onChange`. File accept `image/jpeg,image/jpg,image/png,image/webp`.
-- **Erreurs & UX** : Messages inline error/success. Bouton disabled quand `submitting` ou fichiers manquants.
-- **A11y** : ✅ `htmlFor`/`id` présents sur cinNumber, frontFile, backFile. Bonne accessibilité sur cette page.
-- **Perf** : Uploads en multipart — OK. Pas de compression front des images avant upload.
-- **NON TROUVÉ** : Pas de prévisualisation des images uploadées (juste nom+taille). Pas de progress bar pour l'upload.
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/kyc/status** → `KycController.getMyKycStatus()` → `KycService.getMyKycStatus()` → auth: JwtAuthGuard + RolesGuard('PRO')
-  - Response : `{ kycStatus, kycRejectionReason, hasCinNumber }`
-
-- **[POST] /api/kyc/submit** → `KycController.submitKyc()` → `KycService.submitKyc()` → auth: JwtAuthGuard + RolesGuard('PRO')
-  - Request DTO : `{ cinNumber, frontUrl, backUrl }` (Zod : cinNumber string + trim + uppercase, URLs valides)
-  - ❌ Pas de FileInterceptor → attend des URLs, pas des fichiers
-  - Response : ProProfile avec champs KYC sélectionnés
-  - Errors : 404 (profil), 409 (CIN dupliqué)
-
-- **[POST] /api/kyc/resubmit** → `KycController.resubmitKyc()` → `KycService.resubmitKyc()` → auth: JwtAuthGuard + RolesGuard('PRO')
-  - Request : multipart/form-data avec `cinFront`, `cinBack` (fichiers), `cinNumber` (texte)
-  - Response : ProProfile mis à jour
-  - Errors : 403 (statut != REJECTED), 409 (CIN dupliqué)
-
-- **[POST] /api/kyc/upload** → `KycController.uploadImage()` → auth: JwtAuthGuard + RolesGuard('PRO')
-  - Request : multipart/form-data avec `file`
-  - Response : `{ url, filename }`
-  - Sécurité : multer config (5MB, jpg/png/webp, UUID rename)
-
-- **[GET] /api/kyc/file/:filename** → `KycController.getKycFile()` → `KycService.getKycFile()` → auth: JwtAuthGuard + Roles('PRO','ADMIN')
-  - Sécurité : path traversal prevention, extension whitelist, ownership check, audit log
-  - Response : file stream avec headers sécurisés (no-cache, no-sniff, CSP none)
-
-### Attendu (référentiel)
-- Upload sécurisé (taille, format, antivirus)
-- Stockage sécurisé des PII (chiffrement, accès restreint)
-- Audit trail complet
-- Workflow statut clair (NOT_SUBMITTED → PENDING → APPROVED/REJECTED)
-- Accès fichiers restreint (ownership)
-
-### Actuel (constaté)
-- **Auth/AuthZ** : JwtAuthGuard + RolesGuard('PRO') sur tous les endpoints. getKycFile autorise aussi ADMIN. Ownership vérifié dans getKycFile (compare `profile.userId !== requestingUserId`).
-- **Validations serveur** : Zod valide cinNumber (trim+uppercase) et URLs. Multer config : 5MB max, extensions jpg/png/webp.
-- **Logique métier** : submitKyc met à jour le profil existant (pas de création). resubmitKyc vérifie le statut REJECTED. Unicité CIN gérée par Prisma P2002 catch.
-- **Erreurs** : Messages génériques "Données en conflit" pour CIN dupliqué.
-- **Perf** : Upload local sur disque. Stream pour la lecture fichier avec timeout 15s.
-- **Observabilité** : ✅ `KycAccessLog` table d'audit pour chaque accès fichier (userId, filename, result ALLOW/DENY, ip). Logger NestJS pour les erreurs. C'est la meilleure observabilité de tout le projet.
-- **Tests** : ❌ ZÉRO test pour KycService ou KycController.
-- **Sécurité** :
-  - ✅ Path traversal prevention (`path.basename`, interdiction de `..`)
-  - ✅ Extension whitelist sur le streaming
-  - ✅ Headers sécurisés sur le streaming (no-sniff, no-cache, CSP none)
-  - ✅ Audit log sur chaque accès fichier
-  - ❌ Pas d'antivirus/scanning sur les fichiers uploadés (multer accepte tout fichier qui passe le filtre extension)
-  - ❌ Pas de validation du contenu réel du fichier (magic bytes) — un fichier malveillant renommé en .jpg passerait
-  - ❌ Les URLs KYC (kycCinFrontUrl, kycCinBackUrl) sont des URLs publiques non signées → accessible sans auth si on connaît l'URL (ex: `http://localhost:3001/uploads/kyc/uuid.jpg`)
-  - ❌ Le répertoire `uploads/kyc/` est probablement servi statiquement → les fichiers CIN sont accessibles publiquement
-
-## 5) Base de données — État attendu vs état actuel
-- **Tables** :
-  - `ProProfile` — cinNumber (String? @unique), kycStatus (KycStatus enum), kycCinFrontUrl (String?), kycCinBackUrl (String?), kycSelfieUrl (String?), kycRejectionReason (String?)
-  - `KycAccessLog` — table d'audit pour les accès fichiers
-- **Contraintes** : cinNumber unique, kycStatus enum (NOT_SUBMITTED, PENDING, APPROVED, REJECTED)
-- **Index** : Unique sur cinNumber.
-- **Requêtes** : `findUnique` pour le profil, `update` pour les modifications, `findFirst` avec `OR` pour la résolution de fichier.
-- **Risques** :
-  - Les URLs KYC stockent des URLs complètes (`http://...`) → si le PUBLIC_URL change, toutes les URLs sont cassées.
-  - kycSelfieUrl est défini dans le schema mais jamais utilisé dans le code.
-  - Pas de chiffrement des données KYC en DB.
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** :
-  - Front (première soumission) : FormData(`cinNumber`, `cinFront` file, `cinBack` file) → **POST /kyc/submit** qui attend JSON(`cinNumber`, `frontUrl`, `backUrl`) → **MISMATCH**
-  - Front (re-soumission) : FormData(`cinNumber`, `cinFront` file, `cinBack` file) → **POST /kyc/resubmit** avec FileFieldsInterceptor → OK
-- **Incohérences** :
-  - **BUG CRITIQUE** : La première soumission KYC depuis le front envoie des fichiers à un endpoint qui attend des URLs. Le workflow correct serait : upload les 2 fichiers via `/kyc/upload`, récupérer les URLs, puis soumettre via `/kyc/submit`. Le front ne fait pas ce workflow en 2 étapes.
-  - Le `/kyc/resubmit` gère correctement les fichiers en multipart.
-  - Si le PRO s'est inscrit avec CIN via le formulaire d'inscription (auth.service register), le kycStatus est PENDING et des URLs existent déjà → la page KYC affiche "En cours de vérification".
-- **Risques sécurité** : URLs KYC potentiellement publiques sans signature.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : **BUG** — La première soumission KYC depuis le dashboard envoie des fichiers multipart à `/kyc/submit` qui attend un JSON body avec des URLs → la soumission échoue probablement (ou Zod rejette car les champs frontUrl/backUrl ne sont pas des URLs valides)
-- **C2** : Les fichiers KYC (photos CIN) sont stockés dans `uploads/kyc/` avec des URLs publiques non signées → un attaquant connaissant le UUID du fichier peut accéder aux photos CIN sans authentification
-- **C3** : Pas de validation magic bytes des fichiers uploadés → un fichier malveillant renommé en .jpg est accepté
-
-### IMPORTANTS
-- **I1** : Pas de compression/redimensionnement des images avant stockage → un fichier 5MB reste 5MB
-- **I2** : Les URLs KYC sont des URLs absolues → si PUBLIC_URL change, toutes les URLs cassent
-- **I3** : Zéro test backend pour KYC (service critique avec PII)
-- **I4** : `kycSelfieUrl` existe en DB mais n'est pas utilisé → champ orphelin
-- **I5** : Pas de notification au PRO quand le KYC est approuvé/rejeté (seulement visible au refresh)
-
-### NICE-TO-HAVE
-- Progress bar pour l'upload
-- Prévisualisation des images uploadées
-- Chiffrement at-rest des fichiers KYC
-- Stockage sur un service cloud (S3) avec URLs pré-signées
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard/kyc)
-### Quick wins (≤2h)
-- [ ] **URGENT** : Corriger le front pour utiliser le workflow 2 étapes (upload → submit) OU ajouter FileFieldsInterceptor à `/kyc/submit`
-- [ ] Ajouter validation magic bytes (vérifier que le contenu est réellement une image)
-- [ ] Protéger le dossier `uploads/kyc/` : ne PAS le servir statiquement, forcer le passage par `/kyc/file/:filename`
-- [ ] Stocker des chemins relatifs au lieu d'URLs absolues dans kycCinFrontUrl/kycCinBackUrl
-
-### Moyen (½–2 jours)
-- [ ] Tests unitaires pour KycService (submit, resubmit, status, file access)
-- [ ] Ajouter compression/redimensionnement des images (sharp) dans le pipeline upload
-- [ ] Ajouter notification (event) quand le statut KYC change
-- [ ] Supprimer le champ `kycSelfieUrl` orphelin (migration)
-
-### Structurant (>2 jours)
-- [ ] Migrer le stockage vers S3 avec URLs pré-signées (time-limited)
-- [ ] Ajouter chiffrement at-rest pour les fichiers KYC
-- [ ] Tests e2e pour le flux KYC complet (upload, submit, approve, reject, resubmit)
-- [ ] Intégrer un scanner antivirus sur les uploads (ClamAV ou service cloud)
-
-### Dépendances / risques
-- La protection du dossier uploads nécessite une configuration NestJS/Express (supprimer `ServeStaticModule` pour ce path)
-- La migration S3 est un changement d'infrastructure
-- L'ajout de sharp pour la compression peut nécessiter une dépendance native
-
----
-
-# Synthèse Phase 3 — Dashboard PRO (hors paiement)
-
-## Problèmes transverses
-
-### Contrats API (bookings/history/availability/services/profile/kyc)
-- Mélange Zod (pro, booking status, kyc) et class-validator (booking duration) dans le même projet — aucune stratégie unifiée
-- Pas de `total` dans les réponses paginées → pagination front impossible
-- Pas de codes d'erreur structurés (ex: `PHONE_ALREADY_USED`, `CATEGORY_NOT_FOUND`) — messages texte uniquement
-
-### Cohérence des statuts (bookings, KYC)
-- `WAITING_FOR_CLIENT` et `CANCELLED_AUTO_OVERLAP` invisibles dans les onglets front des bookings
-- `CANCELLED_AUTO_FIRST_CONFIRMED` référencé dans le front n'existe pas dans l'enum DB
-- Le workflow KYC front (submit) ne match pas le backend (attend URLs, reçoit fichiers)
-
-### Sécurité (ownership, PII KYC, permissions)
-- Ownership correctement vérifié sur TOUTES les mutations (via userId du JWT)
-- ❌ Fichiers KYC (photos CIN) potentiellement accessibles publiquement sans auth
-- ❌ Phone client exposé sans masquage dans les bookings PRO
-- ❌ Champ `whatsapp` deprecated toujours accepté par le backend
-- ✅ Audit log existant pour les accès fichiers KYC (meilleure observabilité du projet)
-- ✅ Path traversal prevention sur le file streaming
-
-### Performance (index, pagination, N+1)
-- Indexes existants couvrent les requêtes principales (`[proId, timeSlot]`, `[proId]`, `[categoryId]`)
-- ❌ Pas d'index `[proId, status]` pour le filtrage par statut
-- ❌ Le front charge tous les bookings (max 20) et filtre en mémoire → historique potentiellement vide
-- Les transactions sont utilisées correctement pour les écritures (availability, services, booking confirmation)
-
-### Tests/observabilité
-- ❌ **ZÉRO test** sur l'ensemble des 6 pages/endpoints audités
-- Observabilité : EventEmitter pour les bookings (CREATED/CONFIRMED/CANCELLED/MODIFIED), KycAccessLog pour les accès fichiers. Pas de requestId, pas de métriques, `console.error` dans certains services.
-
-## Risques majeurs (Top 5)
-
-1) **BUG KYC Submit** : La première soumission KYC depuis le dashboard est probablement cassée (front envoie des fichiers, back attend des URLs). Impact : un PRO qui n'a pas soumis son KYC à l'inscription ne peut pas le faire depuis le dashboard.
-
-2) **Fichiers KYC publiquement accessibles** : Les photos CIN sont stockées dans `uploads/kyc/` et potentiellement servies statiquement. Un attaquant connaissant le UUID du fichier peut accéder aux documents d'identité sans authentification. Impact : fuite massive de PII.
-
-3) **Bookings invisibles** : Les statuts `WAITING_FOR_CLIENT` et `CANCELLED_AUTO_OVERLAP` ne sont dans aucun onglet front → le PRO perd la visibilité sur ces bookings. L'historique est tronqué par la pagination partagée.
-
-4) **Doublon profil** : Deux pages (`/profile` et `/dashboard/profile`) modifient le même champ `cityId` avec des validations différentes (UUID vs publicId). La page `/profile` utilise un DTO avec `@IsUUID('4')` qui échoue avec les publicId.
-
-5) **Zéro test** : Aucun test unitaire ou d'intégration sur l'ensemble du dashboard PRO. Les flux critiques (booking confirmation avec Winner-Takes-All, KYC avec PII, availability avec impact sur les slots) ne sont pas couverts.
-
-## Plan backend priorisé (Phase suivante — améliorations)
-
-### Priorité 0 (immédiat)
-- [ ] **FIX** : Corriger le workflow KYC submit front (2 étapes upload→submit) OU ajouter FileFieldsInterceptor au backend `/kyc/submit`
-- [ ] **FIX** : Protéger `uploads/kyc/` — ne pas servir statiquement, forcer le passage par `/kyc/file/:filename` avec auth
-- [ ] **FIX** : Ajouter `WAITING_FOR_CLIENT` et `CANCELLED_AUTO_OVERLAP` dans les onglets front des bookings
-- [ ] **FIX** : Corriger le statut fantôme `CANCELLED_AUTO_FIRST_CONFIRMED` dans le front → `CANCELLED_AUTO_OVERLAP`
-- [ ] **FIX** : Aligner le phone regex entre inscription (`+212|05|06|07`) et dashboard profile (`06|07` seulement)
-
-### Priorité 1
-- [ ] Ajouter query param `statusIn` à `GET /bookings` pour filtrer côté DB (+ total dans la réponse)
-- [ ] Masquer le phone client sauf si booking CONFIRMED/COMPLETED
-- [ ] Validation magic bytes sur les uploads KYC
-- [ ] Supprimer le champ `whatsapp` du UpdateProProfileSchema
-- [ ] Ajouter validation front `startTime < endTime` (availability) et `min < max` (services)
-- [ ] Borner les prix dans le Zod schema (max raisonnable)
-- [ ] Catch P2002 pour dayOfWeek dupliqué dans updateAvailability
-
-### Priorité 2
-- [ ] Tests unitaires pour : BookingService (5 méthodes), ProService (4 méthodes), KycService (4 méthodes)
-- [ ] Unifier la stratégie de validation (tout Zod ou tout class-validator)
-- [ ] Pagination front avec total pour bookings et historique
-- [ ] Migrer `pricingType` String → enum Prisma
-- [ ] Ajouter index composite `@@index([proId, status])` sur Booking
-- [ ] Stocker des paths relatifs pour les URLs KYC (pas d'URLs absolues)
-- [ ] Résoudre le doublon `/profile` vs `/dashboard/profile` (unifier ou clarifier)
-- [ ] Remplacer `alert()`/`confirm()` par des composants UI accessibles
-- [ ] Ajouter `@Throttle` sur les mutations booking
-- [ ] Cron job pour expiration PENDING bookings (expiresAt dépassé)
-
----
-
-# PHASE 4 — Abonnements & Paiements + Premium Overview
-
-- [/plans — Plans (abonnements PRO)](#plans--plans-abonnements-pro)
-- [/pro/subscription — Résultat paiement abonnement](#prosubscription--résultat-paiement-abonnement)
-- [/dashboard/subscription/success — Paiement réussi](#dashboardsubscriptionsuccess--paiement-réussi)
-- [/dashboard/subscription/cancel — Paiement annulé](#dashboardsubscriptioncancel--paiement-annulé)
-- [/dashboard — Dashboard Overview Premium](#dashboard--dashboard-overview-premium)
-
----
-
-# [/plans] — Plans (abonnements PRO)
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (auth requis)
-- **Objectif métier**: Présenter les offres Premium (mensuel/annuel) et Boost (sponsorisé 7 jours par ville×service), permettre au PRO de lancer une demande de paiement manuel.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 4 ; DB: 4 ; Intégration: 3 ; Sécurité: 3 ; Perf: 4 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/plans/page.tsx`
-  - `apps/web/src/components/payment/PaymentButton.tsx`
-  - `apps/web/src/lib/api.ts` (postJSON)
-  - `apps/web/src/store/toastStore.ts`
-  - `apps/api/src/payment/payment.controller.ts`
-  - `apps/api/src/payment/payment.service.ts`
-  - `apps/api/src/payment/dto/initiate-payment.dto.ts`
-  - `apps/api/src/payment/utils/payment.constants.ts`
-  - `packages/database/prisma/schema.prisma` (PaymentOrder, ProSubscription, ProBoost)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/plans/page.tsx` — Page pricing, client-side
-- `apps/web/src/components/payment/PaymentButton.tsx` — Composant bouton paiement + modale instructions
-
-### Backend
-- `apps/api/src/payment/payment.controller.ts:44-56` — `POST /api/payment/checkout`
-- `apps/api/src/payment/payment.service.ts:41-145` — `initiatePayment()`
-- `apps/api/src/payment/dto/initiate-payment.dto.ts` — DTO class-validator
-- `apps/api/src/payment/utils/payment.constants.ts` — Prix et constantes plans
-
-### DB
-- `PaymentOrder` (l.510-536) — commandes de paiement
-- `ProSubscription` (l.439-464) — abonnements actifs
-- `ProBoost` (l.466-494) — boosts actifs
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard PRO strict
-- Affichage des plans avec prix, durées, features
-- Toggle mensuel/annuel pour Premium
-- Sélecteurs ville+catégorie pour Boost
-- Bouton de paiement avec feedback clair
-- Indication si déjà abonné
-
-### Actuel (constaté)
-- **UI/Composants** : Deux cartes — Premium (mensuel 350 MAD / annuel 3000 MAD, badge "Recommandé") et Boost (200 MAD/7j). Toggle mensuel/annuel pour Premium. Selects ville+catégorie pour Boost (chargés via `/public/cities` et `/public/categories`). `PaymentButton` composant réutilisable. Section "Réassurance" en bas (paiement manuel, activation sous 24-48h, sans engagement).
-- **Data fetching** : `Promise.all([cities, categories])` au mount. `PaymentButton` appelle `postJSON('/payment/checkout', payload)` au clic. Réponse affichée dans une modale avec instructions de paiement (référence, méthodes, contact).
-- **Validations** : Boost disabled si `!selectedCityId || !selectedCategoryId` — OK. Validation supplémentaire dans PaymentButton (vérifie cityId/categoryId pour BOOST avant l'appel API).
-- **Erreurs & UX** : ✅ Utilise `useToastStore` au lieu de `alert()` — meilleur pattern que le dashboard. Modale avec référence copiable (clipboard). Loader pendant la requête.
-- **A11y** : ✅ `htmlFor`/`id` sur les selects Boost (boost-city, boost-category). ❌ La modale n'a pas `role="dialog"`, `aria-modal`, ni focus trap. Les boutons toggle mensuel/annuel n'ont pas d'`aria-pressed`.
-- **Perf** : Chargement léger (2 appels publics cachés). Recharts non importé ici → pas d'impact bundle.
-- **NON TROUVÉ** :
-  - Pas d'indication si le PRO est déjà Premium → il peut re-souscrire
-  - Pas d'indication si le PRO a un Boost actif ou en cooldown → l'erreur viendrait du backend
-  - Hex hardcodé `#F08C1B`, `#D97213` dans PaymentButton modal header → viole la règle CLAUDE.md (design tokens uniquement)
-  - `slate-*` dans PaymentButton modal → incohérent avec `zinc-*` du reste du dashboard
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[POST] /api/payment/checkout** → `PaymentController.initiatePayment()` → `PaymentService.initiatePayment()` → auth: JwtAuthGuard + RolesGuard('PRO')
-  - Request DTO : `{ planType: 'PREMIUM_MONTHLY'|'PREMIUM_ANNUAL'|'BOOST', cityId?: string, categoryId?: string }` (class-validator)
-  - Response DTO : `{ success, order: { id, reference, planType, amount, currency, status }, message, paymentInstructions: { reference, amount, methods, contact, note } }`
-  - Errors : 400 (plan invalide, cityId/categoryId manquant pour BOOST, exclusivité Premium/Boost, cooldown Boost), 404 (profil non trouvé)
-  - Sécurité : ownership via `req.user.id`
-
-### Attendu (référentiel)
-- Validation complète des plans et des contraintes métier
-- Idempotence sur les demandes de paiement
-- Transaction atomique pour l'activation
-- Pas de confiance front pour le montant
-
-### Actuel (constaté)
-- **Auth/AuthZ** : JwtAuthGuard + RolesGuard('PRO'). Le prix est calculé côté serveur via `PAYMENT_PLANS[dto.planType].priceMad` — ✅ le front envoie le `amount` mais le back l'ignore et utilise sa constante.
-- **Validations serveur** : class-validator pour le DTO (planType enum, cityId/categoryId regex optionnels). Logique métier : exclusivité Premium/Boost (ne peut pas avoir les deux actifs), cooldown Boost (21 jours : 7 actif + 14 repos), cityId/categoryId obligatoires pour BOOST.
-- **Logique métier** : Génère un OID unique (`KHD-{timestamp}-{entropy}` avec 16 bytes random). Crée un `PaymentOrder` en statut PENDING. Ne fait PAS de paiement réel — le paiement est manuel (virement, cash, mobile money). Un admin confirmera via `POST /payment/admin/confirm/:oid`.
-- **Erreurs** : Messages français explicites. Pas de codes d'erreur structurés.
-- **Perf** : Requête simple (findUnique profil + create order). Résolution publicId → internalId pour city/category.
-- **Observabilité** : ✅ `Logger.log()` pour chaque demande créée.
-- **Tests** : ❌ ZÉRO test pour PaymentService ou PaymentController.
-- **Sécurité** :
-  - ❌ Pas d'idempotence : un PRO peut créer N demandes PENDING sans limite → risque de spam.
-  - ❌ Pas de rate limiting sur `/payment/checkout` (un PRO pourrait créer des centaines de PaymentOrders).
-  - ❌ Le statut `PaymentOrder.status` est un `String` en DB (pas d'enum Prisma) → possibilité de valeurs incohérentes.
-  - ❌ `PaymentOrder` n'a pas de relation FK vers `User` ou `ProProfile` → pas de `onDelete: Cascade`.
-  - ✅ Le montant est déterminé côté serveur (pas de confiance front).
-
-## 5) Base de données — État attendu vs état actuel
-- **Tables** : `PaymentOrder` (l.510-536)
-- **Contraintes** : `oid` unique. `@@index([proUserId, status])`, `@@index([oid])`.
-- **Risques** :
-  - `planType` est `String` (pas d'enum) → pas de validation DB.
-  - `status` est `String` (pas d'enum) → pas de validation DB.
-  - `proUserId` n'a pas de `@relation` vers User/ProProfile → pas de FK constraint, pas de cascade delete.
-  - `cityId`/`categoryId` dans PaymentOrder n'ont pas de FK → intégrité référentielle non garantie.
-  - Pas de `endDate` prévue dans ProSubscription → le champ `endedAt` est optionnel mais `endDate` est écrit par `activatePlan`.
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Front `PaymentButton` → `postJSON('/payment/checkout', { planType, cityId?, categoryId? })` → Back crée `PaymentOrder(PENDING)` → retourne instructions.
-- **Incohérences** :
-  - Le front envoie `amount` dans les props du bouton mais ce n'est qu'affichage — le backend calcule le prix. OK.
-  - ❌ Le front affiche le prix dans le bouton (`350 MAD`) puis l'API retourne le prix dans `paymentInstructions.amount` — si les prix sont désynchronisés (front hardcodé vs back constant), l'utilisateur voit un prix différent dans la modale.
-  - ❌ Pas d'indication du statut actuel de l'abonnement (déjà Premium ? Boost actif ? Cooldown ?). L'erreur arrive seulement après le clic.
-  - La modale PaymentButton utilise des couleurs hardcodées (`#F08C1B`, `slate-*`) incohérentes avec le design system.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : Pas d'idempotence ni de rate limiting sur `POST /payment/checkout` → un PRO peut créer des centaines de PaymentOrders PENDING (spam, DoS admin)
-- **C2** : `PaymentOrder.proUserId` n'a pas de FK constraint → données orphelines possibles si le user est supprimé
-
-### IMPORTANTS
-- **I1** : Pas d'indication front si déjà Premium/Boost actif/cooldown → l'erreur arrive après le clic
-- **I2** : `planType` et `status` sont des Strings en DB au lieu d'enums → pas de validation DB
-- **I3** : Couleurs hardcodées dans PaymentButton modal (`#F08C1B`, `slate-*`) → violation CLAUDE.md
-- **I4** : Zéro test backend
-- **I5** : Modale sans focus trap ni `role="dialog"`
-
-### NICE-TO-HAVE
-- Afficher un comparatif gratuit vs Premium
-- Prévisualisation de la date d'expiration
-- Historique des paiements du PRO
-
-## 8) Plan "Amélioration Backend" (spécifique /plans)
-### Quick wins (≤2h)
-- [ ] Ajouter `@Throttle(3, 60)` sur `POST /payment/checkout` pour limiter le spam
-- [ ] Vérifier s'il existe déjà un PaymentOrder PENDING pour le même plan avant d'en créer un nouveau (idempotence)
-- [ ] Ajouter FK relation sur `PaymentOrder.proUserId` → `ProProfile.userId`
-- [ ] Remplacer les hex hardcodés dans PaymentButton par des design tokens
-
-### Moyen (½–2 jours)
-- [ ] Migrer `planType` et `status` vers des enums Prisma
-- [ ] Endpoint `GET /payment/my-status` pour que le front sache si le PRO est déjà Premium/Boost/cooldown
-- [ ] Tests unitaires pour initiatePayment (plans valides, exclusivité, cooldown, idempotence)
-- [ ] Ajouter `role="dialog"` et focus trap à la modale PaymentButton
-
-### Structurant (>2 jours)
-- [ ] Intégration PSP réel (Stripe, CMI) pour paiement en ligne
-- [ ] Webhook system pour les confirmations automatiques
-- [ ] Cron pour expirer les PaymentOrders PENDING après 7 jours
-
-### Dépendances / risques
-- L'ajout de FK sur PaymentOrder nécessite que tous les proUserId existants soient valides
-- La migration vers des enums Prisma nécessite une transformation de données
-
----
-
-# [/pro/subscription] — Résultat paiement abonnement
-
-## 1) Résumé exécutif
-- **Rôle(s)**: Public (pas de guard auth) — accessible à tous
-- **Objectif métier**: Afficher le résultat d'une demande de paiement (success/pending/failed/error) après redirection depuis le flux de paiement.
-- **Statut global**: ❌ Risque
-- **Scores (0–5)**: Front: 2 ; Back: 0 ; DB: N/A ; Intégration: 1 ; Sécurité: 1 ; Perf: 4 ; Tests/Obs: 0
-- **Fichiers clés**:
-  - `apps/web/src/app/pro/subscription/page.tsx`
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/pro/subscription/page.tsx` — Page résultat paiement, client-side
-
-### Backend
-- **AUCUN endpoint backend** appelé par cette page. Le statut vient uniquement des query params URL.
-
-### DB
-- N/A — aucune interaction DB
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard PRO
-- Vérification du statut réel via un appel backend (pas confiance aux query params)
-- Affichage conditionnel success/pending/failed/error
-- Redirection ou CTA adaptés
-
-### Actuel (constaté)
-- **UI/Composants** : 4 états visuels basés sur `?status=` query param : success (vert, CheckCircle), pending (orange, Clock, instructions de paiement), failed (rouge, XCircle), error (jaune, AlertTriangle). Sans status → message "Aucun résultat". Liens vers /dashboard et /plans.
-- **Data fetching** : ❌ **AUCUN appel backend**. Le statut affiché est entièrement basé sur le query param `?status=success|pending|failed|error`. Le `oid` est affiché en clair comme "Référence".
-- **Validations** : Aucune validation du query param.
-- **Erreurs & UX** : Affiche le param `error` du query string comme message d'erreur. Wrappé dans `<Suspense>` pour Next.js.
-- **A11y** : Lucide icons avec rôle décoratif (OK). Liens bien stylés.
-- **Perf** : Page statique côté client. Très léger.
-- **NON TROUVÉ** :
-  - ❌ Aucun guard auth → un utilisateur non connecté peut accéder à cette page
-  - ❌ Aucune vérification backend du statut → un utilisateur peut manuellement naviguer vers `?status=success` et voir "Paiement validé" sans avoir payé
-  - ❌ Le `oid` (référence de commande) est exposé dans l'URL — pas critique mais information leak potentiel
-  - ❌ `console.log` en production (`console.log('📥 Statut paiement:', ...)`)
-  - Cette page fait doublon avec `/dashboard/subscription/success` et `/dashboard/subscription/cancel`
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **AUCUN**
-
-### Attendu (référentiel)
-- Un endpoint `GET /payment/status/:oid` devrait être appelé pour vérifier le statut réel
-- Le frontend ne devrait JAMAIS faire confiance à un query param pour afficher "Paiement validé"
-
-### Actuel (constaté)
-- L'endpoint `GET /api/payment/status/:oid` existe dans le backend mais **n'est PAS appelé** par cette page.
-- Le statut affiché est entièrement côté client, basé sur des query params manipulables.
-
-## 5) Base de données — État attendu vs état actuel
-- N/A — aucune interaction
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Query params `?status=X&oid=Y&error=Z` → UI. Aucun appel backend.
-- **Incohérences** :
-  - ❌ **FAILLE CRITIQUE** : Le statut "success" affiché dépend uniquement du query param. N'importe qui peut forger une URL `?status=success&oid=fake` et voir "Paiement validé avec succès !". Cela n'active pas réellement le plan (qui dépend de la confirmation admin), mais c'est trompeur et potentiellement exploitable en social engineering.
-  - Le backend a un endpoint de vérification (`GET /payment/status/:oid`) qui n'est pas utilisé.
-  - Doublon fonctionnel avec `/dashboard/subscription/success` et `/dashboard/subscription/cancel`.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : **FAILLE** — Le statut de paiement affiché est basé sur un query param manipulable, sans vérification backend. Un PRO pourrait croire que son paiement est validé alors qu'il ne l'est pas (ou un attaquant pourrait forger un lien).
-- **C2** : Aucun auth guard — page accessible sans connexion
-- **C3** : Doublon avec `/dashboard/subscription/success` et `/dashboard/subscription/cancel` — confusion potentielle, maintenance doublée
-
-### IMPORTANTS
-- **I1** : `console.log` en production avec les params de paiement
-- **I2** : Le `oid` est exposé en clair dans l'URL
-- **I3** : Aucun test
-
-### NICE-TO-HAVE
-- Supprimer cette page et unifier vers `/dashboard/subscription/success` et `/dashboard/subscription/cancel`
-
-## 8) Plan "Amélioration Backend" (spécifique /pro/subscription)
-### Quick wins (≤2h)
-- [ ] **URGENT** : Ajouter un appel à `GET /payment/status/:oid` pour vérifier le statut réel côté backend avant d'afficher "success"
-- [ ] Ajouter un auth guard PRO (redirection si non connecté)
-- [ ] Supprimer le `console.log` en production
-
-### Moyen (½–2 jours)
-- [ ] Décider : garder cette page OU rediriger vers `/dashboard/subscription/success|cancel`
-- [ ] Si gardée : appeler le backend systématiquement et ignorer le query param `status`
-
-### Structurant (>2 jours)
-- [ ] Supprimer la page et unifier le flux post-paiement
-
-### Dépendances / risques
-- Le choix de garder ou supprimer cette page impacte le flux de redirection du PaymentButton
-
----
-
-# [/dashboard/subscription/success] — Paiement réussi
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (via DashboardLayout parent) — mais cette page n'utilise PAS DashboardLayout
-- **Objectif métier**: Afficher une page de confirmation de paiement réussi avec confettis et liens vers le dashboard.
-- **Statut global**: ❌ Risque
-- **Scores (0–5)**: Front: 2 ; Back: 0 ; DB: N/A ; Intégration: 0 ; Sécurité: 1 ; Perf: 3 ; Tests/Obs: 0
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/subscription/success/page.tsx`
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/subscription/success/page.tsx` — Page success statique, client-side
-
-### Backend
-- **AUCUN endpoint backend** appelé
-
-### DB
-- N/A
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard PRO
-- Vérification backend du statut de paiement
-- Affichage conditionnel basé sur la réalité DB
-- Animation de célébration
-
-### Actuel (constaté)
-- **UI/Composants** : Page plein écran verte. Icône CheckCircle animée (bounce). Titre "Paiement validé !". Liste de features activées. Boutons "Accéder au Dashboard" et "Voir les offres". Note "Un email de confirmation vous a été envoyé".
-- **Data fetching** : ❌ **AUCUN appel backend**. La page affiche inconditionnellement "Paiement validé" et "Votre abonnement a été activé".
-- **Validations** : Aucune.
-- **Erreurs & UX** : Confettis animés (30 emojis DOM-manipulés avec `document.createElement` + `animate()`). Cleanup après 5s.
-- **A11y** : ❌ Les confettis sont créés via DOM manipulation directe, pas de `aria-hidden`. L'animation `animate-bounce` ne respecte pas `prefers-reduced-motion`. Le texte "Un email de confirmation vous a été envoyé" est trompeur si aucun email n'est réellement envoyé.
-- **Perf** : 30 éléments DOM créés puis supprimés → OK pour un one-shot. `recharts` n'est pas importé ici.
-- **NON TROUVÉ** :
-  - ❌ **Aucun auth guard** — pas de DashboardLayout, pas de useAuthStore, pas de useEffect redirect
-  - ❌ **Aucune vérification backend** — n'importe qui peut naviguer vers cette URL et voir "Paiement validé"
-  - ❌ "Un email de confirmation vous a été envoyé" → NON TROUVÉ de système d'envoi d'email dans le codebase (vérifier `apps/api/src/notifications/`)
-  - Doublon fonctionnel partiel avec `/pro/subscription?status=success`
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **AUCUN**
-
-### Attendu (référentiel)
-- La page devrait vérifier auprès du backend que le paiement est réellement confirmé avant d'afficher "activé"
-
-### Actuel (constaté)
-- Aucune interaction backend. Page purement statique.
-
-## 5) Base de données — État attendu vs état actuel
-- N/A
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Aucun. Page affiche "success" inconditionnellement.
-- **Incohérences** :
-  - ❌ **FAILLE** : La page affiche "Votre abonnement a été activé avec succès" sans vérifier. N'importe qui peut accéder à cette URL.
-  - ❌ "Un email de confirmation vous a été envoyé" est probablement faux — pas de système d'email identifié.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : **FAILLE** — Page accessible sans auth, affiche "Paiement validé" sans aucune vérification backend
-- **C2** : Mention "email de confirmation envoyé" probablement mensongère — aucun système d'email identifié
-- **C3** : Confettis ne respectent pas `prefers-reduced-motion`
-
-### IMPORTANTS
-- **I1** : Aucun auth guard
-- **I2** : Doublon avec `/pro/subscription?status=success`
-- **I3** : DOM manipulation directe pour les confettis (pas React-idiomatic)
-
-### NICE-TO-HAVE
-- Remplacer les confettis DOM par une lib React (react-confetti, canvas-confetti)
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard/subscription/success)
-### Quick wins (≤2h)
-- [ ] **URGENT** : Ajouter auth guard PRO (redirect si non connecté)
-- [ ] **URGENT** : Appeler `GET /payment/status/:oid` ou `GET /pro/me` pour vérifier le statut Premium avant d'afficher "activé"
-- [ ] Supprimer ou conditionner le texte "email de confirmation envoyé"
-- [ ] Ajouter `prefers-reduced-motion` pour désactiver les confettis
-
-### Moyen (½–2 jours)
-- [ ] Passer le `oid` en query param et vérifier le statut réel
-- [ ] Décider : garder cette page OU unifier avec `/pro/subscription`
-- [ ] Ajouter un vrai système d'envoi d'email de confirmation
-
-### Structurant (>2 jours)
-- [ ] Unifier les pages de résultat de paiement en une seule route
-
-### Dépendances / risques
-- L'ajout de la vérification backend nécessite de passer le `oid` dans l'URL ou en state
-
----
-
-# [/dashboard/subscription/cancel] — Paiement annulé
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (via route /dashboard/*) — mais AUCUN auth guard
-- **Objectif métier**: Informer le PRO que le paiement a été annulé, proposer de réessayer.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 0 ; DB: N/A ; Intégration: 0 ; Sécurité: 2 ; Perf: 5 ; Tests/Obs: 0
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/subscription/cancel/page.tsx`
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/subscription/cancel/page.tsx` — Page cancel statique, client-side
-
-### Backend
-- **AUCUN**
-
-### DB
-- N/A
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard PRO
-- Message clair "aucun montant débité"
-- CTAs : Réessayer → /plans, Retour Dashboard
-
-### Actuel (constaté)
-- **UI/Composants** : Page plein écran zinc. Icône XCircle. Titre "Paiement annulé". Message "Aucun montant n'a été débité". Info box avec suggestion de réessayer. Boutons "Réessayer" → /plans et "Retour au Dashboard" → /dashboard. Support email.
-- **Data fetching** : Aucun.
-- **Validations** : N/A.
-- **Erreurs & UX** : Page statique informative. Aucun état dynamic.
-- **A11y** : OK — boutons avec texte clair, icônes décoratives.
-- **Perf** : Page statique — excellent.
-- **NON TROUVÉ** :
-  - ❌ Aucun auth guard
-  - Cette page est moins critique que /success car elle n'affirme rien de faux, mais elle ne devrait pas être accessible sans auth.
-  - Doublon partiel avec `/pro/subscription?status=failed`
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **AUCUN**
-
-### Attendu (référentiel)
-- Pas de backend nécessaire pour une page cancel (elle ne donne pas d'info sensible)
-
-### Actuel (constaté)
-- Correct pour le cas "cancel" — pas besoin de vérification backend car la page ne prétend rien.
-
-## 5) Base de données — État attendu vs état actuel
-- N/A
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Aucun.
-- **Incohérences** : Doublon avec `/pro/subscription?status=failed`.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- Aucun problème critique (la page ne prétend rien de faux)
-
-### IMPORTANTS
-- **I1** : Aucun auth guard — un utilisateur non connecté peut voir cette page
-- **I2** : Doublon avec `/pro/subscription?status=failed`
-
-### NICE-TO-HAVE
-- Unifier les pages de résultat de paiement
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard/subscription/cancel)
-### Quick wins (≤2h)
-- [ ] Ajouter auth guard PRO (redirect si non connecté)
-
-### Moyen (½–2 jours)
-- [ ] Décider : garder cette page OU unifier avec `/pro/subscription`
-
-### Structurant (>2 jours)
-- [ ] Unifier toutes les pages post-paiement
-
-### Dépendances / risques
-- Impact faible — page statique informative
-
----
-
-# [/dashboard] — Dashboard Overview Premium
-
-## 1) Résumé exécutif
-- **Rôle(s)**: PRO uniquement (auth requis) + Premium requis (redirection si non Premium)
-- **Objectif métier**: Afficher les KPIs du PRO Premium : demandes par jour (7j), taux de conversion, prochaine réservation.
-- **Statut global**: ⚠️ Fragile
-- **Scores (0–5)**: Front: 3 ; Back: 3 ; DB: 4 ; Intégration: 3 ; Sécurité: 3 ; Perf: 3 ; Tests/Obs: 1
-- **Fichiers clés**:
-  - `apps/web/src/app/dashboard/page.tsx`
-  - `apps/web/src/components/dashboard/DashboardLayout.tsx`
-  - `apps/api/src/dashboard/dashboard.controller.ts`
-  - `apps/api/src/dashboard/dashboard.service.ts`
-  - `apps/api/src/pro/pro.controller.ts` (GET /pro/me)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/dashboard/page.tsx` — Page overview, client-side (recharts)
-- `apps/web/src/components/dashboard/DashboardLayout.tsx` — Layout avec auth guard + menu conditionnel
-
-### Backend
-- `apps/api/src/dashboard/dashboard.controller.ts:23-27` — `GET /api/dashboard/stats`
-- `apps/api/src/dashboard/dashboard.service.ts:35-140` — `getStats()`
-- `apps/api/src/pro/pro.controller.ts:51-54` — `GET /api/pro/me` (pour le isPremium check)
-
-### DB
-- `Booking` — requêtes d'agrégation (count, findMany, findFirst)
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- Auth guard PRO + Premium gating (redirect si non Premium)
-- Graphiques (demandes/jour, taux conversion)
-- KPIs cards (pending, confirmed, declined)
-- Prochaine réservation
-- Loading/error states
-
-### Actuel (constaté)
-- **UI/Composants** : 3 KPI cards (pending, confirmés, refusés). Graphique ligne (recharts LineChart) — demandes 7 derniers jours. Graphique donut (PieChart) — taux conversion. Prochaine réservation avec détails client.
-- **Data fetching** :
-  1. `getJSON('/pro/me')` → vérifier `isPremium` → si non Premium, `router.replace('/dashboard/bookings')`
-  2. Si Premium : `getJSON('/dashboard/stats')` → KPIs
-- **Validations** : Gating front : `if (!data.profile.isPremium) router.replace('/dashboard/bookings')`. Le menu sidebar dans DashboardLayout conditionne aussi le lien "Vue d'ensemble" sur `isPremium`.
-- **Erreurs & UX** : Error message inline. Loading spinners pour les graphiques. "..." pendant le chargement des KPIs.
-- **A11y** : ❌ Les graphiques recharts n'ont pas de `role="img"` ni d'`aria-label` descriptif. Les emojis (⏳, ✅, ❌) dans les KPI cards ne sont pas wrappés en `aria-hidden`. ❌ Hex hardcodés dans les couleurs des graphiques (`#10b981`, `#ef4444`, `#3b82f6`).
-- **Perf** : `recharts` est importé dynamiquement côté client → impact bundle important (~200KB). Deux appels API séquentiels (pro/me → puis stats). Pas de cache.
-- **NON TROUVÉ** :
-  - Le Premium gating est côté front uniquement (le back vérifie juste le rôle PRO, pas isPremium). Un PRO non Premium pourrait appeler `GET /dashboard/stats` directement via curl.
-  - Le phone du client de la prochaine réservation est affiché en clair.
-  - Les hardcoded hex `#10b981`, `#ef4444`, `#3b82f6` violent la règle CLAUDE.md.
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- **[GET] /api/pro/me** → `ProController.getMyDashboard()` → auth: JwtAuthGuard + RolesGuard('PRO')
-  - Pas de check Premium côté backend
-
-- **[GET] /api/dashboard/stats** → `DashboardController.getStats()` → `DashboardService.getStats()` → auth: JwtAuthGuard (pas de RolesGuard)
-  - Request : aucun body
-  - Response : `{ requestsCount: [{date, count}], conversionRate: {confirmed, declined}, pendingCount, nextBooking }`
-  - Errors : 403 (role != PRO)
-  - Sécurité : ❌ Vérifie le rôle PRO mais PAS le statut Premium → un PRO gratuit peut accéder aux stats
-
-### Attendu (référentiel)
-- Premium gating côté backend (pas juste front)
-- Agrégations efficaces (count, group by)
-- Données sensibles protégées
-
-### Actuel (constaté)
-- **Auth/AuthZ** : JwtAuthGuard (pas de RolesGuard au niveau controller, le role check est dans le service). ❌ Pas de check `isPremium` — n'importe quel PRO peut accéder aux stats.
-- **Validations serveur** : Juste le rôle PRO.
-- **Logique métier** :
-  - `requestsCount` : `findMany` des bookings des 7 derniers jours, groupage en mémoire JS (pas d'agrégation SQL). Initialise les 7 jours à 0 puis compte.
-  - `conversionRate` : 2 `count` queries parallèles (CONFIRMED, DECLINED) — all-time, pas fenêtré.
-  - `pendingCount` : `count` PENDING.
-  - `nextBooking` : `findFirst` CONFIRMED + timeSlot >= now, orderBy timeSlot asc.
-- **Erreurs** : 403 si pas PRO.
-- **Perf** : ❌ Le `requestsCount` fait un `findMany` puis itère en mémoire au lieu d'utiliser `groupBy` Prisma. Pour un PRO avec beaucoup de bookings, cela charge tous les bookings des 7 jours en mémoire. Les 2 `count` + 1 `findFirst` sont efficaces (utilise les index `[proId]`). Total: 4 requêtes DB.
-- **Observabilité** : Aucun log.
-- **Tests** : ❌ ZÉRO test pour DashboardService.
-- **Sécurité** : ❌ Phone client exposé dans `nextBooking` sans masquage. ❌ Pas de Premium gating backend.
-
-## 5) Base de données — État attendu vs état actuel
-- **Tables** : `Booking` — requêtes d'agrégation
-- **Index** : `@@index([proId])` couvre les requêtes de stats. `@@index([proId, timeSlot])` pour le nextBooking.
-- **Requêtes** :
-  - `findMany` (bookings 7j) → potentiellement lourd si beaucoup de bookings
-  - `count` × 2 (confirmed, declined) → all-time, pourrait être lent sur gros volumes
-  - `findFirst` (next booking) → OK
-- **Risques** : Les `count` all-time pourraient devenir lents avec le temps. Pas d'index `[proId, status]` dédié (mais `[proId]` est suffisant pour le filtre).
-
-## 6) Intégration Front ↔ Back ↔ DB
-- **Mapping** : Front → `GET /pro/me` (isPremium check) → `GET /dashboard/stats` → Back agrège les bookings → Front affiche dans recharts.
-- **Incohérences** :
-  - ❌ Le Premium gating est frontend-only : `if (!data.profile.isPremium) router.replace('/dashboard/bookings')`. Le backend n'a PAS de vérification Premium sur `GET /dashboard/stats`.
-  - ❌ `conversionRate` est all-time (pas 7j ou 30j) → incohérent avec le graphique "7 derniers jours" affiché à côté.
-  - Le type `DashboardStats` front ne correspond pas exactement au type `DashboardStatsResponse` back (phone dans nextBooking est string côté front, pas de nullabilité explicite).
-- **Risques sécurité** : Phone client affiché en clair dans la prochaine réservation.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **C1** : Premium gating frontend-only — un PRO gratuit peut appeler `GET /dashboard/stats` et accéder aux statistiques
-- **C2** : Phone client exposé en clair dans la prochaine réservation (même problème que /dashboard/bookings)
-
-### IMPORTANTS
-- **I1** : `conversionRate` est all-time au lieu d'être fenêtré (30j ou 7j) → peut être trompeur
-- **I2** : `requestsCount` fait un `findMany` + groupage JS au lieu d'une agrégation SQL → potentiel perf issue
-- **I3** : Hex hardcodés dans les graphiques (`#10b981`, `#ef4444`, `#3b82f6`)
-- **I4** : recharts (~200KB) chargé en client-side sans lazy import
-- **I5** : Zéro test backend pour DashboardService
-
-### NICE-TO-HAVE
-- Lazy import de recharts (next/dynamic)
-- Cache des stats (invalidation toutes les 5min)
-- Widget "revenus estimés" basé sur les prix des services
-
-## 8) Plan "Amélioration Backend" (spécifique /dashboard)
-### Quick wins (≤2h)
-- [ ] **URGENT** : Ajouter check `isPremium` dans `DashboardService.getStats()` (ou via guard)
-- [ ] Masquer le phone client dans nextBooking (ou le conditionner au statut)
-- [ ] Fenêtrer `conversionRate` sur 30 jours au lieu de all-time
-
-### Moyen (½–2 jours)
-- [ ] Remplacer le `findMany` + groupage JS par `prisma.booking.groupBy()` pour les stats 7j
-- [ ] Tests unitaires pour DashboardService
-- [ ] Lazy import recharts via `next/dynamic` avec `ssr: false`
-- [ ] Remplacer les hex hardcodés par des variables CSS
-
-### Structurant (>2 jours)
-- [ ] Cache layer pour les stats (Redis ou in-memory avec TTL)
-- [ ] Agrégations plus avancées (revenus, taux de complétion, temps moyen de réponse)
-- [ ] API dédiée pour les graphiques avec paramètres de fenêtre (7j, 30j, 90j)
-
-### Dépendances / risques
-- Le check isPremium backend dépend de la fiabilité de `ProProfile.isPremium` (qui dépend du cycle d'activation/expiration)
-- Le groupBy Prisma nécessite une version récente de Prisma
-
----
-
-# Synthèse Phase 4 — Abonnements & Paiements + Premium Overview
-
-## Problèmes transverses
-
-### Contrats API subscription/billing
-- Le système de paiement est 100% MANUAL (MVP) : le PRO crée une demande PENDING, un admin confirme manuellement. Pas de PSP intégré (Stripe, CMI).
-- Le `PaymentOrder.status` et `planType` sont des `String` en DB au lieu d'enums Prisma → aucune validation DB.
-- `PaymentOrder.proUserId` n'a pas de FK constraint → données orphelines possibles.
-- Pas d'idempotence sur la création de demandes → un PRO peut spammer des PaymentOrders PENDING.
-
-### Cohérence des statuts premium
-- La source de vérité pour le statut Premium est `ProProfile.isPremium` + `premiumActiveUntil`. La mise à jour se fait dans `activatePlan()` via transaction atomique — ✅ correct.
-- ❌ Il n'y a PAS de cron/job pour expirer les abonnements quand `premiumActiveUntil` est dépassé → un PRO reste Premium indéfiniment après expiration.
-- ❌ Le front affiche "success" basé sur des query params ou des pages statiques, SANS vérifier le backend. Trois pages distinctes servent de "retour paiement" (`/pro/subscription`, `/dashboard/subscription/success`, `/dashboard/subscription/cancel`) → confusion et duplication.
-
-### Sécurité paiements (webhooks, idempotence, replay)
-- Pas de webhooks (paiement 100% manuel).
-- ❌ Aucune idempotence sur `POST /payment/checkout`.
-- ❌ Aucun rate limiting sur les endpoints paiement.
-- ❌ Les pages success/cancel sont accessibles SANS auth et SANS vérification backend — un utilisateur peut voir "Paiement validé" sans avoir payé.
-- ✅ Le montant est déterminé côté serveur (pas de confiance front sur le prix).
-- ✅ L'activation du plan utilise une transaction atomique.
-
-### Performance & cohérence DB
-- Les index `@@index([proUserId, status])` sur PaymentOrder et ProSubscription sont adéquats.
-- Le dashboard stats fait un `findMany` + groupage JS au lieu d'agrégation SQL.
-- `conversionRate` est all-time → peut devenir lent avec beaucoup de bookings.
-
-### Tests/observabilité
-- ❌ **ZÉRO test** sur PaymentService, PaymentController, DashboardService.
-- PaymentService utilise `Logger.log()` — meilleure observabilité que les autres services.
-- DashboardService n'a aucun log.
-
-## Risques majeurs (Top 5)
-
-1) **Pages success sans vérification backend** : `/dashboard/subscription/success` affiche "Paiement validé" sans auth ni vérification. `/pro/subscription?status=success` fait la même chose basé sur un query param. N'importe qui peut naviguer vers ces URLs. Impact : tromperie, social engineering potentiel.
-
-2) **Pas d'expiration automatique Premium** : Aucun cron/job pour passer `isPremium = false` quand `premiumActiveUntil` est dépassé. Impact : un PRO reste Premium gratuitement après expiration de son abonnement.
-
-3) **Premium gating frontend-only** : `GET /dashboard/stats` ne vérifie pas `isPremium` côté backend. Un PRO gratuit peut appeler l'endpoint directement. Impact : contournement du paywall (stats seulement, pas les features mécaniques comme les 3 services).
-
-4) **Pas d'idempotence/rate limit sur checkout** : Un PRO peut créer des centaines de PaymentOrders PENDING → spam pour l'admin, pollution DB. Impact : DoS opérationnel.
-
-5) **Duplication pages post-paiement** : 3 routes différentes (`/pro/subscription`, `/dashboard/subscription/success`, `/dashboard/subscription/cancel`) servent le même objectif avec des implémentations différentes. Impact : confusion développeur, maintenance doublée, incohérences futures.
-
-## Plan backend priorisé (Phase suivante — améliorations)
-
-### Priorité 0 (immédiat)
-- [ ] **FIX** : Ajouter auth guard PRO sur `/dashboard/subscription/success` et `/dashboard/subscription/cancel`
-- [ ] **FIX** : Sur `/pro/subscription` et `/dashboard/subscription/success`, appeler `GET /payment/status/:oid` ou `GET /pro/me` pour vérifier le statut réel avant d'afficher "success"
-- [ ] **FIX** : Ajouter check `isPremium` dans `DashboardService.getStats()` — gate backend
-- [ ] **FIX** : Créer un cron job pour expirer les abonnements Premium (`premiumActiveUntil < now` → `isPremium = false`, `SubscriptionStatus = EXPIRED`)
-- [ ] **FIX** : Ajouter `@Throttle(3, 60)` sur `POST /payment/checkout`
-
-### Priorité 1
-- [ ] Ajouter idempotence sur checkout (vérifier s'il existe déjà un PENDING pour le même plan)
-- [ ] Unifier les pages post-paiement (1 seule route avec vérification backend)
-- [ ] Ajouter FK relation sur `PaymentOrder.proUserId`
-- [ ] Migrer `planType` et `status` en enums Prisma dans PaymentOrder
-- [ ] Masquer le phone client dans le dashboard stats
-- [ ] Fenêtrer `conversionRate` sur 30 jours
-- [ ] Supprimer le `console.log` en prod dans `/pro/subscription`
-- [ ] Supprimer le texte "email de confirmation envoyé" (ou implémenter l'email)
-
-### Priorité 2
-- [ ] Tests unitaires pour PaymentService (checkout, confirm, reject, activate, idempotence)
-- [ ] Tests unitaires pour DashboardService (stats, Premium gating)
-- [ ] Remplacer `findMany` + groupage JS par `groupBy` Prisma pour les stats
-- [ ] Lazy import de recharts (next/dynamic)
-- [ ] Endpoint `GET /payment/my-status` pour informer le front du statut courant
-- [ ] Cron pour expirer les Boosts (`boostActiveUntil < now` → `BoostStatus = EXPIRED`)
-- [ ] Cron pour expirer les PaymentOrders PENDING après 7 jours
-- [ ] Remplacer les hex hardcodés dans les graphiques et PaymentButton par des design tokens
-
----
-
-# PHASE 5 — Pages publiques & secondaires (Help / Blog / Legal)
-
----
-
-# [/help] — Centre d'aide
-
-## 1) Résumé exécutif
-- Rôle(s): Public (aucun auth requis)
-- Objectif métier: Point de contact support pour tous les utilisateurs (clients et pros)
-- Statut global: ⚠️ Fragile — page minimaliste fonctionnelle mais FAQ "bientôt disponible" = contenu placeholder indexable
-- Scores (0–5): Front: 3 ; Back: N/A ; DB: N/A ; Intégration: N/A ; Sécurité: 4 ; Perf: 4 ; Tests/Obs: 0
-- Fichiers clés: `apps/web/src/app/help/page.tsx` (62 lignes)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/help/page.tsx` — Page statique, Server Component (pas de `"use client"`)
-- Pas de layout dédié (`apps/web/src/app/help/layout.tsx` → NON TROUVÉ)
-### Backend
-- Aucun endpoint backend utilisé. Page 100% statique.
-### DB
-- Aucune table/collection impliquée.
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- SEO : title + meta description + canonical + robots (noindex si placeholder)
-- OpenGraph / Twitter cards pour le partage social
-- Contenu utile : FAQ fonctionnelle, formulaire de contact, ou au minimum mailto fiable
-- A11y : headings hiérarchiques, contraste, navigation clavier
-- Navbar + Footer cohérents (layout partagé)
-### Actuel (constaté)
-- UI/Contenu :
-  - 2 cartes : "Par e-mail" (mailto:support@khadamat.ma — fonctionnel) + "FAQ" (placeholder "Bientôt disponible")
-  - Le bloc FAQ n'est pas cliquable, pas de lien → OK pour le moment, pas d'illusion d'interactivité
-  - Pas de formulaire de contact
-  - Lien "Retour à l'accueil" vers `/` → fonctionnel
-- SEO :
-  - `title`: "Centre d'aide — Khadamat" ✅
-  - `description`: "Besoin d'aide ? Trouvez les réponses à vos questions sur Khadamat." ✅
-  - `canonical`: NON TROUVÉ — aucun canonical défini
-  - `robots/noindex`: NON TROUVÉ — page placeholder indexable par Google → ⚠️ Le contenu "bientôt disponible" sera indexé
-  - OpenGraph/Twitter cards: NON TROUVÉ — aucune meta OG sur aucune page du site
-- Navigation (liens) :
-  - Lien depuis Footer (`/help`) ✅ vérifié dans `Footer.tsx:174`
-  - Lien "Retour à l'accueil" (`/`) ✅
-  - Pas de lien depuis Navbar (seulement `/blog` dans Navbar) → cohérent, /help est secondaire
-- A11y :
-  - `<h1>` "Centre d'aide" ✅
-  - `<h2>` "Par e-mail" et "FAQ" ✅ — hiérarchie correcte
-  - `aria-hidden="true"` sur les icônes décoratives (Mail, MessageCircle) ✅
-  - Lien `<a href="mailto:...">` — accessible au clavier ✅
-  - Le bloc FAQ est un `<div>` non-interactif → OK, pas de confusion
-  - Contraste : utilise design tokens (`text-text-secondary`, `text-text-primary`) → conforme si tokens respectent WCAG AA
-- Perf :
-  - Server Component (pas de JS client) ✅
-  - Pas d'images, pas de fetch → léger
-  - Pas de lazy loading nécessaire
-- NON TROUVÉ :
-  - `robots.txt` → ni `apps/web/public/robots.txt` ni `apps/web/src/app/robots.ts` trouvé
-  - `sitemap.xml` → ni `apps/web/src/app/sitemap.ts` trouvé
-  - Aucun OpenGraph sur l'ensemble du site
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- Aucun. Page 100% statique, Server Component Next.js.
-### Attendu (référentiel)
-- Si formulaire de contact : endpoint POST avec validation, anti-spam (captcha/honeypot), rate limit, stockage/notification
-- Si FAQ dynamique : endpoint GET avec cache
-### Actuel (constaté)
-- Endpoints : Aucun ✅ (cohérent avec le contenu statique)
-- Erreurs : N/A
-- Perf/cache : N/A (rendu statique Next.js)
-- Observabilité : N/A
-- Tests : 0 — aucun test trouvé pour cette page
-- Sécurité : Aucun risque (pas d'input utilisateur, pas de fetch)
-
-## 5) Base de données — État attendu vs état actuel
-- Tables/collections : Aucune
-- Contraintes/index : N/A
-- Migrations : N/A
-- Requêtes observées : Aucune
-- Risques cohérence/perf : Aucun
-
-## 6) Intégration Front ↔ Back ↔ DB
-- Mapping champs : N/A (pas de fetch)
-- Incohérences : Aucune
-- Gestion erreurs bout-en-bout : N/A
-- Risques de sécurité : Aucun
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- Aucun
-### IMPORTANTS
-- **SEO placeholder indexable** : La page contient "Bientôt disponible" pour la FAQ. Sans `noindex`, Google indexera ce contenu creux. Ajouter `robots: { index: false }` dans les metadata tant que la FAQ n'est pas remplie, OU retirer le placeholder.
-- **Pas de canonical** : Risque de contenu dupliqué si la page est accessible via plusieurs URLs.
-### NICE-TO-HAVE
-- Ajouter OpenGraph metadata pour un meilleur partage social
-- Implémenter la FAQ (accordéon statique ou fetch depuis un CMS/DB)
-- Ajouter un formulaire de contact avec rate limit backend + anti-spam
-- Créer `robots.txt` et `sitemap.xml` pour l'ensemble du site
-
-## 8) Plan "Amélioration Backend" (spécifique /help)
-### Quick wins (≤2h)
-- [ ] Ajouter `robots: { index: false }` dans metadata Next.js tant que FAQ placeholder
-- [ ] Ajouter canonical URL dans metadata
-### Moyen (½–2 jours)
-- [ ] Créer un endpoint `GET /public/faq` retournant les questions/réponses (ou servir depuis un fichier JSON statique)
-- [ ] Implémenter un formulaire de contact `POST /public/contact` avec validation (class-validator), rate limit (5/h par IP), et notification email
-### Structurant (>2 jours)
-- [ ] Mettre en place un mini-CMS (ou Notion/Strapi) pour gérer FAQ + articles aide dynamiquement
-- [ ] Créer `robots.txt` + `sitemap.xml` dynamiques pour tout le site
-### Dépendances / risques
-- Le formulaire de contact nécessite un service d'envoi d'emails (non trouvé dans le projet actuel)
-
----
-
-# [/blog] — Blog
-
-## 1) Résumé exécutif
-- Rôle(s): Public (aucun auth requis)
-- Objectif métier: Content marketing — conseils pour clients et pros, SEO long-tail
-- Statut global: ⚠️ Fragile — articles hardcodés dans le code, pas de lien "lire l'article", contenu placeholder indexable
-- Scores (0–5): Front: 3 ; Back: N/A ; DB: N/A ; Intégration: N/A ; Sécurité: 4 ; Perf: 4 ; Tests/Obs: 0
-- Fichiers clés: `apps/web/src/app/blog/page.tsx` (102 lignes)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/blog/page.tsx` — Page statique, Server Component. Articles hardcodés dans un tableau `const articles: Article[]`
-- Pas de layout dédié
-- Pas de route dynamique `/blog/[slug]` → NON TROUVÉ
-### Backend
-- Aucun endpoint backend utilisé. Articles 100% hardcodés.
-### DB
-- Aucune table/collection `Post`, `Article`, ou `BlogEntry` dans le schéma Prisma.
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- SEO : title + meta description + canonical + robots (noindex si placeholder)
-- OpenGraph / Twitter cards
-- Liste d'articles avec pagination, tri, slugs
-- Lien cliquable vers chaque article (`/blog/[slug]`)
-- Gestion 404 article inexistant
-- A11y : headings, semantic HTML (`<article>`, `<time>`)
-### Actuel (constaté)
-- UI/Contenu :
-  - Header avec gradient, badge "Blog", titre H1 "Blog", sous-titre
-  - 3 articles hardcodés dans un tableau TypeScript (l.16-35) : titres, excerpts, dates
-  - Chaque article affiché dans une card `<article>` avec `<time>`, `<h2>`, et un `<span>` "Bientôt disponible" (aria-disabled="true")
-  - **Aucun lien "Lire l'article"** → les articles ne sont pas cliquables → cohérent avec "Bientôt disponible"
-  - Lien "Retour à l'accueil" en bas de page
-- SEO :
-  - `title`: "Blog — Khadamat" ✅
-  - `description`: "Conseils et astuces pour mieux choisir vos professionnels et mieux travailler au Maroc." ✅
-  - `canonical`: NON TROUVÉ
-  - `robots/noindex`: NON TROUVÉ → ⚠️ Articles "bientôt disponible" indexés par Google
-  - OpenGraph: NON TROUVÉ
-  - `<time>` sans attribut `datetime` (l.68-69) → le format "Février 2026" n'est pas machine-readable → ⚠️ SEO/accessibilité
-- Navigation (liens) :
-  - Lien depuis Navbar (desktop l.158 + mobile l.326) ✅
-  - Lien depuis Footer (l.131) ✅
-  - Lien "Retour à l'accueil" (`/`) ✅
-  - Pas de route `/blog/[slug]` → cohérent (articles pas encore publiés)
-- A11y :
-  - `<h1>` "Blog" ✅
-  - `<h2>` par article ✅ — hiérarchie correcte
-  - `<article>` sémantique ✅
-  - `aria-hidden="true"` sur icônes décoratives ✅
-  - `aria-disabled="true"` sur le span "Bientôt disponible" ✅
-  - `focus-visible` sur le lien retour ✅
-  - Les cards d'articles ne sont pas interactives (pas de lien) → OK, pas d'illusion
-- Perf :
-  - Server Component (pas de JS client) ✅
-  - Pas d'images ✅
-  - Articles hardcodés → pas de fetch, rendu instantané
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- Aucun.
-### Attendu (référentiel)
-- Si blog dynamique : `GET /public/posts` (liste paginée), `GET /public/posts/:slug` (article individuel)
-- Cache HTTP (CDN/ISR) pour les pages publiques
-- Anti-draft : ne pas exposer les articles non publiés
-### Actuel (constaté)
-- Endpoints : Aucun ✅ (articles hardcodés dans le frontend)
-- Erreurs : N/A
-- Perf/cache : Rendu statique Next.js → optimal pour le MVP
-- Observabilité : N/A
-- Tests : 0
-- Sécurité : Aucun risque (pas d'input, pas de fetch)
-
-## 5) Base de données — État attendu vs état actuel
-- Tables/collections : Aucune table blog/post dans `schema.prisma`
-- Contraintes/index : N/A
-- Migrations : N/A
-- Requêtes observées : Aucune
-- Risques : Quand les articles seront dynamiques, il faudra créer un modèle `Post` avec slug unique, publishedAt, status (DRAFT/PUBLISHED), auteur, etc.
-
-## 6) Intégration Front ↔ Back ↔ DB
-- Mapping champs : N/A
-- Incohérences : Aucune (tout est statique)
-- Gestion erreurs : N/A
-- Risques : Quand le blog deviendra dynamique, s'assurer que seuls les articles `PUBLISHED` sont exposés via l'API publique
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- Aucun
-### IMPORTANTS
-- **SEO placeholder indexable** : 3 articles avec "Bientôt disponible" seront indexés par Google. Risque de mauvaise impression. Options : `noindex` ou retirer la page de la navbar tant que le contenu n'est pas réel.
-- **`<time>` sans `datetime`** : `<time>Février 2026</time>` devrait être `<time datetime="2026-02">Février 2026</time>` pour l'accessibilité et le SEO.
-- **Pas de canonical URL** : Même risque que /help.
-### NICE-TO-HAVE
-- Ajouter la route `/blog/[slug]` quand les articles seront prêts
-- Implémenter OpenGraph metadata (image, type article)
-- Ajouter un fil d'Ariane (breadcrumb) pour le SEO
-- Pagination quand le nombre d'articles grandira
-
-## 8) Plan "Amélioration Backend" (spécifique /blog)
-### Quick wins (≤2h)
-- [ ] Ajouter `datetime` attribut aux balises `<time>`
-- [ ] Ajouter `robots: { index: false }` ou retirer de la navbar tant que articles placeholder
-- [ ] Ajouter canonical URL dans metadata
-### Moyen (½–2 jours)
-- [ ] Créer modèle Prisma `Post` (id, slug unique, title, content, excerpt, publishedAt, status DRAFT/PUBLISHED, authorId)
-- [ ] Créer endpoint `GET /public/posts` (liste paginée, filtrée status=PUBLISHED, ordonnée par publishedAt DESC)
-- [ ] Créer endpoint `GET /public/posts/:slug` (article individuel, 404 si DRAFT/inexistant)
-### Structurant (>2 jours)
-- [ ] Créer `/blog/[slug]/page.tsx` avec ISR (Incremental Static Regeneration) ou SSG
-- [ ] Intégrer un CMS headless (Strapi, Sanity, ou MDX local) pour la gestion éditoriale
-- [ ] Ajouter OpenGraph images dynamiques (og:image par article)
-### Dépendances / risques
-- La migration vers un blog dynamique est indépendante du reste du projet
-- Si CMS externe : nouvelle dépendance d'infrastructure
-
----
-
-# [/legal/cgu] — Conditions Générales d'Utilisation
-
-## 1) Résumé exécutif
-- Rôle(s): Public (aucun auth requis)
-- Objectif métier: Obligation légale — cadre contractuel entre Khadamat et ses utilisateurs
-- Statut global: ❌ Risque — contenu vide ("en cours de rédaction") indexable, absence de CGU réelles alors que la plateforme est active (inscription, paiements, KYC)
-- Scores (0–5): Front: 2 ; Back: N/A ; DB: N/A ; Intégration: N/A ; Sécurité: 2 ; Perf: 4 ; Tests/Obs: 0
-- Fichiers clés: `apps/web/src/app/legal/cgu/page.tsx` (47 lignes)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/legal/cgu/page.tsx` — Page statique, Server Component. Contenu placeholder.
-- Pas de layout partagé `/legal/layout.tsx`
-### Backend
-- Aucun endpoint.
-### DB
-- Aucune table.
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- SEO : title + meta + canonical. Si placeholder : `noindex`
-- Contenu légal structuré (sections numérotées : objet, inscription, obligations, responsabilités, résiliation, droit applicable, etc.)
-- Versioning visible (date de dernière mise à jour)
-- Langue cohérente (français)
-- A11y : headings, contraste, lisibilité
-### Actuel (constaté)
-- UI/Contenu :
-  - `<h1>` "Conditions Générales d'Utilisation" ✅
-  - 1 paragraphe d'introduction ("Les présentes CGU régissent...")
-  - **Placeholder** : "Cette page est en cours de rédaction. Les CGU complètes seront publiées prochainement." dans un encadré stylé
-  - Lien mailto:support@khadamat.ma ✅
-  - Lien "Retour à l'accueil" ✅
-  - **Pas de contenu légal réel** ❌
-  - **Pas de date de version** ❌
-- SEO :
-  - `title`: "Conditions Générales d'Utilisation — Khadamat" ✅
-  - `description`: "Conditions générales d'utilisation de la plateforme Khadamat." ✅
-  - `canonical`: NON TROUVÉ ❌
-  - `robots/noindex`: NON TROUVÉ ❌ — page vide indexable
-  - OpenGraph: NON TROUVÉ
-- Navigation :
-  - Footer lien `/legal/cgu` (l.182) ✅
-  - Lien retour accueil ✅
-- A11y :
-  - Heading `<h1>` ✅
-  - Prose class pour lisibilité ✅
-  - Contraste via design tokens ✅
-  - Lien mailto accessible ✅
-- Perf :
-  - Server Component, ultra-léger ✅
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- Aucun.
-### Attendu (référentiel)
-- Option A (statique) : CGU en tant que fichier statique ou composant React — OK si versionné dans le code
-- Option B (dynamique) : Endpoint `GET /public/legal/cgu` avec versioning (date, version number)
-### Actuel (constaté)
-- Aucun endpoint, contenu statique ✅ pour le pattern, mais **le contenu est vide** ❌
-- Tests : 0
-- Sécurité : Aucun risque technique
-
-## 5) Base de données — État attendu vs état actuel
-- Tables : Aucune
-- N/A pour tout le reste
-
-## 6) Intégration Front ↔ Back ↔ DB
-- N/A (page 100% statique)
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **CGU absentes alors que la plateforme est active** : Des utilisateurs s'inscrivent, fournissent des données personnelles (CIN, email, phone), effectuent des paiements, et passent des commandes de services — le tout **sans cadre contractuel**. C'est un risque juridique majeur, notamment au regard de la Loi 09-08 (protection des données) et du Code des Obligations et Contrats marocain.
-### IMPORTANTS
-- **Page placeholder indexable** : `noindex` obligatoire tant que le contenu n'est pas réel.
-- **Pas de versioning** : Quand les CGU seront publiées, afficher la date de dernière mise à jour et conserver les versions précédentes.
-### NICE-TO-HAVE
-- Cross-link entre les 3 pages légales (CGU ↔ Privacy ↔ Mentions)
-- Bouton "Accepter les CGU" au moment de l'inscription (case à cocher) — actuellement NON TROUVÉ dans le formulaire d'inscription (`register.dto.ts` n'a pas de champ `acceptsCgu`)
-
-## 8) Plan "Amélioration Backend" (spécifique /legal/cgu)
-### Quick wins (≤2h)
-- [ ] Ajouter `robots: { index: false }` immédiatement
-- [ ] Ajouter canonical URL
-### Moyen (½–2 jours)
-- [ ] Rédiger les CGU réelles (avec juriste) et les intégrer en tant que contenu statique
-- [ ] Ajouter un champ `acceptsCgu: boolean` + `cguVersion: string` dans le RegisterDto et le modèle User
-- [ ] Enregistrer la version CGU acceptée par chaque utilisateur à l'inscription
-### Structurant (>2 jours)
-- [ ] Système de versioning CGU : stocker les versions en DB ou fichiers datés, notifier les utilisateurs lors de mises à jour, redemander acceptation
-- [ ] Layout partagé `/legal/layout.tsx` avec navigation entre les 3 pages légales
-### Dépendances / risques
-- **Bloqueur juridique** : sans CGU réelles, la plateforme opère sans base contractuelle. Priorité absolue.
-
----
-
-# [/legal/privacy] — Politique de Confidentialité
-
-## 1) Résumé exécutif
-- Rôle(s): Public (aucun auth requis)
-- Objectif métier: Obligation légale — information sur le traitement des données personnelles (Loi 09-08 marocaine)
-- Statut global: ❌ Risque — contenu vide alors que la plateforme collecte des données sensibles (CIN, email, phone, localisation)
-- Scores (0–5): Front: 2 ; Back: N/A ; DB: N/A ; Intégration: N/A ; Sécurité: 1 ; Perf: 4 ; Tests/Obs: 0
-- Fichiers clés: `apps/web/src/app/legal/privacy/page.tsx` (47 lignes)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/legal/privacy/page.tsx` — Page statique, Server Component. Contenu placeholder.
-### Backend
-- Aucun endpoint.
-### DB
-- Aucune table dédiée.
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- SEO : title + meta + canonical + noindex si placeholder
-- Contenu structuré selon Loi 09-08 : données collectées, finalités, durée de conservation, droits des personnes, responsable du traitement, contact DPO
-- Versioning (date de mise à jour)
-### Actuel (constaté)
-- UI/Contenu :
-  - `<h1>` "Politique de Confidentialité" ✅
-  - Mention de la Loi 09-08 ✅ (bonne référence juridique)
-  - **Placeholder** : "Cette page est en cours de rédaction." ❌
-  - Lien mailto ✅
-  - **Aucune information réelle** sur : quelles données sont collectées, pourquoi, combien de temps, qui y a accès ❌
-- SEO :
-  - `title`: "Politique de Confidentialité — Khadamat" ✅
-  - `description`: "Politique de confidentialité et protection des données personnelles de Khadamat." ✅
-  - `canonical`: NON TROUVÉ ❌
-  - `robots/noindex`: NON TROUVÉ ❌
-  - OpenGraph: NON TROUVÉ
-- Navigation :
-  - Footer lien `/legal/privacy` (l.190) ✅
-- A11y :
-  - Heading hiérarchie correcte ✅
-  - Contraste OK (design tokens) ✅
-- Perf : Ultra-léger, Server Component ✅
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- Aucun.
-### Attendu (référentiel)
-- Même pattern que CGU : contenu statique ou dynamique avec versioning
-- Point technique important : la politique de confidentialité devrait lister précisément les données collectées. Or le backend collecte : email, phone, CIN (cinNumber), firstName, lastName, cityId, addressLine, photos KYC, historique de bookings, données de paiement.
-### Actuel (constaté)
-- Aucun endpoint ✅
-- Tests : 0
-- Sécurité : **Risque légal** — la collecte de données personnelles (notamment le CIN = carte d'identité nationale) sans politique de confidentialité publiée est une infraction à la Loi 09-08.
-
-## 5) Base de données — État attendu vs état actuel
-- Tables impliquées indirectement (données personnelles collectées sans politique publiée) :
-  - `User` : email, phone, firstName, lastName, cinNumber, cityId, addressLine
-  - `KycDocument` : fileUrl (photos CIN/selfie)
-  - `Booking` : historique client-pro
-  - `PaymentOrder` : données de paiement
-- Aucune table de consentement ou d'audit de consentement
-
-## 6) Intégration Front ↔ Back ↔ DB
-- N/A techniquement, mais **incohérence métier critique** : le backend collecte et stocke des données personnelles sensibles (CIN, photos) sans que la politique de confidentialité ne soit publiée.
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **Politique de confidentialité absente alors que des données sensibles sont collectées** : CIN (pièce d'identité), photos, numéros de téléphone, historique de services. Infraction probable à la Loi 09-08 marocaine relative à la protection des données personnelles. La CNDP (Commission Nationale de contrôle de la protection des Données à caractère Personnel) peut sanctionner.
-- **Pas de déclaration CNDP** : NON TROUVÉ — vérifier si le traitement a été déclaré auprès de la CNDP (obligation légale au Maroc).
-### IMPORTANTS
-- **noindex manquant** : page vide indexable par Google
-- **Pas de table de consentement** : aucun enregistrement du consentement utilisateur sur le traitement de ses données
-### NICE-TO-HAVE
-- Lien vers un formulaire d'exercice des droits (accès, rectification, suppression)
-- Lien vers la déclaration CNDP quand elle sera faite
-
-## 8) Plan "Amélioration Backend" (spécifique /legal/privacy)
-### Quick wins (≤2h)
-- [ ] Ajouter `robots: { index: false }` immédiatement
-- [ ] Ajouter canonical URL
-### Moyen (½–2 jours)
-- [ ] Rédiger la politique de confidentialité (avec juriste) listant : données collectées, finalités, durée de conservation, destinataires, droits, responsable du traitement, contact DPO
-- [ ] Ajouter un champ `privacyConsentAt: DateTime?` et `privacyVersion: String?` dans le modèle User
-- [ ] Logger le consentement à l'inscription
-### Structurant (>2 jours)
-- [ ] Effectuer la déclaration auprès de la CNDP (obligation légale Loi 09-08)
-- [ ] Implémenter un endpoint `POST /user/data-request` pour les demandes d'accès/suppression (droit des personnes)
-- [ ] Créer un endpoint `GET /user/my-data` (export données personnelles)
-- [ ] Audit complet des données collectées vs nécessité (principe de minimisation)
-### Dépendances / risques
-- **Bloqueur juridique majeur** : la collecte du CIN sans politique publiée ni déclaration CNDP expose à des sanctions.
-
----
-
-# [/legal/mentions] — Mentions Légales
-
-## 1) Résumé exécutif
-- Rôle(s): Public (aucun auth requis)
-- Objectif métier: Obligation légale — identification de l'éditeur, hébergeur, responsable de publication
-- Statut global: ❌ Risque — contenu vide, aucune mention légale réelle
-- Scores (0–5): Front: 2 ; Back: N/A ; DB: N/A ; Intégration: N/A ; Sécurité: 2 ; Perf: 4 ; Tests/Obs: 0
-- Fichiers clés: `apps/web/src/app/legal/mentions/page.tsx` (47 lignes)
-
-## 2) Cartographie technique (fichiers)
-### Frontend
-- `apps/web/src/app/legal/mentions/page.tsx` — Page statique, Server Component. Contenu placeholder.
-### Backend
-- Aucun endpoint.
-### DB
-- Aucune table.
-
-## 3) Frontend — État attendu vs état actuel
-### Attendu (référentiel)
-- SEO : title + meta + canonical + noindex si placeholder
-- Contenu obligatoire : raison sociale / nom éditeur, adresse siège, numéro RC/IF/ICE, responsable de publication, hébergeur (nom + adresse), contact
-- Versioning (date)
-### Actuel (constaté)
-- UI/Contenu :
-  - `<h1>` "Mentions Légales" ✅
-  - 1 paragraphe d'introduction : "Khadamat est une plateforme de mise en relation entre particuliers et professionnels de services au Maroc." ✅
-  - **Placeholder** : "Cette page est en cours de rédaction. Les mentions légales complètes seront publiées prochainement." ❌
-  - Lien mailto ✅
-  - **Aucune mention légale réelle** : pas de raison sociale, pas d'adresse, pas de RC/IF/ICE, pas d'hébergeur ❌
-- SEO :
-  - `title`: "Mentions Légales — Khadamat" ✅
-  - `description`: "Mentions légales de la plateforme Khadamat." ✅
-  - `canonical`: NON TROUVÉ ❌
-  - `robots/noindex`: NON TROUVÉ ❌
-  - OpenGraph: NON TROUVÉ
-- Navigation :
-  - Footer lien `/legal/mentions` (l.198) ✅
-- A11y : Identique aux autres pages légales — heading correct, tokens, accessible ✅
-- Perf : Server Component, ultra-léger ✅
-
-## 4) Backend — État attendu vs état actuel
-### Endpoints utilisés par la page
-- Aucun.
-### Attendu (référentiel)
-- Contenu statique suffisant (pas besoin de dynamique)
-- Les mentions légales sont rarement modifiées
-### Actuel (constaté)
-- Aucun endpoint ✅ (cohérent)
-- Tests : 0
-- Sécurité : Risque légal — l'absence de mentions légales peut entraîner des sanctions
-
-## 5) Base de données — État attendu vs état actuel
-- N/A
-
-## 6) Intégration Front ↔ Back ↔ DB
-- N/A
-
-## 7) Problèmes & recommandations
-### CRITIQUES
-- **Mentions légales absentes** : Toute plateforme commerciale au Maroc doit afficher les mentions légales (identification de l'éditeur). C'est une obligation réglementaire.
-### IMPORTANTS
-- **noindex manquant** : page vide indexable
-- **Pas d'information hébergeur** : même en placeholder, l'hébergeur devrait être identifié (ex: Vercel, AWS, OVH)
-### NICE-TO-HAVE
-- Cross-links entre pages légales
-- Layout partagé `/legal/layout.tsx`
-
-## 8) Plan "Amélioration Backend" (spécifique /legal/mentions)
-### Quick wins (≤2h)
-- [ ] Ajouter `robots: { index: false }` immédiatement
-- [ ] Ajouter canonical URL
-### Moyen (½–2 jours)
-- [ ] Rédiger les mentions légales complètes : éditeur (raison sociale, adresse, RC, IF, ICE), responsable de publication, hébergeur, contact
-- [ ] Créer un layout partagé `/legal/layout.tsx` avec navigation sidebar entre CGU/Privacy/Mentions
-### Structurant (>2 jours)
-- [ ] Si la société n'est pas encore formellement créée, formaliser le statut juridique (auto-entrepreneur, SARL, etc.) pour pouvoir publier des mentions légales conformes
-### Dépendances / risques
-- **Bloqueur juridique** : nécessite les informations d'identité de l'éditeur (personne physique ou morale)
-
----
-
-# Synthèse Phase 5 — Pages publiques & secondaires (Help/Blog/Legal)
-
-## Constat général
-Les 5 pages auditées sont **100% statiques** (Server Components Next.js, aucun appel backend, aucune interaction DB). Elles sont toutes fonctionnelles techniquement (pas de crash, pas de lien cassé, design cohérent). Cependant, **4 pages sur 5 contiennent du contenu placeholder** ("bientôt disponible" / "en cours de rédaction") sans `noindex`, et les **3 pages légales sont vides** alors que la plateforme est opérationnelle et collecte des données sensibles.
-
-## Problèmes transverses
-- **SEO & contenu placeholder** :
-  - 4 pages sur 5 ont du contenu placeholder indexable par Google (FAQ de /help, articles de /blog, CGU, Privacy, Mentions)
-  - Aucune page du site n'a de `canonical` URL
-  - Aucune page du site n'a de metadata OpenGraph/Twitter
-  - `robots.txt` et `sitemap.xml` inexistants sur l'ensemble du projet
-- **Liens cassés / 404** :
-  - Aucun lien cassé détecté. Tous les liens du Footer/Navbar pointent vers des pages existantes ✅
-  - Les articles de blog ne sont pas cliquables (cohérent avec le placeholder)
-- **Endpoints publics (sécurité/rate limit/cache)** :
-  - N/A — aucun endpoint backend sollicité par ces 5 pages
-  - Si un formulaire de contact ou un blog dynamique est ajouté : prévoir rate limit + validation + anti-spam
-- **Performance (assets/images)** :
-  - Aucun problème — toutes les pages sont des Server Components ultra-légers, sans images, sans JS client
-- **Tests/observabilité** :
-  - 0 test pour l'ensemble des 5 pages
-  - Pas de monitoring/analytics détecté
-
-## Risques majeurs (Top 5)
-
-1) **🔴 JURIDIQUE — Politique de confidentialité absente alors que des données sensibles sont collectées (CIN, photos KYC, téléphones)** : Infraction probable à la Loi 09-08 marocaine. La CNDP peut sanctionner. Bloqueur pour une mise en production officielle.
-
-2) **🔴 JURIDIQUE — CGU absentes alors que la plateforme permet inscription, paiements et commandes** : Pas de cadre contractuel = pas de protection juridique pour Khadamat ni pour les utilisateurs. Responsabilité engagée en cas de litige.
-
-3) **🔴 JURIDIQUE — Mentions légales absentes** : Obligation légale non remplie. L'éditeur du site n'est pas identifié.
-
-4) **🟡 SEO — Contenu placeholder indexé par Google** : Les pages "en cours de rédaction" seront indexées et affichées dans les résultats de recherche, donnant une impression d'inachevé. Risque réputationnel.
-
-5) **🟡 SEO/INFRA — Absence de robots.txt, sitemap.xml, canonical, OpenGraph sur tout le site** : Impact SEO global. Les moteurs de recherche n'ont aucune directive de crawl, pas de sitemap, et les pages manquent de metadata pour le partage social.
-
-## Plan backend priorisé (Phase suivante — améliorations)
-
-### Priorité 0 (immédiat — bloqueurs juridiques)
-- [ ] Ajouter `robots: { index: false }` sur les 4 pages placeholder (/help FAQ section, /blog, /legal/cgu, /legal/privacy, /legal/mentions) en attendant le contenu réel
-- [ ] Rédiger et publier la Politique de Confidentialité conforme Loi 09-08 (données collectées, finalités, durée, droits, responsable, contact)
-- [ ] Rédiger et publier les CGU (objet, inscription, obligations, responsabilités, paiements, résiliation, droit applicable)
-- [ ] Rédiger et publier les Mentions Légales (éditeur, RC/IF/ICE, adresse, hébergeur, responsable publication)
-- [ ] Vérifier/effectuer la déclaration auprès de la CNDP pour le traitement des données personnelles
-- [ ] Ajouter `acceptsCgu: Boolean` + `cguVersion: String` dans le modèle User et le formulaire d'inscription
-
-### Priorité 1
-- [ ] Créer `robots.txt` (via `apps/web/src/app/robots.ts`) et `sitemap.xml` (via `apps/web/src/app/sitemap.ts`) pour tout le site
-- [ ] Ajouter `canonical` URL sur toutes les pages publiques
-- [ ] Ajouter metadata OpenGraph/Twitter sur les pages principales (au minimum : homepage, /pros, /blog, pages légales)
-- [ ] Créer un layout partagé `/legal/layout.tsx` avec navigation entre les 3 pages légales
-- [ ] Ajouter `privacyConsentAt` + `privacyVersion` dans le modèle User pour tracer le consentement
-
-### Priorité 2
-- [ ] Implémenter la FAQ (/help) : soit statique (accordéon), soit dynamique (endpoint `GET /public/faq`)
-- [ ] Formulaire de contact `POST /public/contact` avec validation, rate limit (5/h par IP), anti-spam (honeypot), notification email
-- [ ] Blog dynamique : modèle Prisma `Post`, endpoints `GET /public/posts` + `GET /public/posts/:slug`, route `/blog/[slug]`, ISR
-- [ ] Endpoint `POST /user/data-request` pour les demandes d'exercice de droits (accès, rectification, suppression — Loi 09-08)
-- [ ] Tests de snapshot/smoke pour les 5 pages (vérifier que les pages rendent sans erreur)
-- [ ] Attribut `datetime` sur les balises `<time>` du blog
-
----
-
-# AUDIT TRANSVERSAL — Base de données, API & Intégration avec les pages
-
----
-
-## 1) Vue d'ensemble du schéma Prisma
-
-**Fichier** : `packages/database/prisma/schema.prisma` (569 lignes)
-**Provider** : PostgreSQL
-**Preview features** : `driverAdapters`
-**Migrations** : 2 fichiers trouvés
-- `20260206180000_baseline_init/migration.sql` (503 lignes — création de toutes les tables)
-- `20260206200000_add_kyc_access_log/migration.sql` (ajout KycAccessLog)
-
-### 1.1) Inventaire des modèles (21 modèles + 12 enums)
-
-| # | Modèle | Utilisé dans le code ? | Service(s) |
-|---|--------|:---:|------------|
-| 1 | `User` | ✅ | auth, users, booking, pro, catalog, dashboard |
-| 2 | `ProProfile` | ✅ | auth, pro, payment, catalog, kyc, booking |
-| 3 | `City` | ✅ | catalog, auth, pro, payment, booking |
-| 4 | `Category` | ✅ | catalog, pro, booking, payment |
-| 5 | `ProService` | ✅ | pro, booking, catalog |
-| 6 | `Booking` | ✅ | booking, dashboard |
-| 7 | `WeeklyAvailability` | ✅ | pro (CRUD), booking (lecture slots) |
-| 8 | `RefreshToken` | ✅ | auth, refresh-token-cleanup (cron) |
-| 9 | `PaymentOrder` | ✅ | payment |
-| 10 | `ProSubscription` | ✅ | payment (create/update dans activatePlan) |
-| 11 | `ProBoost` | ✅ | payment (create dans activatePlan) |
-| 12 | `KycAccessLog` | ✅ | kyc (write-only audit) |
-| 13 | `NewsletterSubscriber` | ✅ | newsletter |
-| 14 | **`BookingEvent`** | ❌ MORT | Events émis via EventEmitter mais **jamais persistés en DB** |
-| 15 | **`SlotLock`** | ❌ MORT | Aucune référence dans aucun service |
-| 16 | **`AvailabilityException`** | ❌ MORT | Aucune référence dans aucun service |
-| 17 | **`PenaltyLog`** | ❌ MORT | Aucune référence dans aucun service |
-| 18 | **`Report`** | ❌ MORT | Aucune référence dans aucun service |
-| 19 | **`Review`** | ❌ MORT | Aucune référence dans aucun service |
-| 20 | **`DeviceToken`** | ❌ MORT | Aucune référence dans aucun service |
-
-**Constat** : 7 modèles sur 20 (35%) sont des tables fantômes — créées par migration, jamais utilisées par le code. Elles occupent de l'espace DB, ajoutent de la complexité au schéma, et créent une fausse impression de fonctionnalité.
-
-### 1.2) Inventaire des enums
-
-| Enum | Utilisé ? | Notes |
-|------|:---------:|-------|
-| `Role` | ✅ | CLIENT, PRO, ADMIN |
-| `UserStatus` | ✅ | ACTIVE, SUSPENDED, BANNED |
-| `KycStatus` | ✅ | NOT_SUBMITTED, PENDING, APPROVED, REJECTED |
-| `BookingStatus` | ⚠️ Partiel | 11 valeurs, seulement 5 utilisées dans le code (voir ci-dessous) |
-| `BookingEventType` | ❌ | Jamais persisté en DB |
-| `PenaltyType` | ❌ | CLIENT_CANCEL_LATE, PRO_CANCEL_CONFIRMED — jamais utilisé |
-| `SubscriptionPlan` | ✅ | PREMIUM_MONTHLY_NO_COMMIT, PREMIUM_ANNUAL_COMMIT |
-| `SubscriptionStatus` | ✅ | ACTIVE, CANCELLED, EXPIRED |
-| `BoostStatus` | ✅ | ACTIVE, EXPIRED |
-| `EstimatedDuration` | ⚠️ | Défini mais seul H1 est utilisé (hardcodé à la création) |
-| `ReportStatus` | ❌ | OPEN, IN_REVIEW, RESOLVED, REJECTED — modèle Report jamais utilisé |
-| `Platform` | ❌ | IOS, ANDROID, WEB — modèle DeviceToken jamais utilisé |
-| `PaymentProvider` | ✅ | MANUAL (seul utilisé) |
-| `NewsletterStatus` | ✅ | PENDING, ACTIVE, UNSUBSCRIBED |
-
----
-
-## 2) Champs morts dans les modèles actifs
-
-### 2.1) BookingStatus — 6 valeurs fantômes sur 11
-
-| Valeur | Utilisée par le backend ? | Frontend | Verdict |
-|--------|:---:|:---:|---------|
-| `PENDING` | ✅ createBooking | ✅ onglet | OK |
-| `CONFIRMED` | ✅ updateBookingStatus | ✅ onglet | OK |
-| `DECLINED` | ✅ updateBookingStatus + respondToModification | ✅ onglet | OK |
-| `WAITING_FOR_CLIENT` | ✅ updateBooking (durée) | ✅ client onglet, ❌ PRO invisible | ⚠️ |
-| `COMPLETED` | ✅ completeBooking + autoComplete | ✅ client historique | OK |
-| `CANCELLED_AUTO_OVERLAP` | ✅ dans transaction confirm | ⚠️ badge OK, mais absent des filtres PRO | ⚠️ |
-| **`CANCELLED_BY_CLIENT`** | ❌ jamais produit | ⚠️ référencé dans filtres front | ❌ MORT |
-| **`CANCELLED_BY_CLIENT_LATE`** | ❌ jamais produit | ⚠️ référencé dans filtres front | ❌ MORT |
-| **`CANCELLED_BY_PRO`** | ❌ jamais produit | ⚠️ référencé dans filtres front | ❌ MORT |
-| **`CANCELLED_AUTO_FIRST_CONFIRMED`** | ❌ jamais produit | ⚠️ référencé dans filtres front | ❌ MORT |
-| **`EXPIRED`** | ❌ pas de cron d'expiration | ⚠️ référencé dans filtres client | ❌ MORT |
-
-### 2.2) User — champs penalty jamais utilisés
-
-| Champ | Type | Défaut | Utilisé ? |
-|-------|------|--------|:---------:|
-| `clientLateCancelCount30d` | Int | 0 | ❌ jamais modifié |
-| `clientSanctionTier` | Int | 0 | ❌ jamais modifié |
-| `bookingCooldownUntil` | DateTime? | null | ❌ jamais modifié |
-| `clientPenaltyResetAt` | DateTime? | null | ❌ jamais modifié |
-| `bannedAt` | DateTime? | null | ❌ jamais modifié |
-| `banReason` | String? | null | ❌ jamais modifié |
-
-### 2.3) ProProfile — champs penalty jamais utilisés
-
-| Champ | Type | Défaut | Utilisé ? |
-|-------|------|--------|:---------:|
-| `proCancelCount30d` | Int | 0 | ❌ jamais modifié |
-| `proConsecutiveCancelCount` | Int | 0 | ❌ jamais modifié |
-
-### 2.4) Booking — champs d'annulation jamais remplis
-
-| Champ | Type | Utilisé ? | Notes |
-|-------|------|:---------:|-------|
-| `cancelledAt` | DateTime? | ❌ | Jamais set lors d'un DECLINE ou annulation auto |
-| `cancelReason` | String? | ❌ | Commentaire schéma dit "obligatoire quand actor=PRO sur CONFIRMED" mais jamais implémenté |
-| `estimatedDuration` | EstimatedDuration? | ⚠️ | Toujours H1 (hardcodé l.219 de booking.service.ts) |
-
----
-
-## 3) Bugs et incohérences DB ↔ API
-
-### 3.1) 🔴 BUG CRITIQUE — `endDate` n'existe pas dans ProSubscription
-
-**Fichier** : `apps/api/src/payment/payment.service.ts:310`
-```typescript
-endDate: endsAt,  // ❌ Ce champ N'EXISTE PAS dans le schéma Prisma
+**Booking model** (schema.prisma) :
+- `id` (cuid PK), `status` (BookingStatus enum), `timeSlot` (DateTime), `cityId`/`categoryId`/`clientId`/`proId` (FK), `expiresAt`, `cancelledAt`, `completedAt`, `confirmedAt`, `estimatedDuration` (enum), `duration` (Int, def 1), `isModifiedByPro`, `cancelReason`, timestamps
+- **Pas de `@@unique` sur `[proId, timeSlot]`** → par design (multiples PENDING autorises, un seul CONFIRMED enforce en code)
+- Index : `@@index([proId, status, timeSlot])` — bien adapte aux queries de collision
+- BookingEvent : audit trail avec `actorUserId`, `actorRole`, `metadata` (JSON)
+
+**BookingStatus enum** :
+```
+PENDING, CONFIRMED, DECLINED,
+CANCELLED_BY_CLIENT, CANCELLED_BY_CLIENT_LATE, CANCELLED_BY_PRO,
+CANCELLED_AUTO_FIRST_CONFIRMED (jamais utilise), CANCELLED_AUTO_OVERLAP,
+EXPIRED (jamais set par le code), WAITING_FOR_CLIENT, COMPLETED
 ```
 
-**Schéma Prisma** (l.459) : le champ s'appelle `endedAt`, pas `endDate`.
+### Problemes & recommandations
 
-**Impact** : L'activation Premium (`activatePlan`) va **crasher à chaque appel** avec une erreur Prisma `Unknown arg 'endDate'`. Aucune souscription Premium ne peut être activée en l'état.
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | CRITIQUE | `/book/[proId]` pas dans le middleware matcher → auth client-side seulement | Ajouter `/book` a `PROTECTED_PREFIXES` |
+| 2 | CRITIQUE | Redirect login sans param `next` → perte contexte booking | Ajouter `?next=/book/{proId}?categoryId={catId}` |
+| 3 | CRITIQUE | WhatsApp CTA toujours "Numero indisponible" — `api.ts` envoie `credentials: 'omit'` sur `/public/*` donc phone jamais retourne | Creer endpoint dedie ou envoyer credentials |
+| 4 | HIGH | "Creneau deja pris" pour 4+ cas differents | Differencier les messages d'erreur |
+| 5 | MEDIUM | `<label>` date sans `htmlFor`, input sans `id` | Corriger |
+| 6 | MEDIUM | Boutons creneaux sans `aria-pressed`/`aria-label` | Ajouter |
+| 7 | MEDIUM | Pas de `aria-live` sur erreur booking | Ajouter |
+| 8 | LOW | `animate-spin` sans `motion-safe:` | Corriger |
+| 9 | LOW | Booking response expose IDs internes (cuid) | Mapper vers publicId |
 
-**Correction** : `endDate` → `endedAt`
+### TODO
 
-### 3.2) 🔴 FK manquante — PaymentOrder.proUserId
+- [ ] Ajouter `/book` au middleware matcher
+- [ ] Ajouter `?next=` au redirect login
+- [ ] Corriger WhatsApp CTA (credentials ou endpoint dedie)
+- [ ] Differencier les messages d'erreur (service inactif, hors plage, passe, etc.)
+- [ ] Corriger accessibilite date picker et creneaux
+- [ ] Ajouter `aria-live` sur erreur booking
 
-**Fichier** : `schema.prisma:514`
+## Score detaille — /book/[proId]
+
+| Axe | Note /5 | Justification |
+|-----|---------|---------------|
+| Fonctionnel | 4 | Flow complet, tous les etats geres (15+ cas). Erreurs misleading |
+| Securite & acces | 3 | JWT ownership OK, role check OK. Pas dans middleware, pas de returnTo, WhatsApp casse |
+| Integration & coherence data | 4 | publicId coherent, Zod validation. credentials: 'omit' sur public casse le phone |
+| UX & accessibilite | 2 | Pas de label date, pas d'aria creneaux, pas d'aria-live erreur, perte contexte login |
+| Performance & robustesse | 4 | Transaction atomique, double validation (display + creation), collision check |
+
+### Score global page : 3.4 / 5
+
+---
+
+## 5) /client/bookings [CLIENT]
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/client/bookings/page.tsx`
+
+**Auth guard** :
+- Couche 1 : `middleware.ts` — `/client/bookings` dans `PROTECTED_EXACT` → redirect server-side si pas de cookie — OK
+- Couche 2 : Client-side — `isAuthenticated` + `user.role === 'CLIENT'` check — OK
+- PRO redirige vers `/dashboard` — OK
+
+**Appels API** :
+
+| Appel | Endpoint | Declenchement | Auth |
+|-------|----------|---------------|------|
+| Liste bookings | `GET /bookings` | mount si auth + CLIENT | JWT cookie |
+| Annuler booking | `PATCH /bookings/:id/cancel` | click bouton | JWT cookie |
+| Repondre modif | `PATCH /bookings/:id/respond` | click accepter/refuser | JWT cookie |
+
+**PROBLEME CRITIQUE — Mismatch contrat reponse** :
+- Le backend `GET /bookings` retourne `{ data: BookingDashboardItem[], meta: { page, limit, total, totalPages } }`
+- Le frontend attend `BookingDashboardItem[]` (array plat) : `getJSON<BookingDashboardItem[]>('/bookings')`
+- `bookings.filter(...)` appele sur un objet `{ data, meta }` → **`.filter()` n'existe pas sur un objet** → crash ou silent fail
+- Pas de params pagination envoyes par le frontend
+- **La page est potentiellement cassee**
+
+**Onglets** (4 tabs) :
+- `pending` : PENDING
+- `waiting` : WAITING_FOR_CLIENT
+- `confirmed` : CONFIRMED
+- `history` : DECLINED, CANCELLED_BY_CLIENT, CANCELLED_BY_CLIENT_LATE, CANCELLED_BY_PRO, CANCELLED_AUTO_FIRST_CONFIRMED, COMPLETED, EXPIRED
+
+**ISSUES tabs** :
+- `CANCELLED_AUTO_OVERLAP` **absent** de tous les filtres → bookings avec ce statut invisibles
+- `CANCELLED_AUTO_FIRST_CONFIRMED` reference dans le frontend mais **jamais set par le backend** (dead status)
+
+**Actions** :
+- WAITING_FOR_CLIENT : Accepter / Refuser (sans confirmation)
+- CONFIRMED : Annuler (avec ConfirmDialog) — OK
+- PENDING : aucune action (attente)
+- History : lecture seule
+
+**Etats** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | Spinner + "Chargement..." | OK |
+| Vide | "Aucune reservation dans cette categorie." | OK |
+| Erreur | **Aucun affichage erreur** — catch silencieux → montre etat vide | Violation CLAUDE.md |
+| Succes | Cartes avec statut, pro info, actions | OK |
+
+**Accessibilite** :
+- **VIOLATION** : Onglets sans `role="tablist"` / `role="tab"` / `role="tabpanel"` (pattern WCAG tabs)
+- **VIOLATION** : Emojis inline sans `aria-hidden` ni alternatives
+- **VIOLATION** : Boutons actions sans `aria-label` contextuel ("Annuler" sans preciser quel booking)
+- **VIOLATION** : `animate-spin` sans `motion-safe:`
+- Pas de pattern `<article>` ni roles semantiques sur les cartes
+
+### API / Backend
+
+**`GET /bookings`** — `booking.controller.ts` → `booking.service.ts`
+- Guard : `JwtAuthGuard`
+- Params : `page?` (def 1), `limit?` (def 20, max 100)
+- Filtre : `clientId` (CLIENT) ou `proId` (PRO) selon le role
+- Tri : `timeSlot DESC`
+- Retourne `{ data, meta }` (pas un array plat)
+- Ownership : filtre automatique par user du JWT — OK
+- **Pas de RolesGuard** : les 2 roles accedent au meme endpoint (correct, le filtre est role-based)
+
+**`PATCH /bookings/:id/cancel`** — `booking.controller.ts` → `booking.service.ts`
+- Guard : `JwtAuthGuard` (pas de KycApproved — correct cote CLIENT)
+- Validation Zod : `reason?` (optionnel, requis pour PRO en service-level)
+- Ownership : `updateMany` atomique avec `clientId` (CLIENT) ou `proId` (PRO) dans le WHERE
+- Transitions : CONFIRMED → CANCELLED_BY_CLIENT ou CANCELLED_BY_CLIENT_LATE (seuil 24h)
+- Penalites late : statut enregistre mais **compteurs jamais incrementes** (champs DB inutilises)
+
+**`PATCH /bookings/:id/respond`** — `booking.controller.ts` → `booking.service.ts`
+- Guard : `JwtAuthGuard`
+- DTO : `RespondDto` (`accept: boolean`)
+- Ownership : `booking.clientId !== userId` → ForbiddenException
+- Transitions : WAITING_FOR_CLIENT → CONFIRMED (accept) ou DECLINED (refuse)
+- DECLINED path : **pas de transaction** (find + update sequentiels) → race condition mineur
+- CONFIRMED path : transaction avec Winner-Takes-All cleanup
+
+**Systeme complet de transitions booking** :
+```
+PENDING ──[PRO confirme]──> CONFIRMED ──[PRO complete]──> COMPLETED
+   │                            │
+   ├──[PRO decline]──> DECLINED │──[CLIENT annule <24h]──> CANCELLED_BY_CLIENT_LATE
+   │                            │──[CLIENT annule >24h]──> CANCELLED_BY_CLIENT
+   ├──[PRO modifie duree]──>    │──[PRO annule]──> CANCELLED_BY_PRO
+   │  WAITING_FOR_CLIENT
+   │    ├──[CLIENT accepte]──> CONFIRMED
+   │    └──[CLIENT refuse]──> DECLINED
+   │
+   └──[Auto overlap]──> CANCELLED_AUTO_OVERLAP
+```
+
+### DB
+
+**Booking model** — cf. section /book/[proId] ci-dessus
+
+**Champs penalites non implementes** :
+- `User.clientLateCancelCount30d` — jamais incremente
+- `User.clientSanctionTier` — jamais verifie
+- `User.bookingCooldownUntil` — jamais verifie a la creation booking
+- `ProProfile.proCancelCount30d` — jamais incremente
+- `ProProfile.proConsecutiveCancelCount` — jamais incremente
+
+**`expiresAt`** : defini sur chaque booking (timeSlot + 24h) mais **aucun cron/scheduler** n'expire les bookings PENDING → le statut `EXPIRED` n'est jamais set.
+
+**`estimatedDuration`** (enum H1-H8) vs `duration` (Int) : redondance — `estimatedDuration` semble legacy.
+
+### Tests
+
+**Fichier** : `apps/api/src/booking/booking.service.spec.ts`
+
+**Couvert** (20 tests) :
+- createBooking : KYC rejected/pending, slot taken, success
+- updateBookingStatus DECLINED : atomique, status deja change
+- completeBooking : success, too early, invalid status, double complete
+- cancelBooking : normal, late, reason required (PRO), PRO cancel, invalid status, race cancel+complete
+- updateDuration : success, already modified, invalid status, slot conflict
+
+**Non couvert** :
+- `getAvailableSlots` (0 tests — endpoint public le plus utilise)
+- `respondToModification` (0 tests — accept + decline)
+- `getMyBookings` (0 tests — pagination, filtre role)
+- `autoCompletePreviousBooking` (0 tests)
+- `updateBookingStatus` CONFIRMED path (0 tests — Winner-Takes-All)
+- Ownership checks IDOR (0 tests)
+- BookingEvent creation (0 tests)
+
+### Problemes & recommandations
+
+| # | Severite | Probleme | Action |
+|---|----------|----------|--------|
+| 1 | CRITIQUE | Frontend attend array plat, backend renvoie `{ data, meta }` → page cassee | Frontend : `const res = await getJSON<{data: ..., meta: ...}>('/bookings'); setBookings(res.data)` |
+| 2 | HIGH | `CANCELLED_AUTO_OVERLAP` absent des filtres → bookings invisibles | Ajouter au filtre `history` |
+| 3 | HIGH | `CANCELLED_AUTO_FIRST_CONFIRMED` dans frontend mais jamais set en backend | Retirer du frontend ou implementer en backend |
+| 4 | HIGH | Penalites DB definies mais non implementees | Implementer ou retirer les champs |
+| 5 | HIGH | `EXPIRED` status + `expiresAt` champ mais pas de cron d'expiration | Implementer le cron ou retirer |
+| 6 | MEDIUM | Aucun affichage erreur (catch silencieux → etat vide) | Ajouter etat erreur + retry |
+| 7 | MEDIUM | Onglets sans ARIA tab pattern | Ajouter `role="tablist/tab/tabpanel"` |
+| 8 | MEDIUM | `respondToModification` DECLINED sans transaction | Wrapper dans transaction |
+| 9 | MEDIUM | 0 tests sur getAvailableSlots et respondToModification | Ajouter tests |
+| 10 | LOW | `animate-spin` sans `motion-safe:` | Corriger |
+| 11 | LOW | Pas de refresh manuel / pas de liens vers profil pro | Ajouter |
+
+### TODO
+
+- [ ] Corriger le parsing reponse GET /bookings (lire `res.data`)
+- [ ] Ajouter `CANCELLED_AUTO_OVERLAP` aux filtres
+- [ ] Retirer `CANCELLED_AUTO_FIRST_CONFIRMED` du frontend
+- [ ] Implementer cron d'expiration bookings PENDING
+- [ ] Ajouter etat erreur visible + bouton retry
+- [ ] Corriger accessibilite onglets (ARIA tabs)
+- [ ] Ajouter tests : getAvailableSlots, respondToModification, getMyBookings, CONFIRMED path
+
+## Score detaille — /client/bookings
+
+| Axe | Note /5 | Justification |
+|-----|---------|---------------|
+| Fonctionnel | 2 | Mismatch contrat reponse (page potentiellement cassee). Statuts manquants dans filtres |
+| Securite & acces | 5 | Dual auth (middleware + client), ownership JWT, role check |
+| Integration & coherence data | 2 | Contrat data/meta mismatch. Statuts frontend/backend incoherents |
+| UX & accessibilite | 2 | Pas d'erreur visible, pas d'ARIA tabs, emojis sans aria-hidden |
+| Performance & robustesse | 3 | Pas de pagination frontend, refetch apres actions OK, pas de polling |
+
+### Score global page : 2.8 / 5
+
+---
+
+## Synthese funnel (end-to-end)
+
+### Schema du flux reel observe
+
+```
+/ (Homepage)
+  └── Hero: ville + categorie → router.push('/pros?cityId=X&categoryId=Y')
+  └── Categories: → /pros?categoryId=X (sans ville)
+  └── FeaturedPros: → /pro/{publicId}
+
+/pros?cityId=X&categoryId=Y
+  └── GET /public/pros (v1, pas de cache/tri/pagination)
+  └── ProCard: → /pro/{publicId}
+
+/pro/{publicId}
+  └── GET /public/pros/{publicId} (server-side RSC)
+  └── ProBookingCTA:
+        Non auth → /auth/login (SANS ?next= !!!)
+        CLIENT → /book/{proId}?categoryId={catId}
+        PRO → "Reservation impossible"
+
+/book/{proId}?categoryId={catId}  [CLIENT, auth client-side seulement]
+  └── GET /public/pros/{proId} (credentials: omit → phone absent!)
+  └── GET /public/slots?proId&date&categoryId
+  └── POST /bookings { proId, categoryId, date, time }
+  └── Succes: WhatsApp CTA (CASSE - pas de phone) + "Voir mes reservations"
+
+/client/bookings  [CLIENT, auth middleware + client]
+  └── GET /bookings (MISMATCH: attend array, recoit {data, meta})
+  └── PATCH /bookings/:id/cancel
+  └── PATCH /bookings/:id/respond
+```
+
+### Points de rupture
+
+| # | Point | Severite | Impact utilisateur |
+|---|-------|----------|-------------------|
+| 1 | `/client/bookings` reponse mismatch | CRITIQUE | Page potentiellement blanche ou crash `.filter()` |
+| 2 | `/book/[proId]` pas dans middleware | CRITIQUE | Auth client-side seulement, flash contenu, pas de returnTo |
+| 3 | WhatsApp CTA sans phone | CRITIQUE | CTA principal post-booking inutilisable |
+| 4 | `/auth/login` param mismatch (`returnTo` vs `next`) | CRITIQUE (Phase 1) | Redirect post-login jamais vers page originale |
+| 5 | `/pros` utilise v1 (pas de cache/tri) | HIGH | Perf degradee, monetisation ignoree |
+| 6 | Penalites non implementees | HIGH | Annulations abusives sans consequence |
+| 7 | EXPIRED jamais set (pas de cron) | HIGH | Bookings PENDING persistent indefiniment |
+
+### Gaps vs flux attendu
+
+| Attendu | Observe | Gap |
+|---------|---------|-----|
+| Non-auth → /book → login → retour /book | Non-auth → /book → login → / (perte contexte) | `/book` pas dans middleware, pas de `next` param |
+| PRO bloque sur /book | PRO voit "Acces reserve" + logout | OK (client-side) |
+| PRO bloque sur /client/bookings | PRO redirige vers /dashboard | OK |
+| /pros affiche resultats tries premium-first | /pros affiche ordre arbitraire DB | v1 sans orderBy |
+| /client/bookings affiche TOUS les bookings | CANCELLED_AUTO_OVERLAP invisible | Statut manquant dans filtre |
+| WhatsApp CTA fonctionnel post-booking | "Numero indisponible" | credentials: 'omit' sur /public/* |
+| Bookings PENDING expirent apres 24h | Jamais expires | Pas de cron |
+
+### Actions recommandees (priorisees)
+
+1. **P0** : Corriger contrat `GET /bookings` dans `/client/bookings` (lire `response.data`)
+2. **P0** : Ajouter `/book` au middleware matcher + param `next`
+3. **P0** : Corriger WhatsApp CTA (credentials ou endpoint dedie pour phone)
+4. **P0** : Unifier param redirect login (`returnTo` → `next` ou inverse) — cf Phase 1
+5. **P1** : Migrer `/pros` vers endpoint v2 (cache, tri, pagination)
+6. **P1** : Implementer cron expiration bookings PENDING
+7. **P1** : Ajouter `CANCELLED_AUTO_OVERLAP` aux filtres client/bookings
+8. **P2** : Implementer penalites ou retirer champs DB inutilises
+9. **P2** : Corriger accessibilite (/book date picker, /client/bookings tabs ARIA)
+10. **P2** : Ajouter filtres ville/categorie sur /pros + loading.tsx
+
+---
+
+## Score global Phase 2
+
+| Page | Score |
+|------|-------|
+| / (Homepage) | 4.4 / 5 |
+| /pros | 3.0 / 5 |
+| /pro/[publicId] | 4.2 / 5 |
+| /book/[proId] | 3.4 / 5 |
+| /client/bookings | 2.8 / 5 |
+
+### **Score moyen Phase 2 : 3.6 / 5** (Moyen-Bon)
+
+---
+
+## Annexe — Fichiers audites Phase 2
+
+**Frontend** :
+- `apps/web/src/app/page.tsx`
+- `apps/web/src/app/pros/page.tsx`
+- `apps/web/src/app/pro/[publicId]/page.tsx`
+- `apps/web/src/app/pro/[publicId]/ProDetailClient.tsx`
+- `apps/web/src/app/pro/[publicId]/loading.tsx`
+- `apps/web/src/app/book/[proId]/page.tsx`
+- `apps/web/src/app/client/bookings/page.tsx`
+- `apps/web/src/components/home/Hero.tsx`
+- `apps/web/src/components/home/HeroSkeleton.tsx`
+- `apps/web/src/components/home/Categories.tsx`
+- `apps/web/src/components/home/FeaturedPros.tsx`
+- `apps/web/src/components/home/Testimonials.tsx`
+- `apps/web/src/components/home/HowItWorks.tsx`
+- `apps/web/src/components/home/PricingSection.tsx`
+- `apps/web/src/components/home/SecuritySection.tsx`
+- `apps/web/src/components/home/ProCTA.tsx`
+- `apps/web/src/components/home/Footer.tsx`
+- `apps/web/src/components/home/HeroMobileCTA.tsx`
+- `apps/web/src/components/Navbar.tsx`
+- `apps/web/src/components/Header.tsx`
+- `apps/web/src/components/ProCard.tsx`
+- `apps/web/src/components/ProBookingCTA.tsx`
+- `apps/web/src/middleware.ts`
+
+**Backend** :
+- `apps/api/src/catalog/catalog.controller.ts`
+- `apps/api/src/catalog/catalog.service.ts`
+- `apps/api/src/catalog/stats.controller.ts`
+- `apps/api/src/booking/booking.controller.ts`
+- `apps/api/src/booking/booking.service.ts`
+- `apps/api/src/booking/booking.service.spec.ts`
+
+**Database** :
+- `packages/database/prisma/schema.prisma` (Booking, BookingEvent, BookingStatus, ProService, WeeklyAvailability, Category, City)
+
+---
+---
+
+# Phase 3 — Dashboard PRO (profil, services, disponibilite, bookings, historique)
+
+> **Date** : 2026-02-21
+> **Contexte** : Audit complet du Dashboard PRO — 7 pages frontend + backend PRO/KYC/Booking/Dashboard endpoints + modeles DB.
+> **Pages auditees** : `/dashboard`, `/dashboard/profile`, `/dashboard/kyc`, `/dashboard/services`, `/dashboard/availability`, `/dashboard/bookings`, `/dashboard/history`
+
+## Resume executif
+
+- **Statut global** : ⚠️ Moyen — fonctionnellement solide mais plusieurs problemes critiques d'integration et de securite
+- **Points forts** :
+  - Architecture booking robuste : Winner-Takes-All atomique en `$transaction`, IDOR protege partout
+  - KycApprovedGuard applique sur les mutations PRO (services, availability, profile, portfolio, booking status/duration/complete)
+  - Securite KYC exemplaire : magic bytes, Sharp re-encode, CIN hashe SHA-256, audit logging
+  - Premium limits correctement enforces server-side (free=1 / premium=3 services)
+  - publicId / internal ID separation respectee dans les reponses API
+  - DashboardLayout gate correctement KYC PENDING (waiting room) et REJECTED (redirect KYC)
+- **Risques majeurs** :
+  1. **CRITIQUE** : `RolesGuard` ne lit PAS les `@Roles()` au niveau classe — bypass total de la protection PRO sur tout le ProController
+  2. **CRITIQUE** : Frontend bookings/history attend un `array`, backend renvoie `{data, meta}` — pages vides/cassees
+  3. **CRITIQUE** : `GET /dashboard/stats` sans `RolesGuard` et sans verification Premium — tout utilisateur authentifie peut acceder aux stats PRO
+  4. **HIGH** : `KycApprovedGuard` sur `PATCH /pro/profile` cree un catch-22 avec le gate avatar du DashboardLayout
+  5. **HIGH** : `@Body() dto: any` sur le profile update — aucune validation pipeline
+  6. **HIGH** : `resubmit` KYC ne valide pas les magic bytes sur les fichiers uploades
+  7. **HIGH** : Pas de validation client-side `startTime < endTime` sur la disponibilite
+  8. **HIGH** : History page filtre cote client — incompatible avec la pagination backend
+- **Recommandations top 5** :
+  1. Corriger `RolesGuard` : utiliser `getAllAndOverride()` pour lire les metadata classe + methode
+  2. Corriger la consommation de la pagination : destructurer `{data, meta}` dans bookings + history
+  3. Ajouter `@Roles('PRO')` + premium check sur `GET /dashboard/stats`
+  4. Retirer `KycApprovedGuard` de `PATCH /pro/profile` ou ne l'appliquer qu'aux champs business
+  5. Ajouter validation magic bytes sur `resubmit` KYC
+
+---
+
+## 1) DashboardLayout (wrapper commun)
+
+### Frontend
+
+**Fichier** : `apps/web/src/components/dashboard/DashboardLayout.tsx`
+**Fichier lie** : `apps/web/src/components/dashboard/KycPendingState.tsx`
+
+**Role** : Wrapper de toutes les pages `/dashboard/*`. Gere l'auth guard, le KYC gating, la sidebar de navigation, et le "setup gate" (avatar obligatoire).
+
+**Fonctionnement** :
+- Fetch `GET /pro/me` pour verifier `isPremium`, `hasAvatar`, `kycStatus`
+- 3 branches de rendu : setup gate (pas d'avatar), KYC gate (PENDING/REJECTED), normal
+- Sidebar avec liens : Vue d'ensemble (Premium only), Reservations, Historique, Services, Disponibilite, Mon Profil, KYC
+
+**Findings** :
+
+| # | Severite | Description |
+|---|----------|-------------|
+| DL-01 | MEDIUM | **API `/pro/me` appele 2 fois** : DashboardLayout fetch `/pro/me` + chaque page enfant re-fetch independamment. Pas de partage de donnees via context/store. |
+| DL-02 | MEDIUM | **Sidebar markup duplique** : Le code `<aside>` avec navigation est copie-colle identiquement dans 2 branches de rendu (setup gate, lignes 104-131, et normal, lignes 163-211). Tout changement de menu doit etre replique. |
+| DL-03 | MEDIUM | **Auth guard client-side uniquement** : Depend de `useAuthStore` qui peut ne pas etre initialise. Le middleware Next.js protege `/dashboard` via `PROTECTED_PREFIXES` mais le timing de l'hydratation peut causer des flashs. |
+| DL-04 | LOW | **KYC status non rafraichi** : `user.kycStatus` vient du authStore (set au login). Le fetch `/pro/me` recupere le `kycStatus` frais mais ne met PAS a jour le store. Si l'admin approuve le KYC, l'utilisateur reste bloque jusqu'a re-auth. |
+| DL-05 | LOW | **`<main>` sans `aria-label`** : Le `<main>` n'a pas d'`aria-label` pour differencier les landmarks. `<aside>` manque `aria-label="Menu lateral"`. |
+| DL-06 | INFO | **Pas de skip-to-content link** : WCAG recommande un lien "Aller au contenu principal" pour les utilisateurs clavier. |
+
+### KycPendingState
+
+**Fichier** : `apps/web/src/components/dashboard/KycPendingState.tsx`
+
+| # | Severite | Description |
+|---|----------|-------------|
+| KP-01 | LOW | **Progress bar sans ARIA** : La barre de progression n'a pas `role="progressbar"`, `aria-valuenow`, `aria-valuemin`, `aria-valuemax`. |
+| KP-02 | LOW | **SVG checkmarks sans `aria-hidden`** : Les SVG decoratifs des etapes ne sont pas marques `aria-hidden="true"`, les lecteurs d'ecran essaieront de les lire. |
+
+### Scores DashboardLayout
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnalite | 4/5 | Gates fonctionnels (REJECTED prison, PENDING waiting room, avatar setup). Sidebar dupliquee. |
+| Securite | 3/5 | Auth guard client-side. Relies sur `useAuthStore` state. Middleware SSR present mais timing hydratation. |
+| Qualite code | 2.5/5 | Duplication sidebar significative. Pas de context partage pour `/pro/me`. |
+| Accessibilite | 3.5/5 | `aria-label` sur nav, `aria-current` sur liens, `aria-hidden` sur icones. Manque skip-to-content. |
+| Integration front↔back | 3.5/5 | Fetch `/pro/me` redondant. KYC status non synchronise avec le store. |
+
+### Score global : 3.3 / 5
+
+---
+
+## 2) /dashboard (Vue d'ensemble — Premium uniquement)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/page.tsx` (302 lignes)
+
+**Composant** : Page overview avec KPIs + graphiques Recharts (LineChart demandes/jour, PieChart taux de conversion, prochaine reservation).
+
+**Champs** : Aucun (lecture seule).
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | `loading` state, spinner + texte | OK |
+| Erreur dashboard | `error` state, `role="alert"` | OK |
+| Erreur stats | `console.error` silencieux | **KO** — aucun retour utilisateur |
+| Non-premium redirect | `router.replace('/dashboard/bookings')` | OK |
+
+**Accessibilite** :
+- Erreur dashboard avec `role="alert"` — OK
+- Loading spinner avec `motion-safe:animate-spin` — OK
+- **ISSUE** : Graphiques SVG sans `role="img"` ni `aria-label` — lecteurs d'ecran ne peuvent pas interpreter les charts
+- **ISSUE** : Loading container sans `aria-busy` / `aria-live`
+- **ISSUE** : Stats loading spinners sans `motion-safe:` prefix (lignes 204, 226)
+
+**Design tokens** :
+- **VIOLATION** : Hex en dur dans les composants Recharts : `#10b981`, `#ef4444`, `#3b82f6`, `#8884d8` (lignes 110-111, 214, 238). Regles CLAUDE.md : "JAMAIS de hex en dur".
+
+### API / Backend
+
+**Endpoint** : `GET /dashboard/stats`
+**Controller** : `apps/api/src/dashboard/dashboard.controller.ts`
+**Service** : `apps/api/src/dashboard/dashboard.service.ts`
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | `JwtAuthGuard` uniquement | **KO** — pas de `RolesGuard`, pas de `@Roles('PRO')` |
+| Role check | Service-level `if (userRole !== 'PRO')` → 403 | Insuffisant — devrait etre au guard |
+| Premium check | **AUCUN** | **KO** — tout PRO (meme free) peut acceder aux stats |
+| Response shape | `{ requestsCount, conversionRate, pendingCount, nextBooking }` | OK — match frontend |
+| PII | `nextBooking.client.phone` expose | **ATTENTION** — telephone client en clair |
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| DO-01 | CRITIQUE | **`GET /dashboard/stats` sans `RolesGuard`** : N'importe quel utilisateur authentifie (CLIENT inclus) peut appeler l'endpoint. Le service-level check est insuffisant (devrait etre au guard). Aucune verification Premium. |
+| DO-02 | HIGH | **Telephone client expose** : `nextBooking.client.phone` renvoie le numero complet. PII sensible sans masquage ni consentement explicite. |
+| DO-03 | HIGH | **Hex en dur dans Recharts** : 4 couleurs hex en dur violent la regle "JAMAIS de hex en dur". Utiliser `var(--color-success-500)`, `var(--color-error-500)`, etc. |
+| DO-04 | MEDIUM | **Erreur stats silencieuse** : Si `/dashboard/stats` echoue, l'utilisateur voit "0" partout sans savoir que les donnees n'ont pas charge. Pas de retry. |
+| DO-05 | MEDIUM | **Charts non accessibles** : Les SVG Recharts n'ont aucune semantique ARIA. |
+| DO-06 | LOW | **Loading sans `aria-busy`** : Le container loading n'a pas `aria-busy="true"` ni `aria-live="polite"`. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnalite | 3.5/5 | Charts fonctionnels, redirect non-premium OK. Erreur stats silencieuse. |
+| Securite | 2/5 | Pas de RolesGuard, pas de Premium gate, PII client expose. |
+| Qualite code | 3/5 | Hex en dur. Erreur stats swallow. |
+| Accessibilite | 2.5/5 | Charts sans ARIA. Loading sans aria-busy. |
+| Integration front↔back | 4/5 | Response shape match correct. |
+
+### Score global : 3.0 / 5
+
+---
+
+## 3) /dashboard/profile (Profil PRO)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/profile/page.tsx`
+
+**Composant** : Edition profil PRO (bio, whatsapp, ville, avatar URL), portfolio CRUD, reviews affichees.
+
+**Champs** : `bio` (textarea), `whatsapp` (tel), `cityId` (select), `avatarUrl` (URL), portfolio URLs (input URL)
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | Spinner | OK |
+| Erreur | Banner erreur | OK (manque `role="alert"`) |
+| Succes | Banner succes | OK (manque `role="alert"`) |
+| Portfolio CRUD | Add/delete avec feedback | OK |
+
+**Accessibilite** :
+- Labels avec `htmlFor` sur les inputs principaux — OK
+- Portfolio delete avec `aria-label` — OK
+- **ISSUE** : Loading spinner `animate-spin` sans `motion-safe:` (ligne 185)
+- **ISSUE** : Input portfolio URL sans `<label>` ni `id` (lignes 334-339)
+- **ISSUE** : Error/success messages sans `role="alert"` (lignes 284-293)
+
+**Design tokens** : 100% tokens — OK
+
+### API / Backend
+
+**Endpoint** : `PATCH /pro/profile`
+**Controller** : `apps/api/src/pro/pro.controller.ts` (ligne 41)
+**Service** : `apps/api/src/pro/pro.service.ts`
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | Jwt + Roles + KycApproved | **PROBLEME** — KycApproved empeche les nouveaux PRO de configurer leur avatar |
+| Validation | `@Body() dto: any` — pas de DTO/Zod | **KO** — bypass complet du pipeline de validation |
+| Bio limit | Service-level : free=100, premium=500 chars | OK |
+| URL validation | `validateUrl()` dans le service | OK |
+| Portfolio premium | Service-level `isPremiumPro()` check | OK |
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| DP-01 | HIGH | **Catch-22 : KycApprovedGuard + avatar gate** : DashboardLayout force les PRO sans avatar vers `/dashboard/profile`. Mais `PATCH /pro/profile` exige KYC APPROVED. Un PRO PENDING ne peut ni acceder aux autres pages ni modifier son profil. Boucle infinie. |
+| DP-02 | HIGH | **`@Body() dto: any`** : Aucune validation pipeline. N'importe quel champ peut etre envoye. `bio` et `avatarUrl` ne sont valides qu'au niveau service. |
+| DP-03 | MEDIUM | **`animate-spin` sans `motion-safe:`** (ligne 185). |
+| DP-04 | MEDIUM | **Input portfolio sans `<label>`** : L'input URL portfolio (lignes 334-339) n'a pas de `<label htmlFor>` associe. |
+| DP-05 | MEDIUM | **Error/success sans `role="alert"`** : Les messages feedback (lignes 284-293) ne sont pas annonces aux lecteurs d'ecran. |
+| DP-06 | MEDIUM | **`avatarUrl: ""` cause erreur** : Envoyer une chaine vide declenche `validateUrl` au lieu de supprimer l'avatar. Le service devrait traiter `""` comme `null`. |
+| DP-07 | MEDIUM | **Portfolio delete utilise ID interne (cuid)** : `DELETE /pro/portfolio/:id` expose l'ID database. Le modele `ProPortfolioImage` n'a pas de `publicId`. Inconsistant avec le pattern publicId. |
+| DP-08 | LOW | **Portfolio images alt generique** : Toutes les images portfolio ont `alt="Portfolio"` — pas descriptif. |
+| DP-09 | LOW | **Avatar preview sans fallback `onError`** : Si l'URL avatar est invalide, image cassee sans fallback aux initiales. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnalite | 4/5 | CRUD profil + portfolio fonctionnel. Bio limit et reviews. |
+| Securite | 3.5/5 | URL validation OK. Mais `dto: any` bypass validation pipeline. |
+| Qualite code | 3.5/5 | Bon error handling. Spinner manque motion-safe. |
+| Accessibilite | 3/5 | Labels OK. Portfolio input et alerts manquent ARIA. |
+| Integration front↔back | 4/5 | Response shapes OK. publicId mapping correct. |
+
+### Score global : 3.6 / 5
+
+---
+
+## 4) /dashboard/kyc (Verification KYC)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/kyc/page.tsx`
+
+**Composant** : Workflow KYC complet : upload CIN recto/verso + numero CIN, statut affiche, resoumission possible apres rejet.
+
+**Champs** : `cinNumber` (text), `cinFront` (file), `cinBack` (file)
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| NOT_SUBMITTED | Formulaire upload complet | OK |
+| PENDING | Animation d'attente avec progression | OK |
+| APPROVED | Badge vert avec date | OK |
+| REJECTED | Alerte rouge + formulaire re-soumission | OK |
+| Loading | Spinner | OK |
+| Erreur | Message erreur | OK (manque `role="alert"`) |
+| Succes | Message succes | OK (manque `role="alert"`) |
+
+**Accessibilite** :
+- Labels avec `htmlFor` sur tous les inputs — OK
+- **ISSUE** : `animate-spin` sans `motion-safe:` (lignes 169, 241)
+- **ISSUE** : Error/success messages sans `role="alert"` (lignes 346-355)
+- **ISSUE** : Alerte rejet sans `role="alert"` (lignes 193-211)
+
+**Design tokens** : 100% tokens — OK
+
+### API / Backend
+
+**Endpoint submit** : `POST /kyc/submit`
+**Endpoint resubmit** : `POST /kyc/resubmit`
+**Controller** : `apps/api/src/kyc/kyc.controller.ts`
+**Service** : `apps/api/src/kyc/kyc.service.ts`
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | Jwt + Roles('PRO') | OK |
+| File validation (submit) | Magic bytes (JPEG/PNG), taille via multer | OK |
+| File validation (resubmit) | **Pas de magic bytes** | **KO** — bypass possible |
+| CIN hash | SHA-256 + salt configurable | OK |
+| CIN uniqueness | Hash en DB, unique constraint | OK |
+| Access logging | Audit log best-effort | OK |
+| Body validation (resubmit) | `@Body() body: any` | **KO** — pas de DTO |
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| DK-01 | HIGH | **`resubmit` ne valide pas les magic bytes** : Contrairement a `submitKyc` qui appelle `validateMagicBytes()`, `resubmitKyc` (ligne 145-149 du controller) ne le fait pas. Un fichier spoofe peut passer lors de la re-soumission. |
+| DK-02 | MEDIUM | **`resubmit` body type `any`** : `@Body() body: any` (ligne 131) — aucune validation DTO sur le body de re-soumission. `cinNumber` extrait sans validation de format. |
+| DK-03 | MEDIUM | **Raw `fetch()` au lieu de `postFormData()`** : La page KYC (lignes 93-101) utilise `fetch()` manuellement au lieu du helper `postFormData()` de `lib/api.ts`. Perd l'auto-refresh sur 401 et duplique la logique CSRF. |
+| DK-04 | MEDIUM | **CIN sans validation de format frontend** : L'input CIN accepte n'importe quel texte. Placeholder "AB123456" mais pas de `pattern` ni validation JS. Le backend ne valide pas non plus le format. |
+| DK-05 | MEDIUM | **`animate-spin` sans `motion-safe:`** (lignes 169, 241). |
+| DK-06 | MEDIUM | **Error/success sans `role="alert"`** (lignes 346-355). |
+| DK-07 | LOW | **Pas de validation taille fichier frontend** : L'info dit "max 5MB" et le backend enforce via multer, mais le frontend ne verifie pas `file.size` avant upload. Erreur multer cryptique si > 5MB. |
+| DK-08 | LOW | **Alerte rejet sans `role="alert"`** (lignes 193-211). |
+| DK-09 | LOW | **`logAccess` fire-and-forget** : L'audit log KYC ecrit en best-effort avec `.catch()` silencieux. Les logs d'acces fichiers KYC sont critiques pour la securite. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnalite | 4/5 | Workflow KYC complet. Submit + resubmit + status display. |
+| Securite | 4/5 | Magic bytes, CIN hash, audit logging. SAUF resubmit sans magic bytes. |
+| Qualite code | 3/5 | Raw fetch() au lieu du helper. Spinner sans motion-safe. |
+| Accessibilite | 3/5 | Labels OK. Manque role="alert" sur messages feedback. |
+| Integration front↔back | 4/5 | Endpoints correctement cibles. Shapes OK. |
+
+### Score global : 3.6 / 5
+
+---
+
+## 5) /dashboard/services (Gestion des services PRO)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/services/page.tsx`
+
+**Composant** : Activation/desactivation de services par categorie, configuration tarification (fixe/fourchette), limites free/premium.
+
+**Champs** : Toggle par categorie (checkbox sr-only), type de tarification (select), prix fixe (number), prix min/max (number)
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | Spinner | OK |
+| Erreur | Message erreur | OK (pas de retry) |
+| Succes | Message succes persistant | OK (pas d'auto-dismiss) |
+| Saving | Bouton disabled + texte | OK |
+
+**Accessibilite** :
+- **VIOLATION** : Aucun label n'a de `htmlFor` et aucun input n'a d'`id` (lignes 215, 234, 256, 278, 297)
+- **VIOLATION** : Checkboxes toggle sr-only sans `aria-label` (lignes 218-221)
+- **ISSUE** : `animate-spin` sans `motion-safe:` (ligne 191)
+
+**Design tokens** : 100% tokens — OK
+
+### API / Backend
+
+**Endpoint** : `PUT /pro/services`
+**Controller** : `apps/api/src/pro/pro.controller.ts` (ligne 65-73)
+**Service** : `apps/api/src/pro/pro.service.ts` (lignes 273-348)
+**Schema** : `packages/contracts/src/schemas/pro.ts` (lignes 44-100)
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | Jwt + Roles('PRO') + KycApproved | OK (SAUF RolesGuard bypass — voir DS-01) |
+| Zod validation | `UpdateServicesSchema` avec refine sur pricing | OK |
+| Premium limit | free=1, premium=3 | OK server-side |
+| Strategy | Delete all + recreate dans transaction | **ATTENTION** — perte d'ID et createdAt a chaque update |
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| DS-01 | CRITIQUE | **`RolesGuard` ne lit pas `@Roles()` au niveau classe** : `roles.guard.ts` ligne 28-30 utilise `this.reflector.get('roles', context.getHandler())` qui ne lit que les metadata de la METHODE. `@Roles('PRO')` est au niveau CLASSE (pro.controller.ts ligne 31). Le guard retourne toujours `true` → **tout utilisateur authentifie peut acceder aux endpoints PRO** (services, availability, profile, portfolio). |
+| DS-02 | HIGH | **Pas de feedback premium limit en frontend** : Le frontend ne montre pas combien de services restent disponibles, ne desactive pas les toggles quand la limite est atteinte. L'erreur `SERVICE_LIMIT_REACHED` arrive comme message brut. |
+| DS-03 | HIGH | **KYC 403 non gere en frontend** : Si un PRO non-approuve atteint la page, l'erreur `KYC_NOT_APPROVED` s'affiche comme message generique. Pas de redirect vers `/dashboard/kyc`. |
+| DS-04 | HIGH | **Labels sans `htmlFor`/`id`** : Aucune des 5 categories de labels (toggle, pricing type, prix fixe, min, max) n'a d'association label-input WCAG. |
+| DS-05 | MEDIUM | **Toggle checkboxes sans `aria-label`** : Les checkboxes sr-only n'ont pas d'`aria-label` indiquant quel service est active/desactive. |
+| DS-06 | MEDIUM | **`animate-spin` sans `motion-safe:`** (ligne 191). |
+| DS-07 | MEDIUM | **`parseInt` pour les prix** : `parseInt(service.fixedPriceMad, 10)` tronque les decimales sans avertissement. L'HTML `min="0"` permet 0 mais Zod exige `.positive()` (> 0). |
+| DS-08 | MEDIUM | **Delete-and-recreate dans transaction** : `updateServices` supprime puis recree tous les ProService. Perd les `id` et `createdAt` existants. References externes cassees. |
+| DS-09 | LOW | **`existingServices` state variable jamais lue** : State mort — set mais jamais utilise dans le rendu. |
+| DS-10 | LOW | **Pas de retry sur erreur chargement** : Erreur initiale sans bouton retry. |
+| DS-11 | LOW | **Succes message non auto-dismiss** : Persiste indefiniment. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnalite | 3.5/5 | CRUD fonctionne. Pas de feedback premium limit. Dead state. |
+| Securite | 2.5/5 | KYC guard OK server-side MAIS RolesGuard bypass CRITIQUE. |
+| Qualite code | 3/5 | Structure OK. `any` types, dead state, pas de helpers extraits. |
+| Accessibilite | 1.5/5 | Aucun `htmlFor`/`id`, aucun `aria-label`, pas de `motion-safe:`. Echec WCAG AA labeling. |
+| Integration front↔back | 3.5/5 | Shapes match. Mapping publicId OK. Premium gate error mal gere. |
+
+### Score global : 2.8 / 5
+
+---
+
+## 6) /dashboard/availability (Disponibilite hebdomadaire)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/availability/page.tsx`
+
+**Composant** : Configuration des creneaux de disponibilite par jour de la semaine (lundi-dimanche), toggle + heures debut/fin.
+
+**Champs** : Toggle par jour (checkbox sr-only), heure debut (time), heure fin (time)
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | Spinner | OK |
+| Erreur | Message erreur | OK (pas de retry) |
+| Succes | Message succes | OK |
+| Saving | Bouton disabled | OK |
+
+**Accessibilite** :
+- **VIOLATION** : Aucun label n'a de `htmlFor` et aucun input n'a d'`id` (lignes 208, 226-228, 240-242)
+- **VIOLATION** : Checkboxes toggle sr-only sans `aria-label` (lignes 209-212)
+- **ISSUE** : `animate-spin` sans `motion-safe:` (ligne 187)
+- **ISSUE** : `transition` et `after:transition-all` sans `motion-safe:` (lignes 215, 276)
+
+**Design tokens** : 100% tokens — OK
+
+### API / Backend
+
+**Endpoint** : `PUT /pro/availability`
+**Controller** : `apps/api/src/pro/pro.controller.ts` (ligne 75-83)
+**Service** : `apps/api/src/pro/pro.service.ts` (lignes 350-387)
+**Schema** : `packages/contracts/src/schemas/pro.ts` (lignes 111-134)
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | Jwt + Roles('PRO') + KycApproved | OK (SAUF RolesGuard bypass) |
+| Zod validation | `startMin` < `endMin` refine | OK server-side |
+| Uniqueness | `@@unique([proUserId, dayOfWeek])` en DB | OK — mais Zod ne valide pas les doublons |
+| Strategy | Delete all + recreate dans transaction | Meme pattern que services |
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| DA-01 | CRITIQUE | **Meme RolesGuard bypass que DS-01** : `PUT /pro/availability` affecte par le meme probleme. Tout utilisateur authentifie peut modifier la disponibilite. |
+| DA-02 | HIGH | **Pas de validation client `startTime < endTime`** : Le frontend envoie `startMin` et `endMin` sans verifier que debut < fin. L'erreur Zod backend est generique ("Validation failed"). Aucun feedback inline. |
+| DA-03 | HIGH | **KYC 403 non gere en frontend** : Meme probleme que DS-03. |
+| DA-04 | HIGH | **Labels sans `htmlFor`/`id`** : Meme violation que DS-04 — toggle, start time, end time. |
+| DA-05 | MEDIUM | **Toggle checkboxes sans `aria-label`** : Meme que DS-05 — pas d'identification du jour pour les lecteurs d'ecran. |
+| DA-06 | MEDIUM | **`animate-spin` et `transition` sans `motion-safe:`** (lignes 187, 215, 276). |
+| DA-07 | MEDIUM | **Doublons `dayOfWeek` possibles via API** : Le schema Zod ne valide pas l'unicite de `dayOfWeek` dans le tableau. Un appel API direct avec 2 entrees pour le meme jour cause une erreur 500 Prisma (unique constraint). |
+| DA-08 | LOW | **Logique de mapping dupliquee** : Le code de conversion availability → form est copie-colle entre le chargement initial et le post-save (lignes 50-71 vs 137-157). |
+| DA-09 | LOW | **Pas de retry sur erreur chargement**. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnalite | 3.5/5 | Conversion temps fonctionne. Pas de validation client startTime < endTime. |
+| Securite | 2.5/5 | Meme RolesGuard bypass. Doublons dayOfWeek causent 500. |
+| Qualite code | 3/5 | Mapping duplique, sinon propre. |
+| Accessibilite | 1.5/5 | Meme violations que services — labels, aria-label, motion-safe. |
+| Integration front↔back | 4/5 | Conversion HH:MM ↔ minutes propre. Schema Zod match payload. |
+
+### Score global : 2.9 / 5
+
+---
+
+## 7) /dashboard/bookings (Gestion reservations PRO)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/bookings/page.tsx`
+
+**Composant** : Liste des reservations PRO avec onglets (en attente, confirmees, annulees). Actions : accepter, refuser, modifier duree, completer, annuler. Modals pour cancel et duration.
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | Spinner | OK |
+| Erreur | `console.error` silencieux | **KO** — pas d'affichage erreur, pas de retry |
+| Tabs | 4 onglets avec filtre | OK |
+| Actions | Accept/decline/cancel/complete/duration | OK |
+| Modals | Cancel + Duration | OK (manque focus trap et ARIA) |
+
+**Accessibilite** :
+- **VIOLATION** : Tabs sans `role="tablist"`, `role="tab"`, `aria-selected` — pas de pattern ARIA Tabs (lignes 247-311)
+- **VIOLATION** : Modals cancel/duration sans `role="dialog"`, `aria-modal`, focus trap, escape key (lignes 430-529)
+- **ISSUE** : `animate-spin` sans `motion-safe:` (lignes 200, 318)
+- **ISSUE** : Boutons action sans `aria-label` (lignes 373-419)
+- **ISSUE** : Label duration modal sans `htmlFor`/`id` (lignes 493-499)
+
+**Design tokens** : 100% tokens — OK
+
+### API / Backend
+
+**Endpoint principal** : `GET /bookings` (avec `?page=N&limit=N`)
+**Mutations** : `PATCH /bookings/:id/status`, `/duration`, `/complete`, `/cancel`
+**Controller** : `apps/api/src/booking/booking.controller.ts`
+**Service** : `apps/api/src/booking/booking.service.ts`
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Response shape | `{ data: BookingDashboardItem[], meta: PaginationMeta }` | OK backend |
+| Frontend consumption | `getJSON<BookingDashboardItem[]>(...)` | **CRITIQUE** — attend un array, recoit un objet |
+| Guards mutations | Jwt + KycApproved sur status/duration/complete | OK |
+| Guards cancel | Jwt uniquement + check service-level | **INCONSISTANT** — manque KycApproved au guard |
+| IDOR | `booking.proId !== userId` sur toutes les mutations | OK |
+| Winner-Takes-All | Transaction atomique + auto-cancel conflits | OK |
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| DB-01 | CRITIQUE | **Mismatch pagination** : Le frontend appelle `getJSON<BookingDashboardItem[]>('/bookings')` (ligne 64) et assigne le resultat a `setBookings(data)`. Le backend renvoie `{ data: [...], meta: {...} }`. Le frontend recoit un OBJET et non un ARRAY → `.filter()` et `.map()` echouent silencieusement. **La page entiere est cassee — aucune reservation ne s'affiche.** Ce bug est repete lignes 84, 116, 152, 174 (re-fetch apres mutations). |
+| DB-02 | HIGH | **Pas de pagination frontend** : Le backend supporte `?page=N&limit=N` avec `hasNext`, `hasPrev`, `totalPages`. Le frontend n'envoie jamais de params et n'a aucun controle de pagination. Default limit=20 → PROs avec 20+ reservations perdent les anciennes. |
+| DB-03 | HIGH | **`KycApprovedGuard` manquant sur cancel controller** : `PATCH /bookings/:id/cancel` utilise `@UseGuards(JwtAuthGuard)` sans `KycApprovedGuard`. Le check existe au service-level (lignes 1024-1039) mais c'est inconsistant avec les autres routes qui utilisent le guard. |
+| DB-04 | HIGH | **Auth guard ne verifie pas `loading` du store** : La page utilise `useAuthStore()` mais ne verifie pas si le store a fini d'initialiser. Risque de redirect premature avant hydratation. |
+| DB-05 | MEDIUM | **Tabs sans ARIA pattern** : Les onglets n'implementent pas le pattern WAI-ARIA Tabs (role tablist/tab/tabpanel, aria-selected, navigation fleches). |
+| DB-06 | MEDIUM | **Modals sans focus trap** : Les modals cancel et duration (lignes 430-529) n'ont pas `role="dialog"`, `aria-modal="true"`, focus trap, ni gestion Escape. Le composant `ConfirmDialog` existant implemente tout correctement — pas reutilise ici. |
+| DB-07 | MEDIUM | **`animate-spin` sans `motion-safe:`** (lignes 200, 318). |
+| DB-08 | MEDIUM | **Boutons action sans `aria-label`** : "Accepter", "Refuser" avec emojis — pas d'aria-label clair pour lecteurs d'ecran. |
+| DB-09 | MEDIUM | **Label duration modal sans `htmlFor`/`id`** (lignes 493-499). |
+| DB-10 | MEDIUM | **`completeBooking` pattern update-then-check** : Le service fait l'update AVANT de verifier le timing. Si erreur entre update et revert, l'etat est corrompu. La transaction garantit l'atomicite mais le pattern est fragile. |
+| DB-11 | MEDIUM | **`autoCompletePreviousBooking` hors transaction** : L'auto-complete post-confirmation est fire-and-forget sans `BookingEvent` ni notification. |
+| DB-12 | LOW | **Pas de toast succes sur accept/decline** : `handleUpdateStatus` ne montre pas de toast apres succes. `handleCompleteBooking` et `handleUpdateDuration` le font. |
+| DB-13 | LOW | **Pas d'etat erreur avec retry** : Erreur fetch silencieuse (`console.error`), pas d'affichage ni de retry. |
+| DB-14 | INFO | **`CANCELLED_AUTO_FIRST_CONFIRMED` manquant dans BookingStatusBadge** : Le filtre onglet "annulees" (ligne 225) inclut ce status mais le composant `BookingStatusBadge` n'a pas de case pour ce status — affiche le string brut. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnalite | 1/5 | CRITIQUE : mismatch pagination = page completement vide. Dead code. |
+| Securite | 4/5 | Backend bien garde (IDOR, WTA). KycGuard manquant sur cancel controller. |
+| Qualite code | 3/5 | Error handling APIError OK. Pattern fetch duplique. |
+| Accessibilite | 2/5 | Tabs sans ARIA, modals sans focus trap, motion-safe manquant, labels. |
+| Integration front↔back | 1/5 | CRITIQUE : frontend attend array, backend envoie `{data, meta}`. Pas de pagination. |
+
+### Score global : 2.2 / 5
+
+---
+
+## 8) /dashboard/history (Historique reservations PRO)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/history/page.tsx`
+
+**Composant** : Affichage des reservations terminees/annulees. Read-only.
+
+**Etats geres** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | Spinner | OK |
+| Erreur | `console.error` silencieux | **KO** — pas d'affichage erreur, pas de retry |
+| Vide | Message "aucun historique" | OK |
+
+**Accessibilite** :
+- **ISSUE** : `animate-spin` sans `motion-safe:` (lignes 72, 107)
+- **ISSUE** : Pas d'etat erreur visible pour l'utilisateur
+
+**Design tokens** : 100% tokens — OK
+
+### API / Backend
+
+Utilise le meme endpoint `GET /bookings` que la page bookings.
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| DH-01 | CRITIQUE | **Meme mismatch pagination que DB-01** : `getJSON<BookingDashboardItem[]>('/bookings')` (ligne 49) attend un array, recoit `{data, meta}`. Page completement vide. |
+| DH-02 | HIGH | **Filtrage cote client incompatible avec pagination** : La page fetch `/bookings` (toutes les reservations) puis filtre cote client pour `COMPLETED`, `DECLINED`, `CANCELLED_*`, `EXPIRED`. Avec la pagination backend (page 1 de 20), les statuts history ne sont peut-etre pas dans la premiere page. **L'historique pourrait etre vide meme si des reservations existent.** |
+| DH-03 | HIGH | **`CANCELLED_AUTO_OVERLAP` manquant dans le filtre** : Le filtre inclut `CANCELLED_AUTO_FIRST_CONFIRMED` (ligne 86) mais omet `CANCELLED_AUTO_OVERLAP`. Les reservations annulees par overlap n'apparaitront JAMAIS dans l'historique. |
+| DH-04 | MEDIUM | **Pas de controles pagination** : Meme probleme que DB-02. |
+| DH-05 | MEDIUM | **`animate-spin` sans `motion-safe:`** (lignes 72, 107). |
+| DH-06 | MEDIUM | **Pas d'etat erreur avec retry** : Erreur silencieuse, pas d'affichage utilisateur. |
+| DH-07 | LOW | **Redirect inconsistant** : Utilisateurs non-auth rediriges vers `/` alors que la page bookings redirige vers `/auth/login`. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnalite | 1/5 | CRITIQUE : mismatch pagination = page vide. Statut manquant dans le filtre. |
+| Securite | 4/5 | Herite protections backend. Page read-only avec auth guard. |
+| Qualite code | 2/5 | Code duplique depuis bookings. Pas d'abstraction partagee. |
+| Accessibilite | 2/5 | Motion-safe manquant. Pas d'etat erreur. |
+| Integration front↔back | 1/5 | CRITIQUE mismatch pagination. Filtrage client-side incompatible avec pagination serveur. |
+
+### Score global : 2.0 / 5
+
+---
+
+## Synthese RBAC & securite Dashboard PRO
+
+### Matrice RBAC backend (routes Dashboard PRO)
+
+| Route | Methode | Guards | Roles | KYC | Premium | Verdict |
+|-------|---------|--------|-------|-----|---------|---------|
+| `GET /pro/me` | GET | Jwt + Roles | PRO | Non | Non | OK (SAUF RolesGuard bypass) |
+| `PATCH /pro/profile` | PATCH | Jwt + Roles + KycApproved | PRO | **OUI** | Non | **PROBLEME** — catch-22 avatar |
+| `PUT /pro/services` | PUT | Jwt + Roles + KycApproved | PRO | **OUI** | Limit 1/3 | OK (SAUF RolesGuard bypass) |
+| `PUT /pro/availability` | PUT | Jwt + Roles + KycApproved | PRO | **OUI** | Non | OK (SAUF RolesGuard bypass) |
+| `POST /pro/portfolio` | POST | Jwt + Roles + KycApproved | PRO | **OUI** | **OUI** | OK (SAUF RolesGuard bypass) |
+| `DELETE /pro/portfolio/:id` | DELETE | Jwt + Roles + KycApproved | PRO | **OUI** | Non | OK (expose ID interne) |
+| `GET /pro/portfolio` | GET | Jwt + Roles | PRO | Non | Non | OK |
+| `POST /kyc/submit` | POST | Jwt + Roles | PRO | Non | Non | OK |
+| `POST /kyc/resubmit` | POST | Jwt + Roles | PRO | Non | Non | **ISSUE** — pas de magic bytes |
+| `GET /dashboard/stats` | GET | Jwt | **AUCUN** | Non | **AUCUN** | **CRITIQUE** — ouvert a tous |
+| `PATCH /bookings/:id/status` | PATCH | Jwt + KycApproved | PRO (service) | **OUI** | Non | OK |
+| `PATCH /bookings/:id/duration` | PATCH | Jwt + KycApproved | PRO (service) | **OUI** | Non | OK |
+| `PATCH /bookings/:id/complete` | PATCH | Jwt + KycApproved | PRO (service) | **OUI** | Non | OK |
+| `PATCH /bookings/:id/cancel` | PATCH | Jwt | Mixte (service) | Service-level PRO | Non | **INCONSISTANT** |
+
+### Protection IDOR
+
+| Endpoint | Methode de verification | Verdict |
+|----------|------------------------|---------|
+| `PUT /pro/services` | `proUserId: userId` (from JWT) | OK — pas d'ID user-supplied |
+| `PUT /pro/availability` | `proUserId: userId` (from JWT) | OK |
+| `PATCH /pro/profile` | `userId` from JWT | OK |
+| `DELETE /pro/portfolio/:id` | `proUserId: userId` WHERE clause | OK |
+| `PATCH /bookings/:id/status` | `booking.proId !== userId` check | OK |
+| `PATCH /bookings/:id/duration` | `updateMany WHERE proId=userId` | OK |
+| `PATCH /bookings/:id/complete` | `updateMany WHERE proId=userId` | OK |
+| `PATCH /bookings/:id/cancel` | `updateMany WHERE proId/clientId=userId` | OK |
+
+### Winner-Takes-All (booking confirmation)
+
+| Etape | Implementation | Verdict |
+|-------|---------------|---------|
+| 1. Lecture booking + verify PENDING | Transaction interactive | OK |
+| 2. Detection conflits horaires | Interval overlap query sur CONFIRMED | OK |
+| 3. Confirmation | Atomic update | OK |
+| 4. Auto-cancel overlaps | `updateMany` PENDING/WAITING → CANCELLED_AUTO | OK |
+| 5. Race condition | Transaction serializable | OK |
+
+---
+
+## Score global Phase 3
+
+| Page | Score |
+|------|-------|
+| DashboardLayout | 3.3 / 5 |
+| /dashboard (overview) | 3.0 / 5 |
+| /dashboard/profile | 3.6 / 5 |
+| /dashboard/kyc | 3.6 / 5 |
+| /dashboard/services | 2.8 / 5 |
+| /dashboard/availability | 2.9 / 5 |
+| /dashboard/bookings | 2.2 / 5 |
+| /dashboard/history | 2.0 / 5 |
+
+### **Score moyen Phase 3 : 2.9 / 5** (Moyen)
+
+**Points les plus faibles** :
+- Bookings et History casses par le mismatch pagination (CRITIQUE)
+- RolesGuard bypass total sur le ProController (CRITIQUE)
+- Dashboard stats sans guard role ni premium (CRITIQUE)
+- Accessibilite tres faible sur services et availability (labels, ARIA)
+
+**Points forts** :
+- Backend booking securise (IDOR, WTA, transactions)
+- KYC backend exemplaire (magic bytes, hash, audit)
+- Design tokens 100% migres
+- publicId separation respectee
+
+---
+
+## Priorites de remediation Phase 3
+
+### P0 — Bloquant production (CRITIQUE)
+
+| # | Issue | Fichier(s) | Impact |
+|---|-------|-----------|--------|
+| 1 | RolesGuard ne lit pas `@Roles()` classe-level → bypass total | `auth/guards/roles.guard.ts:28` | Tout utilisateur peut acceder aux endpoints PRO |
+| 2 | Frontend bookings/history attend array, backend envoie `{data, meta}` | `dashboard/bookings/page.tsx:64`, `dashboard/history/page.tsx:49` | Pages completement vides |
+| 3 | `GET /dashboard/stats` sans RolesGuard ni Premium check | `dashboard/dashboard.controller.ts:23` | Stats PRO accessibles a tous |
+
+### P1 — High priority
+
+| # | Issue | Fichier(s) |
+|---|-------|-----------|
+| 4 | KycApprovedGuard catch-22 avec avatar setup | `pro/pro.controller.ts:41`, `DashboardLayout.tsx:96` |
+| 5 | `@Body() dto: any` sur profile update | `pro/pro.controller.ts:44` |
+| 6 | `resubmit` KYC sans magic bytes validation | `kyc/kyc.controller.ts:145` |
+| 7 | Pas de validation client startTime < endTime | `availability/page.tsx:119` |
+| 8 | History filtre cote client — incompatible pagination | `history/page.tsx:49,80` |
+| 9 | `CANCELLED_AUTO_OVERLAP` manquant dans history filter | `history/page.tsx:86` |
+| 10 | Labels sans `htmlFor`/`id` sur services + availability | `services/page.tsx`, `availability/page.tsx` |
+| 11 | Telephone client expose dans stats | `dashboard.service.ts:113` |
+| 12 | Hex en dur dans Recharts | `dashboard/page.tsx:110,214` |
+
+### P2 — Medium priority
+
+| # | Issue | Fichier(s) |
+|---|-------|-----------|
+| 13 | Pagination controls absents (bookings + history) | `bookings/page.tsx`, `history/page.tsx` |
+| 14 | Tabs sans ARIA pattern (bookings) | `bookings/page.tsx:247` |
+| 15 | Modals sans focus trap (bookings) | `bookings/page.tsx:430` |
+| 16 | `animate-spin` sans `motion-safe:` (6 occurrences) | Toutes les pages dashboard |
+| 17 | Error/success sans `role="alert"` (profile, kyc) | `profile/page.tsx`, `kyc/page.tsx` |
+| 18 | KYC raw fetch au lieu de postFormData | `kyc/page.tsx:93` |
+| 19 | CIN sans validation format frontend | `kyc/page.tsx:275` |
+| 20 | API `/pro/me` fetche 2 fois par page | `DashboardLayout.tsx` + pages enfant |
+| 21 | Sidebar markup duplique | `DashboardLayout.tsx:104-131,163-211` |
+| 22 | `resubmit` body type `any` | `kyc.controller.ts:131` |
+| 23 | Portfolio delete expose ID interne | `pro.controller.ts:101` |
+| 24 | `avatarUrl: ""` cause erreur au lieu de clear | `pro.service.ts:206` |
+| 25 | Doublons dayOfWeek causent 500 Prisma | `pro.service.ts:360` |
+| 26 | `autoCompletePreviousBooking` sans BookingEvent | `booking.service.ts:1198` |
+| 27 | KycApprovedGuard manquant sur cancel controller | `booking.controller.ts:239` |
+
+### P3 — Low priority
+
+| # | Issue | Fichier(s) |
+|---|-------|-----------|
+| 28 | KYC status non rafraichi dans authStore | `DashboardLayout.tsx:35` |
+| 29 | Portfolio images alt generique | `profile/page.tsx:318` |
+| 30 | Retry buttons absents sur erreurs chargement | Toutes les pages |
+| 31 | Succes message non auto-dismiss (services) | `services/page.tsx` |
+| 32 | Toast manquant sur accept/decline (bookings) | `bookings/page.tsx:78` |
+| 33 | Redirect inconsistant history vs bookings | `history/page.tsx:35` |
+| 34 | Progress bar KYC sans ARIA semantics | `KycPendingState.tsx:63` |
+| 35 | SVG checkmarks sans aria-hidden | `KycPendingState.tsx:80` |
+
+---
+
+## Annexe — Fichiers audites Phase 3
+
+**Frontend** :
+- `apps/web/src/app/dashboard/page.tsx`
+- `apps/web/src/app/dashboard/profile/page.tsx`
+- `apps/web/src/app/dashboard/kyc/page.tsx`
+- `apps/web/src/app/dashboard/services/page.tsx`
+- `apps/web/src/app/dashboard/availability/page.tsx`
+- `apps/web/src/app/dashboard/bookings/page.tsx`
+- `apps/web/src/app/dashboard/history/page.tsx`
+- `apps/web/src/components/dashboard/DashboardLayout.tsx`
+- `apps/web/src/components/dashboard/KycPendingState.tsx`
+- `apps/web/src/components/BookingStatusBadge.tsx`
+
+**Backend** :
+- `apps/api/src/pro/pro.controller.ts`
+- `apps/api/src/pro/pro.service.ts`
+- `apps/api/src/kyc/kyc.controller.ts`
+- `apps/api/src/kyc/kyc.service.ts`
+- `apps/api/src/kyc/multer.config.ts`
+- `apps/api/src/booking/booking.controller.ts`
+- `apps/api/src/booking/booking.service.ts`
+- `apps/api/src/dashboard/dashboard.controller.ts`
+- `apps/api/src/dashboard/dashboard.service.ts`
+- `apps/api/src/auth/guards/roles.guard.ts`
+- `apps/api/src/auth/guards/kyc-approved.guard.ts`
+
+**Schemas/Contracts** :
+- `packages/database/prisma/schema.prisma`
+- `packages/contracts/src/schemas/pro.ts`
+- `packages/contracts/src/schemas/availability.ts`
+
+**Database models audites** :
+- `ProProfile`, `ProService`, `WeeklyAvailability`, `ProPortfolioImage`
+- `Booking`, `BookingEvent`, `BookingStatus` enum
+- `KycDocument`, `KycStatus` enum
+
+---
+---
+
+# Phase 4 — Monetisation PRO : Plans & Subscription (audit)
+
+> **Date** : 2026-02-21
+> **Scope** : `/plans` → `POST /payment/checkout` → `/dashboard/subscription/success` ou `/dashboard/subscription/cancel`
+> **Contexte** : Flux monétisation manuel (virement, cash, mobile money) — MVP sans intégration Stripe/CMI
+
+## Resume executif
+
+- **Statut global** : ⚠️ Moyen-Bon — architecture solide mais plusieurs gaps critiques UX et sécurité
+- **Points forts** :
+  - Architecture payment backend propre : PaymentOrder PENDING → admin CONFIRM → activation atomique en transaction
+  - Prix déterminés server-side depuis `PAYMENT_PLANS` (350/3000/200 MAD hardcodés) — client ne peut pas manipuler
+  - Ownership strict : `proUserId` extrait du JWT uniquement, aucun IDOR possible
+  - Validation DTO robuste : regex sur publicId format (`city_xxx_nnn`, `cat_xxx_nnn`)
+  - Cooldown Boost 21j enforced server-side (7j actif + 14j repos)
+  - Exclusivité mutuelle : Premium + Boost ne peuvent pas coexister
+  - Transaction atomique `activatePlan()` : ProSubscription/ProBoost + ProProfile.isPremium/premiumActiveUntil updated ensemble
+  - Guards PRO strict sur tous les endpoints payment (JwtAuthGuard + RolesGuard + @Roles('PRO'))
+  - Admin endpoints ADMIN-only (confirm/reject/pending list)
+- **Risques majeurs** :
+  1. **CRITIQUE** : Aucun webhook — confirmation paiement 100% manuelle admin, risque oubli activation
+  2. **CRITIQUE** : Success/cancel pages ne vérifient PAS le paiement server-side — affichage "succès" sans vérification réelle
+  3. **CRITIQUE** : Pas de synchronisation auth store après paiement — user doit logout/login pour voir Premium status dans le DashboardLayout
+  4. **HIGH** : Pas de protection double-submit — cliquer 2x crée 2 PaymentOrder PENDING
+  5. **HIGH** : `/plans` avec auth guard client-side SEULEMENT (redirect client, pas de middleware)
+  6. **HIGH** : Premium status expire silencieusement — aucun cron/scheduler pour désactiver `isPremium` après `premiumActiveUntil`
+  7. **HIGH** : `animate-bounce` dans success page sans `motion-safe:`
+  8. **MEDIUM** : Hardcoded contact phone/email (+212 6XX, paiement@khadamat.ma) — devrait être en env
+  9. **MEDIUM** : Pas de tests unitaires/e2e sur payment flow (payment.service.spec.ts présent mais probablement vide)
+- **Recommandations top 5** :
+  1. Ajouter appel `GET /payment/status/:oid` dans success page + refresh auth store si PAID
+  2. Implémenter debounce/disabled state 3s sur PaymentButton après click (éviter double-submit)
+  3. Créer cron job quotidien pour désactiver `isPremium` si `premiumActiveUntil < now`
+  4. Ajouter `/plans` au middleware matcher (protection server-side)
+  5. Ajouter `motion-safe:` sur tous les animate-* (success confetti, bounce icon)
+
+---
+
+## 1) /plans (Sélection du plan)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/plans/page.tsx` (341 lignes)
+**Composant** : `PaymentButton` (`apps/web/src/components/payment/PaymentButton.tsx`, 227 lignes)
+
+**Rôle** : Page publique affichant Premium (mensuel/annuel) et Boost avec CTA paiement.
+
+**Auth guard** :
+- Client-side uniquement : `useEffect` lines 49-58 redirect si non-auth ou non-PRO
+- **ISSUE** : `/plans` **N'EST PAS dans middleware matcher** → aucune protection server-side
+- CLIENT peut voir la page brièvement avant redirect JS
+
+**Contenu affiché** :
+- **Premium card** (info-themed) : toggle mensuel (350 MAD / 30j) vs annuel (3000 MAD / 365j, économie 200 MAD)
+- **Boost card** (primary-themed) : 200 MAD / 7j, avec selects ville + catégorie (required)
+
+**PaymentButton workflow** :
+1. Click → `handlePayment()` (line 63)
+2. Payload construction : `{ planType }` + optionnel `{ cityId, categoryId }` pour Boost (lines 68-78)
+3. `POST /payment/checkout` via `postJSON()` (line 81-84)
+4. Response `PaymentResponse` → modal instructions (lines 135-222)
+5. Modal affiche : référence OID, montant, méthodes paiement (virement/cash/mobile money), contact phone/email, bouton "Copier référence"
+
+**Etats gérés** :
+| Etat | Implementation | Verdict |
+|------|---------------|---------|
+| Loading | `isLoading` + Loader2 spinner | OK |
+| Auth redirect | Spinner pendant redirect | OK |
+| Erreur API | Toast + console.error | OK |
+| Modal instructions | Controlled `showModal` state | OK |
+
+**Accessibilite** :
+- Labels avec `htmlFor` sur selects ville/catégorie (lines 268, 294) — OK
+- **ISSUE** : Boutons toggle mensuel/annuel sans `aria-pressed` (lines 125-147)
+- **ISSUE** : Modal sans `role="dialog"`, `aria-modal="true"`, focus trap, escape key (lines 136-222)
+- **ISSUE** : `animate-spin` sur Loader2 sans `motion-safe:` (line 123)
+- **ISSUE** : `transition` sur boutons sans `motion-safe:` (lines 128, 140)
+
+**Design tokens** : 100% tokens — OK
+
+### API / Backend
+
+**Endpoint** : `POST /api/payment/checkout`
+**Controller** : `apps/api/src/payment/payment.controller.ts` (lines 44-56)
+**Service** : `apps/api/src/payment/payment.service.ts` (`initiatePayment`, lines 46-150)
+**DTO** : `apps/api/src/payment/dto/initiate-payment.dto.ts`
+
+| Aspect | Implementation | Verdict |
+|--------|---------------|---------|
+| Guards | `JwtAuthGuard` + `RolesGuard` + `@Roles('PRO')` | OK |
+| Validation | `InitiatePaymentDto` avec class-validator : `@IsIn([PREMIUM_MONTHLY, PREMIUM_ANNUAL, BOOST])`, regex `@Matches()` sur cityId/categoryId | OK |
+| Prix | Déterminé server-side depuis `PAYMENT_PLANS` constant (line 59) — **client ne peut PAS manipuler** | OK |
+| Ownership | `userId` extrait de `req.user.id` (JWT), jamais du body | OK — pas d'IDOR |
+| Boost cityId/categoryId | Validation required (line 69-73), résolution publicId→interne via `CatalogResolverService` (lines 72-73) | OK |
+| Exclusivité Premium/Boost | Premium actif → Boost refusé (lines 74-76). Boost actif → Premium refusé (lines 96-98) | OK |
+| Cooldown Boost | Vérifie dernier Boost, refuse si < 21 jours (lines 78-93) | OK |
+| OID generation | `KHD-{timestamp}-{randomBytes(16)}` (lines 102-104) | OK — unique, imprévisible |
+| DB création | `PaymentOrder.create` status PENDING (lines 108-119) | OK |
+| Idempotence | **AUCUNE** — double-click crée 2 orders PENDING | **KO** |
+| Response | Retourne `{ success, order, message, paymentInstructions }` avec contact hardcodé (lines 124-149) | OK shape, **ISSUE** hardcoded contact |
+
+### DB
+
+**Model** : `PaymentOrder` (`schema.prisma` lines 420-447)
+
 ```prisma
 model PaymentOrder {
-  proUserId  String   // ← PAS de @relation, PAS de FK constraint
-  // ...
+  id          String               @id @default(cuid())
+  oid         String               @unique
+  proUserId   String
+  pro         ProProfile           @relation(...)
+  planType    PaymentOrderPlanType // PREMIUM_MONTHLY | PREMIUM_ANNUAL | BOOST
+  provider    PaymentProvider      @default(MANUAL)
+  amountCents Int                  // Prix en centimes
+  status      PaymentOrderStatus   @default(PENDING) // PENDING | PAID | FAILED
+  cityId      String?              // Pour BOOST uniquement
+  categoryId  String?
+  adminNotes  String?
+  createdAt   DateTime             @default(now())
+  paidAt      DateTime?
+
+  @@index([proUserId, status])
+  @@index([oid])
 }
 ```
 
-**Impact** :
-- On peut créer un PaymentOrder avec un `proUserId` qui n'existe pas en DB
-- Pas de cascade delete — si un User est supprimé, ses PaymentOrders deviennent orphelins
-- Pas de jointure Prisma possible (`include: { pro: ... }`)
+**Pas de contrainte unique sur (proUserId, planType, status=PENDING)** → double-submit possible.
 
-**Migration SQL confirme** (l.300) : `"proUserId" TEXT NOT NULL` sans `REFERENCES`.
+### Findings
 
-### 3.3) 🟡 PaymentOrder — planType et status sont des `String` au lieu d'enums
+| # | Severite | Description |
+|---|----------|-------------|
+| P-01 | CRITIQUE | **Pas de protection double-submit** : Cliquer 2x sur PaymentButton crée 2 `PaymentOrder` PENDING avec 2 OID différents. Aucun debounce, aucune contrainte DB unique. |
+| P-02 | HIGH | **`/plans` pas dans middleware** : Pas de protection server-side. Un CLIENT peut voir la page brièvement avant redirect client-side JS. |
+| P-03 | HIGH | **`animate-spin` et `transition` sans `motion-safe:`** : Violations CLAUDE.md (lines 123, 128, 140). |
+| P-04 | MEDIUM | **Contact hardcodé** : `phone: '+212 6XX XXX XXX'`, `email: 'paiement@khadamat.ma'` en dur dans le service (lines 144-145). Devrait être dans `.env`. |
+| P-05 | MEDIUM | **Boutons toggle sans `aria-pressed`** : Les boutons Mensuel/Annuel (lines 125-147) n'ont pas `aria-pressed` pour indiquer l'état sélectionné. |
+| P-06 | MEDIUM | **Modal instructions sans ARIA dialog** : Pas de `role="dialog"`, `aria-modal`, focus trap, escape key (lines 136-222 de PaymentButton.tsx). |
+| P-07 | LOW | **Console.log en production** : `console.log('✅ Payment request created:', ...)` (line 86 PaymentButton) devrait être retiré ou conditionnel à dev mode. |
 
-```prisma
-planType  String  // "PREMIUM_MONTHLY" | "PREMIUM_ANNUAL" | "BOOST" — devrait être un enum
-status    String  // "PENDING" | "PAID" | "FAILED" — devrait être un enum
-```
+### Scores
 
-**Impact** : Aucune contrainte DB sur les valeurs. Un bug dans le code pourrait écrire n'importe quelle valeur (ex: `"PANDING"`, `"paid"`).
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnel | 4/5 | Flow complet, modal instructions. Double-submit pas bloqué. |
+| Securite & acces | 4/5 | Prix server-side OK, JWT ownership OK. Pas dans middleware. Double-submit. |
+| Integration front↔back | 4.5/5 | Response shapes match parfaitement. Contact hardcodé. |
+| UX & accessibilite | 2.5/5 | Modal non accessible, toggle sans aria-pressed, motion-safe manquant. |
+| Performance & robustesse | 3/5 | Idempotence manquante. Pas de retry. |
 
-### 3.4) 🟡 ProSubscription.endedAt vs PaymentOrder.paidAt — sémantique confuse
+### Score global : 3.6 / 5
 
-- `ProSubscription.endedAt` : date de fin de l'abonnement — mais la valeur écrite est `endsAt` (date planifiée de fin), pas la date réelle de résiliation.
-- Le champ porte un nom passé (`ended`) mais contient une date future (fin prévue).
-- `ProSubscription.startedAt` : date de début (correct).
+---
 
-### 3.5) 🟡 Booking.proId → ProProfile.userId (pas User.id)
+## 2) /pro/subscription (Page résultat paiement — MAL NOMMÉE)
 
-```prisma
-proId  String
-pro    ProProfile  @relation(fields: [proId], references: [userId])
-```
+### Frontend
 
-**Constat** : `proId` est en réalité le `userId` du ProProfile. C'est fonctionnellement correct (ProProfile.userId = User.id, car c'est la PK), mais sémantiquement trompeur — le frontend et l'API manipulent `proId` qui est en fait un `userId`.
+**Fichier** : `apps/web/src/app/pro/subscription/page.tsx` (241 lignes)
 
-### 3.6) 🟡 City.id interne exposé dans certaines réponses
+**Rôle** : Affiche le résultat d'une demande de paiement via query params `?status=`, `?error=`, `?oid=`.
+**NOTE** : Le nom du fichier est trompeur — ce n'est PAS une page "subscription management" mais une page "résultat de demande".
 
-**catalog.service.ts:147** :
+**Query params attendus** :
+- `status` : `'success'` | `'pending'` | `'failed'` | `'error'`
+- `error` : message d'erreur (optionnel)
+- `oid` : référence de commande (optionnel)
+
+**Affichage conditionnel** :
+- `status=success` : Alerte verte "Paiement validé" → CTA "Dashboard" + "Voir offres"
+- `status=pending` : Alerte bleue "Demande en attente" → instructions de règlement (virement/cash/mobile money) + CTA "Dashboard"
+- `status=failed` : Alerte rouge "Paiement rejeté" → CTA "Réessayer" + "Dashboard"
+- `status=error` : Alerte orange "Erreur technique" → CTA "Réessayer" + "Dashboard"
+- Aucun status : Message générique + lien "Découvrir nos offres"
+
+**PROBLÈME MAJEUR** : Cette page ne fait **AUCUNE vérification server-side**. Le `status=success` est affiché tel quel, même si le paiement n'est pas vraiment validé en DB. Un utilisateur peut naviguer manuellement vers `/pro/subscription?status=success&oid=FAKE` et voir "Paiement validé".
+
+**Accessibilité** :
+- **ISSUE** : Pas de `role="alert"` sur les alertes de statut (lines 40-121)
+- **ISSUE** : `transition` sur boutons sans `motion-safe:` (lines 110, 118, 137)
+
+**Design tokens** : 100% tokens — OK
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| PS-01 | CRITIQUE | **Aucune vérification server-side** : La page affiche `status=success` sans appeler `GET /payment/status/:oid` pour vérifier. Un utilisateur peut forger l'URL. |
+| PS-02 | HIGH | **Nom de fichier trompeur** : `/pro/subscription` suggère une page de gestion d'abonnement, mais c'est une page de résultat de paiement. Devrait être `/payment/result` ou `/payment/status`. |
+| PS-03 | MEDIUM | **Pas de `role="alert"` sur alertes** : Les 4 alertes de statut (lines 40-121) n'ont pas `role="alert"` — lecteurs d'écran ne les annoncent pas. |
+| PS-04 | MEDIUM | **`transition` sans `motion-safe:`** : Lines 110, 118, 137. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnel | 3/5 | Affiche les 4 états. Pas de vérification server-side. |
+| Securite & acces | 1/5 | Status forgeable. Aucune validation. |
+| Integration front↔back | 2/5 | Devrait appeler `/payment/status/:oid` mais ne le fait pas. |
+| UX & accessibilite | 3/5 | États clairs. Alerts sans role="alert", transition sans motion-safe. |
+| Performance & robustesse | 3/5 | Statique, pas de latence. Mais pas de retry si erreur. |
+
+### Score global : 2.4 / 5
+
+---
+
+## 3) /dashboard/subscription/success (Succès paiement)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/subscription/success/page.tsx` (133 lignes)
+
+**Rôle** : Page post-paiement "succès" avec animation confetti (emojis).
+
+**Workflow** :
+- `useEffect` mount → crée 30 emojis confetti (🎉🎊✨) qui tombent (lines 12-58)
+- Affiche message "Paiement validé !" + checklist avantages
+- CTA "Accéder au Dashboard" + "Voir les offres"
+
+**PROBLÈME MAJEUR** : Comme `/pro/subscription`, **aucune vérification server-side**. Un utilisateur peut naviguer vers `/dashboard/subscription/success` directement et voir la page de succès sans avoir payé.
+
+**PROBLÈME SYNCHRONISATION** : La page ne fait **aucun appel API** pour :
+1. Vérifier que le paiement est réellement PAID en DB
+2. Rafraîchir le `authStore` pour mettre à jour `user.isPremium`
+
+Résultat : L'utilisateur voit "succès" mais le DashboardLayout ne reflète pas le statut Premium (il faut logout/login).
+
+**Accessibilité** :
+- **VIOLATION GRAVE** : `animate-bounce` sur l'icône success (line 65) sans `motion-safe:` — utilisateurs `prefers-reduced-motion` voient l'animation
+- **ISSUE** : Confetti animation (lines 37-46) sans vérifier `prefers-reduced-motion`
+- **ISSUE** : Pas de `role="alert"` sur la card principale
+
+**Design tokens** : 100% tokens — OK
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| SS-01 | CRITIQUE | **Aucune vérification server-side** : Page accessible directement sans payer. Devrait appeler `GET /payment/status/:oid` + vérifier `status === 'PAID'`. |
+| SS-02 | CRITIQUE | **Pas de refresh auth store** : `isPremium` non mis à jour dans le store. DashboardLayout affiche toujours "free tier" jusqu'à logout/login. |
+| SS-03 | HIGH | **`animate-bounce` sans `motion-safe:`** : Line 65, violation WCAG + CLAUDE.md. |
+| SS-04 | MEDIUM | **Confetti sans respect `prefers-reduced-motion`** : L'animation confetti (lines 37-46) devrait vérifier `window.matchMedia('(prefers-reduced-motion: reduce)')` avant de créer les éléments. |
+| SS-05 | LOW | **Message "email confirmation envoyé" non implémenté** : Line 127 dit "Un email de confirmation vous a été envoyé" mais aucun service email n'est configuré dans le code. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnel | 2/5 | Affichage OK. Pas de vérification paiement. Store non refresh. |
+| Securite & acces | 1/5 | Page forgeable, pas de vérification. |
+| Integration front↔back | 1/5 | Aucun appel API. Store jamais refresh. |
+| UX & accessibilite | 2/5 | Confetti fun mais viole motion-safe. Pas de role="alert". |
+| Performance & robustesse | 4/5 | Confetti léger, cleanup OK (timeout 5s). |
+
+### Score global : 2.0 / 5
+
+---
+
+## 4) /dashboard/subscription/cancel (Annulation paiement)
+
+### Frontend
+
+**Fichier** : `apps/web/src/app/dashboard/subscription/cancel/page.tsx` (68 lignes)
+
+**Rôle** : Page post-paiement "annulé" avec message rassurant.
+
+**Workflow** :
+- Affiche icône XCircle + "Paiement annulé"
+- Message "Aucun montant débité"
+- CTA "Réessayer" → `/plans`, "Retour Dashboard" → `/dashboard`
+- Lien support email
+
+**Bon point** : Page simple, purement informative, pas d'action critique.
+
+**Accessibilité** :
+- **ISSUE** : Pas de `role="alert"` sur la card principale
+- Design tokens : 100% — OK
+
+### Findings
+
+| # | Severite | Description |
+|---|----------|-------------|
+| SC-01 | LOW | **Pas de `role="alert"`** : La card principale (lines 18-54) devrait avoir `role="alert"` pour annoncer l'annulation aux lecteurs d'écran. |
+| SC-02 | INFO | Page simple, aucune action critique, pas de vérification nécessaire. Statique uniquement. |
+
+### Scores
+
+| Axe | Score | Detail |
+|-----|-------|--------|
+| Fonctionnel | 5/5 | Affichage simple, CTAs clairs. |
+| Securite & acces | 5/5 | Aucune action sensible. |
+| Integration front↔back | 5/5 | Pas d'API nécessaire (purement informatif). |
+| UX & accessibilite | 4/5 | CTA clairs, support email. Manque role="alert". |
+| Performance & robustesse | 5/5 | Statique, instantané. |
+
+### Score global : 4.8 / 5
+
+---
+
+## 5) Backend Payment System (Analyse transversale)
+
+### Architecture
+
+**Version** : MVP Manuel (pas de Stripe/CMI intégration — prévu pour v2)
+
+**Flow** :
+1. PRO → `POST /payment/checkout` → `PaymentOrder` créé (status PENDING)
+2. Admin → reçoit notification (hors code, processus manuel)
+3. Admin vérifie virement/cash → `POST /payment/admin/confirm/:oid`
+4. Service → `confirmPayment()` → `activatePlan()` en transaction atomique
+5. `ProProfile.isPremium = true` + `premiumActiveUntil = now + durationDays`
+6. (ou `ProBoost.create()` + `ProProfile.boostActiveUntil`)
+
+### Endpoints
+
+| Route | Methode | Guards | Role | Description |
+|-------|---------|--------|------|-------------|
+| `POST /payment/checkout` | POST | Jwt + Roles | PRO | Crée PaymentOrder PENDING |
+| `GET /payment/status/:oid` | GET | Jwt + Roles | PRO | Récupère statut (avec ownership check) |
+| `POST /payment/admin/confirm/:oid` | POST | Jwt + Roles | ADMIN | Valide paiement → active plan |
+| `POST /payment/admin/reject/:oid` | POST | Jwt + Roles | ADMIN | Rejette paiement |
+| `GET /payment/admin/pending` | GET | Jwt + Roles | ADMIN | Liste PENDING (pagination) |
+
+### Validation robuste
+
+| Aspect | Implementation |
+|--------|---------------|
+| DTO validation | `@IsIn([...])`, `@Matches(/^city_[a-z]+_\d{3}$/)` sur cityId/categoryId |
+| Prix | Server-side depuis `PAYMENT_PLANS` constant (client ne peut PAS envoyer amount) |
+| Ownership | `req.user.id` uniquement, jamais du body |
+| PublicId resolve | `CatalogResolverService` convertit publicId → interne ID |
+
+### Transaction atomique `activatePlan()`
+
+**Fichier** : `payment.service.ts` lines 268-341
+
 ```typescript
-city: { select: { id: true, name: true } },  // ← id = cuid interne, pas publicId
+await this.prisma.$transaction(async (tx) => {
+  if (planType === BOOST) {
+    await tx.proBoost.create({ ... });
+    await tx.proProfile.update({ boostActiveUntil: endsAt });
+  } else { // PREMIUM
+    const existing = await tx.proSubscription.findFirst({ ... });
+    if (existing) {
+      await tx.proSubscription.update({ ... });
+    } else {
+      await tx.proSubscription.create({ ... });
+    }
+    await tx.proProfile.update({ isPremium: true, premiumActiveUntil: endsAt });
+  }
+});
 ```
 
-Dans `getProDetail()`, le `city.id` retourné est le cuid interne (pas le publicId). Incohérent avec le reste de l'API qui utilise systématiquement `publicId` pour les villes.
+**Bon point** : Atomique. Si une étape échoue, tout rollback.
+**ISSUE** : Pas d'invalidation cache après activation. Si le DashboardLayout a fetch `/pro/me` avant activation, le cache n'est pas refresh.
+
+### Security Analysis
+
+| Aspect | Verdict |
+|--------|---------|
+| IDOR | ✅ OK — `proUserId` from JWT, ownership check dans `getPaymentStatus` |
+| Prix manipulation | ✅ OK — prix déterminé server-side |
+| Role enforcement | ✅ OK — `@Roles('PRO')` sur checkout, `@Roles('ADMIN')` sur confirm/reject |
+| Idempotency | ❌ KO — pas de contrainte unique, double-submit crée 2 orders |
+| Webhook signature | N/A — pas de webhook (paiement manuel) |
+| Premium expiration | ❌ KO — `premiumActiveUntil` set mais aucun cron pour désactiver `isPremium` après expiration |
+| Cache invalidation | ❌ KO — activation ne clear pas le cache `/pro/me` |
+
+### Findings Backend
+
+| # | Severite | Description |
+|---|----------|-------------|
+| BE-01 | CRITIQUE | **Pas de webhook** : Confirmation 100% manuelle. Risque oubli admin → client paie mais non activé. Pas de notification automatique. |
+| BE-02 | HIGH | **Pas de cron expiration Premium** : `premiumActiveUntil` stocké mais jamais vérifié automatiquement. Un PRO reste `isPremium=true` même après expiration jusqu'à prochaine action manuelle. |
+| BE-03 | HIGH | **Pas d'invalidation cache après activation** : `activatePlan()` ne clear pas le cache de `/pro/me`. DashboardLayout peut afficher old data. |
+| BE-04 | MEDIUM | **Pas de tests** : `payment.service.spec.ts` existe mais probablement vide (pas lu). Aucun test e2e du flow checkout → confirm → activation. |
+| BE-05 | MEDIUM | **Contact hardcodé** : Phone/email dans `initiatePayment` response (lines 144-145) devrait être `.env`. |
+| BE-06 | LOW | **`amountCents` calculé mais jamais utilisé pour vérification** : Le backend stocke `amountCents` (line 105) mais l'admin confirme sans vérifier que le montant reçu correspond. |
 
 ---
 
-## 4) Intégration Frontend ↔ API ↔ DB — Matrice par flux
+## Synthese E2E Flow (observé vs attendu)
 
-### 4.1) Flux AUTH (inscription/connexion)
+### Flow réel observé
 
-| Étape | Frontend | API | DB | Verdict |
-|-------|----------|-----|-----|:-------:|
-| Register | `register/page.tsx` → `POST /auth/register` | `auth.service.ts:register()` | `User.create + ProProfile.create` (transaction) | ✅ |
-| Register CIN | FormData avec fichiers | `Multer → auth.service.ts` | `ProProfile.kycCinFrontUrl/BackUrl` | ✅ |
-| Login | `login/page.tsx` → `POST /auth/login` | `auth.service.ts:login()` | `User.findFirst(email OR phone)` | ✅ |
-| Refresh | `api.ts` auto-refresh 401 | `auth.service.ts:refreshTokens()` | `RefreshToken.findUnique + rotation` | ✅ |
-| Logout | `authStore.logout()` | `auth.service.ts:logout()` | `RefreshToken.updateMany(revoked)` | ✅ |
+```
+/plans
+  └── PaymentButton click
+      └── POST /payment/checkout { planType, cityId?, categoryId? }
+          └── Backend: PaymentOrder.create(status=PENDING)
+          └── Response: { oid, reference, paymentInstructions }
+          └── Modal: affiche instructions + référence à copier
 
-**Problèmes** :
-- Login : `User.findFirst` avec OR (email/phone) peut être lent sans index composite → mais `email` et `phone` ont chacun un unique index → OK
-- Register PRO : `cinNumber` unique constraint vérifié avant transaction → race condition possible entre check et create (mitigé par la contrainte @unique en DB)
+PRO règle hors plateforme (virement/cash)
+PRO contacte admin avec référence OID
 
-### 4.2) Flux CATALOG (pages publiques)
+ADMIN (process manuel, hors code):
+  └── Vérifie paiement reçu
+  └── POST /payment/admin/confirm/:oid
+      └── Backend: PaymentOrder.update(status=PAID, paidAt=now)
+      └── Backend: activatePlan() atomique
+          └── ProSubscription.create ou ProBoost.create
+          └── ProProfile.update(isPremium=true, premiumActiveUntil=...)
 
-| Étape | Frontend | API | DB | Verdict |
-|-------|----------|-----|-----|:-------:|
-| Villes | `Hero.tsx` → `GET /public/cities` | `catalog.service.ts:getCities()` | `City.findMany(orderBy: name)` | ✅ cache 10min |
-| Catégories | `Hero.tsx + Categories.tsx` → `GET /public/categories` | `catalog.service.ts:getCategories()` | `Category.findMany(orderBy: name)` | ✅ cache 10min |
-| Listing Pros | `pros/page.tsx` → `GET /public/pros/v2` | `catalog.service.ts:getProsV2()` | `User.findMany + count` (parallel) | ✅ cache 2min |
-| Détail Pro | `pros/[id]/page.tsx` → `GET /public/pros/:id` | `catalog.service.ts:getProDetail()` | `User.findUnique + Booking.count` | ✅ |
+PRO navigue vers /dashboard/subscription/success (URL manually entered? redirect unknown)
+  └── Frontend: affiche "succès" SANS vérifier status
+  └── DashboardLayout: affiche toujours free tier (cache non refresh)
+  └── PRO logout + login → refresh auth store → voit Premium
+```
 
-**Problèmes** :
-- `getProsV2` tri : `isPremium DESC, boostActiveUntil DESC, createdAt DESC` → utilise les champs dénormalisés sur ProProfile ✅ (bon pattern)
-- Mais `boostActiveUntil` n'est **jamais remis à null** après expiration → les pros avec un boost expiré restent triés avant les non-boostés. Pas de cron pour nettoyer.
-- `getProDetail` expose `city.id` interne (cuid) au lieu de `publicId` → incohérence avec le reste
+### Gaps critiques
 
-### 4.3) Flux BOOKING
-
-| Étape | Frontend | API | DB | Verdict |
-|-------|----------|-----|-----|:-------:|
-| Slots | `booking/page.tsx` → `GET /public/slots` | `booking.service.ts:getAvailableSlots()` | `ProService.findUnique + WeeklyAvailability.findUnique + Booking.findMany(CONFIRMED)` | ✅ |
-| Créer | `booking/page.tsx` → `POST /bookings` | `booking.service.ts:createBooking()` | `User.findUnique + ProProfile.findUnique + Booking.create` | ✅ |
-| Confirm/Decline | `dashboard/bookings` → `PATCH /bookings/:id/status` | `booking.service.ts:updateBookingStatus()` | Transaction: `Booking.findUnique + update + findMany + update(overlap)` | ✅ |
-| Modifier durée | `dashboard/bookings` → `PATCH /bookings/:id/duration` | `booking.service.ts:updateBooking()` | `Booking.findUnique + findMany(conflicts) + update` | ✅ |
-| Répondre modif | `client/bookings` → `PATCH /bookings/:id/respond` | `booking.service.ts:respondToModification()` | Transaction: même logique que confirm | ✅ |
-| Compléter | `dashboard/bookings` → `PATCH /bookings/:id/complete` | `booking.service.ts:completeBooking()` | `Booking.findUnique + update(COMPLETED)` | ✅ |
-
-**Problèmes** :
-- ❌ **Pas d'endpoint d'annulation** : `CANCELLED_BY_CLIENT`, `CANCELLED_BY_CLIENT_LATE`, `CANCELLED_BY_PRO` → 3 statuts DB sans aucun code
-- ❌ **Pas de cron d'expiration** : `expiresAt` rempli mais jamais vérifié → bookings PENDING restent indéfiniment
-- ⚠️ `cancelledAt` et `cancelReason` jamais remplis
-- ⚠️ `BookingEvent` émis via `EventEmitter` mais jamais persisté en `BookingEvent` table
-- ⚠️ `SlotLock` table jamais utilisée — la vérification de dispo utilise `getAvailableSlots()` pas de lock
-
-### 4.4) Flux PRO DASHBOARD
-
-| Étape | Frontend | API | DB | Verdict |
-|-------|----------|-----|-----|:-------:|
-| Dashboard | `dashboard/page.tsx` → `GET /pro/me` + `GET /dashboard/stats` | `pro.service.ts + dashboard.service.ts` | `ProProfile + Booking.findMany` (7d) | ✅ |
-| Profile | `dashboard/profile` → `GET /pro/me` + `PATCH /pro/profile` | `pro.service.ts:updateProfile()` | Transaction: `User.update + ProProfile.update` | ✅ |
-| Services | `dashboard/services` → `GET /pro/me` + `PUT /pro/services` | `pro.service.ts:updateServices()` | Transaction: `ProService.deleteMany + createMany` | ✅ |
-| Availability | `dashboard/availability` → `GET /pro/me` + `PUT /pro/availability` | `pro.service.ts:updateAvailability()` | Transaction: `WeeklyAvailability.deleteMany + createMany` | ✅ |
-| KYC | `dashboard/kyc` → `POST /kyc/submit` | `kyc.service.ts:submitKyc()` | `ProProfile.update(kycStatus, urls)` | ✅ |
-
-**Problèmes** :
-- Dashboard stats (`dashboard.service.ts`) : `Booking.findMany` puis groupage JS au lieu de `groupBy` Prisma → N+1 potentiel sur gros volumes
-- Dashboard stats : pas de vérification `isPremium` côté backend → tout PRO peut accéder
-- Services : stratégie DELETE ALL + CREATE → perte des IDs et des `createdAt` à chaque mise à jour
-
-### 4.5) Flux PAYMENT
-
-| Étape | Frontend | API | DB | Verdict |
-|-------|----------|-----|-----|:-------:|
-| Checkout | `plans/page.tsx` → `POST /payment/checkout` | `payment.service.ts:initiatePayment()` | `ProProfile.findUnique + ProBoost.findFirst + PaymentOrder.create` | ✅ |
-| Status | `pro/subscription` → `GET /payment/status/:oid` | `payment.service.ts:getPaymentStatus()` | `PaymentOrder.findUnique` | ✅ |
-| Confirm (admin) | Admin → `POST /payment/admin/confirm/:oid` | `payment.service.ts:confirmPayment()` | Transaction: `PaymentOrder.update + ProSubscription.create/update + ProProfile.update` | 🔴 CRASH |
-| Reject (admin) | Admin → `POST /payment/admin/reject/:oid` | `payment.service.ts:rejectPayment()` | `PaymentOrder.update(FAILED)` | ✅ |
-
-**Problèmes** :
-- 🔴 `activatePlan()` utilise `endDate` (inexistant) au lieu de `endedAt` → **crash systématique à l'activation Premium**
-- ❌ `PaymentOrder.proUserId` sans FK → intégrité non garantie
-- ❌ Pas de cron pour expirer les Premium (`premiumActiveUntil < now` → toujours `isPremium = true`)
-- ❌ Pas de cron pour expirer les Boosts (`boostActiveUntil < now` → toujours trié en premier)
-- ⚠️ `planType` et `status` sont des String libres, pas des enums
+| Attendu | Observé | Gap |
+|---------|---------|-----|
+| Success page vérifie payment | Success page affiche sans vérifier | PS-01, SS-01 |
+| Success page refresh auth store | Store jamais refresh | SS-02 |
+| Idempotence checkout | Double-submit crée 2 orders | P-01 |
+| Webhook auto-confirm | Confirmation 100% manuelle | BE-01 |
+| Premium expire automatiquement | Reste actif même après `premiumActiveUntil` | BE-02 |
+| `/plans` protected server-side | Client-side redirect only | P-02 |
+| Cache invalidation post-activation | Cache jamais clear | BE-03 |
 
 ---
 
-## 5) Index et performance
+## Score global Phase 4
 
-### 5.1) Index existants
+| Page | Score |
+|------|-------|
+| /plans | 3.6 / 5 |
+| /pro/subscription | 2.4 / 5 |
+| /dashboard/subscription/success | 2.0 / 5 |
+| /dashboard/subscription/cancel | 4.8 / 5 |
+| Backend Payment System | 3.5 / 5 |
 
-| Modèle | Index | Type | Adéquat ? |
-|--------|-------|------|:---------:|
-| `User` | `email` | unique | ✅ |
-| `User` | `phone` | unique | ✅ |
-| `City` | `publicId` | unique | ✅ |
-| `City` | `name` | unique | ✅ |
-| `City` | `slug` | unique | ✅ |
-| `Category` | `publicId` | unique | ✅ |
-| `Category` | `name` | unique | ✅ |
-| `Category` | `slug` | unique | ✅ |
-| `ProService` | `[proUserId, categoryId]` | unique composite | ✅ |
-| `ProService` | `categoryId` | simple | ✅ |
-| `Booking` | `[clientId, cityId, categoryId, timeSlot]` | composite | ✅ |
-| `Booking` | `clientId` | simple | ✅ |
-| `Booking` | `[proId, timeSlot]` | composite | ✅ |
-| `Booking` | `proId` | simple | ✅ |
-| `BookingEvent` | `[bookingId, createdAt]` | composite | ✅ (mais table inutilisée) |
-| `SlotLock` | `[proUserId, timeSlot]` | unique composite | ✅ (mais table inutilisée) |
-| `RefreshToken` | `tokenHash` | unique | ✅ |
-| `RefreshToken` | `userId` | simple | ✅ |
-| `RefreshToken` | `expiresAt` | simple | ✅ |
-| `PaymentOrder` | `[proUserId, status]` | composite | ✅ |
-| `PaymentOrder` | `oid` | unique + index | ⚠️ doublon (unique crée déjà un index) |
-| `ProSubscription` | `[proUserId, status]` | composite | ✅ |
-| `ProBoost` | `[cityId, categoryId, status, startsAt]` | composite | ✅ |
-| `ProBoost` | `[proUserId, endsAt]` | composite | ✅ |
+### **Score moyen Phase 4 : 3.3 / 5** (Moyen)
 
-### 5.2) Index manquants
+**Points les plus faibles** :
+- Success/result pages sans vérification server-side (forgeable)
+- Auth store jamais refresh après paiement
+- Premium expiration non automatisée
+- Double-submit non bloqué
 
-| Requête | Champs | Impact |
-|---------|--------|--------|
-| `Booking.findMany(proId, status CONFIRMED, timeSlot range)` | `[proId, status, timeSlot]` | Utilisé dans updateBookingStatus + getAvailableSlots — filtre courant |
-| `ProBoost.findFirst(proUserId, orderBy createdAt DESC)` | `[proUserId, createdAt]` | Cooldown check dans initiatePayment |
-| `User.findFirst(email OR phone)` | Index composite `[email, phone]` | Login — mais les index unique séparés suffisent |
-
-### 5.3) Requêtes problématiques
-
-1. **`dashboard.service.ts`** : `Booking.findMany` pour les 7 derniers jours, puis groupage par date en JavaScript
-   - Devrait utiliser `groupBy` Prisma ou une raw query `GROUP BY DATE(timeSlot)`
-   - Impact : linéaire en nombre de bookings → dégradation avec le volume
-
-2. **`catalog.service.ts:getProsV2`** : `orderBy: [{ proProfile: { isPremium: 'desc' } }, { proProfile: { boostActiveUntil: 'desc' } }]`
-   - Tri sur relation jointe → peut être lent sur gros volumes si pas d'index composite
-   - Mitigé par le cache de 2 minutes
-
-3. **`booking.service.ts:getAvailableSlots`** : 3 requêtes séquentielles (service → availability → bookings)
-   - Pourrait être optimisé en 1-2 requêtes avec des includes
+**Points forts** :
+- Prix server-side, ownership JWT strict
+- Transaction atomique activatePlan
+- Guards RBAC complets (PRO/ADMIN)
+- Exclusivité Premium/Boost enforced
 
 ---
 
-## 6) Sécurité DB
+## Priorites de remediation Phase 4
 
-### 6.1) Points positifs
-- ✅ Mots de passe hashés (bcrypt, 10 rounds) — `auth.service.ts:110`
-- ✅ Refresh tokens stockés en SHA-256 (jamais le token brut) — `auth.service.ts:432`
-- ✅ Tokens expirés nettoyés par cron quotidien — `refresh-token-cleanup.service.ts`
-- ✅ `password` exclu de tous les `select` dans les requêtes publiques
-- ✅ CIN unique constraint pour empêcher la fraude multi-comptes
-- ✅ Transactions atomiques pour les opérations critiques (booking confirm, payment activate, register)
+### P0 — Bloquant production (CRITIQUE)
 
-### 6.2) Points négatifs
-- ❌ **KYC files** : URLs stockées comme strings simples dans ProProfile — `kycCinFrontUrl`, `kycCinBackUrl`, `kycSelfieUrl`. Si le serveur expose `/uploads/kyc/` sans auth, les CIN sont accessibles publiquement.
-- ❌ **PaymentOrder sans FK** : `proUserId` non contraint → data orpheline possible
-- ❌ **User.id (cuid) exposé comme Pro ID** : l'ID interne est utilisé dans les URLs publiques (`/pros/:id`) et dans les bookings. Un attaquant peut énumérer les IDs (cuids sont prévisibles dans leur préfixe).
-- ⚠️ **Pas de soft delete** : les suppressions sont en cascade (`onDelete: Cascade`) → un delete User supprime tout l'historique (bookings, reviews, reports)
-- ⚠️ **cinNumber stocké en clair** : le numéro CIN (pièce d'identité nationale) est stocké sans chiffrement dans ProProfile
+| # | Issue | Fichier(s) | Impact |
+|---|-------|-----------|--------|
+| 1 | Success page sans vérification server-side | `dashboard/subscription/success/page.tsx` | Utilisateur voit "succès" sans avoir payé |
+| 2 | Auth store jamais refresh après paiement | Tous les frontend pages | DashboardLayout affiche free tier même après paiement validé |
+| 3 | Webhook manquant → confirmation manuelle | Backend payment | Risque oubli activation admin |
 
----
+### P1 — High priority
 
-## 7) Crons et jobs planifiés — État actuel
+| # | Issue | Fichier(s) |
+|---|-------|-----------|
+| 4 | Premium expiration non automatisée | Backend (besoin cron) |
+| 5 | Double-submit crée 2 orders | `payment.controller.ts:44`, `PaymentButton.tsx:63` |
+| 6 | `/plans` pas dans middleware | `middleware.ts` |
+| 7 | `animate-bounce` sans `motion-safe:` | `dashboard/subscription/success/page.tsx:65` |
+| 8 | Contact hardcodé (phone/email) | `payment.service.ts:144-145` |
 
-| Job | Fichier | Schedule | Fait quoi | Verdict |
-|-----|---------|----------|-----------|:-------:|
-| Cleanup refresh tokens | `refresh-token-cleanup.service.ts` | `@Cron(EVERY_DAY_AT_3AM)` | Supprime tokens expirés > 30j | ✅ |
-| Cleanup failed logins | `failed-login.service.ts` | `setInterval(10min)` | Purge in-memory map | ✅ |
+### P2 — Medium priority
 
-### 7.1) Crons MANQUANTS (critiques)
+| # | Issue | Fichier(s) |
+|---|-------|-----------|
+| 9 | Cache `/pro/me` non invalidé après activation | `payment.service.ts:268-341` |
+| 10 | Pas de tests payment flow | `payment.service.spec.ts` |
+| 11 | Modal PaymentButton sans ARIA dialog | `PaymentButton.tsx:136-222` |
+| 12 | Boutons toggle sans `aria-pressed` | `plans/page.tsx:125-147` |
+| 13 | Confetti sans `prefers-reduced-motion` | `dashboard/subscription/success/page.tsx:37-46` |
+| 14 | Alerts sans `role="alert"` | `/pro/subscription/page.tsx`, `/dashboard/subscription/*` |
+| 15 | Nom fichier trompeur `/pro/subscription` | Renommer en `/payment/result` |
 
-| Job manquant | Impact | Priorité |
-|--------------|--------|:--------:|
-| **Expirer bookings PENDING** (`expiresAt < now → EXPIRED`) | Bookings PENDING s'accumulent indéfiniment | 🔴 P0 |
-| **Expirer Premium** (`premiumActiveUntil < now → isPremium = false`) | Pros restent Premium après expiration | 🔴 P0 |
-| **Expirer Boosts** (`boostActiveUntil < now → null, BoostStatus.EXPIRED`) | Pros boostés restent en tête de liste après expiration | 🔴 P0 |
-| **Expirer PaymentOrders PENDING** (> 7 jours → FAILED) | Orders PENDING s'accumulent | 🟡 P1 |
-| **Reset compteurs penalty 30 jours** | Non implémenté mais champs existent | 🟡 P2 |
+### P3 — Low priority
 
----
-
-## 8) Contrats (Zod) vs DTOs (class-validator) vs DB
-
-### 8.1) Double validation — incohérence structurelle
-
-Le projet utilise **deux systèmes de validation** en parallèle :
-
-| Couche | Système | Fichiers |
-|--------|---------|----------|
-| Contracts (partagé) | **Zod** | `packages/contracts/src/schemas/*.ts` |
-| Backend DTOs | **class-validator** | `apps/api/src/**/dto/*.ts` |
-
-**Problème** : Les mêmes champs sont validés différemment selon le système :
-
-| Champ | Zod (contracts) | class-validator (DTO) | DB | Verdict |
-|-------|-----------------|----------------------|-----|:-------:|
-| `password` min | 8 chars | 10 chars | String | ❌ incohérent |
-| `phone` regex | `/^(\+212\|0)[5-7]\d{8}$/` | `/^(\+212\|0)[5-7]\d{8}$/` | String | ✅ |
-| `cityId` format | `.min(1)` | `/^city_[a-z]+_\d{3}$/` | String (publicId) | ⚠️ Zod plus laxiste |
-| `email` | `z.string().email()` | `@IsEmail()` | String? @unique | ✅ |
-| `planType` | N/A (pas dans contracts) | `@IsIn(['PREMIUM_MONTHLY', 'PREMIUM_ANNUAL', 'BOOST'])` | String | ⚠️ devrait être enum |
-| `UpdateBookingStatus.status` | `z.enum(['CONFIRMED', 'DECLINED'])` | N/A (Zod pipe used) | BookingStatus enum | ✅ |
-
-### 8.2) Mapping publicId ↔ id interne
-
-Le pattern de résolution `publicId → id interne` est utilisé correctement dans la plupart des services :
-
-| Service | Méthode | Pattern | Verdict |
-|---------|---------|---------|:-------:|
-| `catalog.service.ts` | `resolveCityId()`, `resolveCategoryId()` | publicId → id | ✅ |
-| `payment.service.ts` | `resolveCityId()`, `resolveCategoryId()` | publicId → id | ✅ |
-| `pro.service.ts` | inline dans `updateProfile()`, `updateServices()` | publicId → id | ✅ |
-| `booking.service.ts` | `resolveCategoryId()` | publicId → id | ✅ |
-| `auth.service.ts` | inline dans `register()` | publicId → id | ✅ |
-
-**Problème** : la résolution `publicId → id` est dupliquée dans 5 services (chacun a sa propre méthode `resolveCityId`/`resolveCategoryId`). Pas de service partagé.
+| # | Issue | Fichier(s) |
+|---|-------|-----------|
+| 16 | `console.log` en production | `PaymentButton.tsx:86` |
+| 17 | `amountCents` stocké mais non vérifié admin | `payment.service.ts:105` |
+| 18 | Message "email envoyé" non implémenté | `dashboard/subscription/success/page.tsx:127` |
 
 ---
 
-## 9) Synthèse des risques — Top 10
+## Annexe — Fichiers audites Phase 4
 
-| # | Sévérité | Problème | Impact | Fichier(s) |
-|---|:--------:|---------|--------|------------|
-| 1 | 🔴 | **`endDate` inexistant** dans activatePlan → crash activation Premium | Aucun Pro ne peut activer Premium | `payment.service.ts:310` |
-| 2 | 🔴 | **7 modèles DB jamais utilisés** (SlotLock, AvailabilityException, PenaltyLog, Report, Review, DeviceToken, BookingEvent) | Complexité morte, fausse impression de fonctionnalité | `schema.prisma` |
-| 3 | 🔴 | **Pas de cron d'expiration** (bookings, premium, boosts) | Données obsolètes jamais nettoyées, premium/boost gratuit à vie | Backend global |
-| 4 | 🔴 | **3 types d'annulation non implémentés** (CANCELLED_BY_CLIENT, BY_CLIENT_LATE, BY_PRO) | Client/Pro ne peuvent pas annuler | `booking.service.ts` |
-| 5 | 🔴 | **PaymentOrder.proUserId sans FK** | Intégrité référentielle non garantie | `schema.prisma:514` |
-| 6 | 🟡 | **6 statuts BookingStatus fantômes** sur 11 | Front référence des statuts jamais produits | Schema + front |
-| 7 | 🟡 | **8 champs penalty** (User + ProProfile) jamais utilisés | Feature conçue en schéma mais jamais codée | `schema.prisma` |
-| 8 | 🟡 | **BookingEvent émis mais jamais persisté** | Perte d'audit trail | `booking.service.ts` |
-| 9 | 🟡 | **Double validation Zod/class-validator** incohérente (password 8 vs 10) | Contournement possible | Contracts vs DTOs |
-| 10 | 🟡 | **CIN stocké en clair** + fichiers KYC potentiellement publics | Risque CNDP / données sensibles | `schema.prisma`, `kyc.service.ts` |
+**Frontend** :
+- `apps/web/src/app/plans/page.tsx`
+- `apps/web/src/app/pro/subscription/page.tsx`
+- `apps/web/src/app/dashboard/subscription/success/page.tsx`
+- `apps/web/src/app/dashboard/subscription/cancel/page.tsx`
+- `apps/web/src/components/payment/PaymentButton.tsx`
+
+**Backend** :
+- `apps/api/src/payment/payment.controller.ts`
+- `apps/api/src/payment/payment.service.ts`
+- `apps/api/src/payment/dto/initiate-payment.dto.ts`
+- `apps/api/src/payment/utils/payment.constants.ts`
+- `apps/api/src/payment/types/prisma-enums.ts`
+- `apps/api/src/catalog/catalog-resolver.service.ts` (utilisé pour publicId resolution)
+
+**Database** :
+- `packages/database/prisma/schema.prisma` (PaymentOrder, ProSubscription, ProBoost, ProProfile.isPremium/premiumActiveUntil/boostActiveUntil)
+
+**Models audités** :
+- `PaymentOrder`, `ProSubscription`, `ProBoost`
+- `PaymentOrderPlanType` enum : `PREMIUM_MONTHLY`, `PREMIUM_ANNUAL`, `BOOST`
+- `PaymentOrderStatus` enum : `PENDING`, `PAID`, `FAILED`
+- `SubscriptionPlan` enum, `SubscriptionStatus` enum, `BoostStatus` enum
 
 ---
 
-## 10) Plan d'action priorisé
+# 🔎 PHASE 5 — AUDIT PAGES STATIQUES & CONTENU
 
-### Priorité 0 — Bloqueurs (immédiat)
-- [ ] **FIX** `payment.service.ts:310` : remplacer `endDate: endsAt` par `endedAt: endsAt`
-- [ ] **CRON** : Créer `BookingExpirationService` avec `@Cron(EVERY_HOUR)` → `Booking.updateMany({ where: { status: PENDING, expiresAt: { lt: now } }, data: { status: EXPIRED } })`
-- [ ] **CRON** : Créer `SubscriptionExpirationService` → `ProProfile.updateMany({ where: { isPremium: true, premiumActiveUntil: { lt: now } }, data: { isPremium: false } })` + `ProProfile.updateMany({ where: { boostActiveUntil: { lt: now } }, data: { boostActiveUntil: null } })`
-- [ ] **FK** : Ajouter `@relation` sur `PaymentOrder.proUserId` → migration
+**Objectif** : Auditer `/blog`, `/help`, et les 3 pages légales (`/legal/cgu`, `/legal/mentions`, `/legal/privacy`) en analysant SEO, accessibilité, sécurité de rendu, et cohérence navigation.
 
-### Priorité 1 — Important (semaine)
-- [ ] **ANNULATION** : Implémenter `cancelBooking(bookingId, userId, role)` avec logique CANCELLED_BY_CLIENT (libre si > 24h, LATE sinon) et CANCELLED_BY_PRO (avec cancelReason obligatoire)
-- [ ] **CLEAN SCHEMA** : Supprimer ou commenter les 7 modèles morts (SlotLock, AvailabilityException, PenaltyLog, Report, Review, DeviceToken, BookingEvent) — ou les conserver avec un commentaire `// TODO: Phase X`
-- [ ] **ENUMS** : Convertir `PaymentOrder.planType` et `PaymentOrder.status` en enums Prisma
-- [ ] **PERSIST EVENTS** : Ajouter la persistance des BookingEvent en DB (actuellement émis via EventEmitter mais jamais sauvegardés)
-- [ ] **UNIFY VALIDATION** : Harmoniser password min length (8 vs 10) entre Zod et class-validator
-- [ ] **RESOLVE HELPERS** : Extraire `resolveCityId`/`resolveCategoryId` dans un `CatalogResolverService` partagé
+**Périmètre** :
+- **Frontend** : 5 pages + 1 composant BlogContent
+- **Backend** : N/A (pas d'API spécifique, contenu statique)
+- **SEO** : Métadonnées, OpenGraph, sitemap, robots.txt
+- **Accessibilité** : WCAG AA, navigation clavier, ARIA, `prefers-reduced-motion`
+- **Sécurité** : XSS sur contenu dynamique, liens externes
+- **Performance** : RSC vs CSR, bundle size, images
 
-### Priorité 2 — Améliorations (mois)
-- [ ] Implémenter le système de pénalités (utiliser les champs `clientLateCancelCount30d`, `clientSanctionTier`, etc.)
-- [ ] Chiffrer `cinNumber` en DB (ou au minimum le hasher pour la recherche d'unicité)
-- [ ] Ajouter un `publicId` sur User/ProProfile pour éviter d'exposer les cuids internes
-- [ ] Implémenter Review et Report (tables existent déjà)
-- [ ] Remplacer le groupage JS dans dashboard.service.ts par `groupBy` Prisma
-- [ ] Ajouter un index composite `[proId, status, timeSlot]` sur Booking
-- [ ] Tests unitaires pour les services critiques (booking, payment, auth)
-- [ ] Sécuriser l'accès aux fichiers KYC (auth middleware sur `/uploads/kyc/`)
+**Pages auditées** :
+1. `/blog` (`apps/web/src/app/blog/page.tsx` + `components/blog/BlogContent.tsx`)
+2. `/help` (`apps/web/src/app/help/page.tsx`)
+3. `/legal/cgu` (`apps/web/src/app/legal/cgu/page.tsx`)
+4. `/legal/mentions` (`apps/web/src/app/legal/mentions/page.tsx`)
+5. `/legal/privacy` (`apps/web/src/app/legal/privacy/page.tsx`)
+
+---
+
+## 📄 1. PAGE /BLOG
+
+### 1.1 Structure & Architecture
+
+**Wrapper RSC** : `apps/web/src/app/blog/page.tsx` (12 lignes)
+```typescript
+export const metadata: Metadata = {
+  title: 'Blog — Khadamat',
+  description: 'Conseils et astuces pour mieux choisir vos professionnels...',
+};
+export default function BlogPage() {
+  return <BlogContent />;
+}
+```
+
+**Composant Client** : `apps/web/src/components/blog/BlogContent.tsx` (225 lignes)
+- **Type** : `'use client'` avec Framer Motion
+- **Contenu** : 3 articles hardcodés (lignes 14-33)
+- **Sections** :
+  - Hero avec search bar (readOnly, placeholder)
+  - Trust signals (3 badges)
+  - Grille d'articles (3 cards)
+  - CTA finale "Trouver un professionnel"
+  - Navigation footer
+
+### 1.2 Fonctionnel
+
+✅ **Ce qui fonctionne** :
+- Affichage des 3 articles avec titre, excerpt, date
+- Navigation "Retour à l'accueil"
+- CTA "Trouver un professionnel" → `/`
+
+❌ **Ce qui ne fonctionne pas** :
+- **[MEDIUM]** Articles non cliquables (cursor-pointer ligne 143, mais aucun `<Link>` → affordance trompeuse)
+- **[MEDIUM]** Search bar décorative (readOnly ligne 103, placeholder "Rechercher..." mais aucune fonctionnalité)
+- **[LOW]** Pas de pagination, pas de CMS, pas de routing `/blog/[slug]`
+
+**Données** :
+- 3 articles statiques (titres : "Comment choisir un bon plombier ?", "Préparer son logement avant une intervention", "Pourquoi la vérification d'identité protège tout le monde")
+- Dates : Février 2026, Janvier 2026 × 2
+- Aucun appel API, aucune intégration backend
+
+### 1.3 SEO
+
+✅ **Métadonnées présentes** :
+```typescript
+title: 'Blog — Khadamat'
+description: 'Conseils et astuces pour mieux choisir vos professionnels...'
+```
+
+❌ **Manquant** :
+- **[HIGH]** OpenGraph tags (`og:title`, `og:description`, `og:image`, `og:url`)
+- **[HIGH]** Twitter Card
+- **[MEDIUM]** Canonical URL
+- **[CRITICAL]** Sitemap.xml (ni statique dans `/public`, ni dynamique `sitemap.ts` dans `/app`)
+- **[CRITICAL]** Robots.txt (aucun fichier trouvé)
+- **[MEDIUM]** Articles individuels non indexables (pas de routing `/blog/[slug]`)
+- **[LOW]** Structured data (Schema.org Article/BlogPosting)
+
+**Impact** : Découvrabilité très limitée. Google ne peut pas indexer les articles individuellement, pas d'aperçu social media, pas de contrôle crawl.
+
+### 1.4 Accessibilité
+
+✅ **Conforme** :
+- `aria-hidden="true"` sur icônes décoratives (lignes 59, 70, 97, 116, 120, 124, 146, 155, 169, 172, 186, 189, 206, 218)
+- `aria-label="Rechercher un article"` sur input (ligne 104)
+- Contraste visuel OK (texte noir sur fond blanc, tokens Tailwind)
+- Navigation clavier fonctionnelle sur liens
+
+❌ **Problèmes** :
+- **[MEDIUM]** Animations Framer Motion sans `prefers-reduced-motion` (lignes 35-49, animations y/opacity) → peut causer nausée pour utilisateurs sensibles
+- **[MEDIUM]** Articles avec `cursor-pointer` mais non interactifs → confusion utilisateur clavier (Tab sur élément non-focusable)
+- **[LOW]** Search input readOnly mais visuellement actif → peut confondre utilisateurs lecteur d'écran
+
+### 1.5 Sécurité
+
+✅ **Aucun risque XSS** : Contenu 100% statique, aucun `dangerouslySetInnerHTML`, aucun Markdown rendu
+
+❌ **Observations** :
+- **[INFO]** CTA externe `href="/"` : OK (lien interne)
+- **[INFO]** Pas de liens externes dans articles → pas de besoin `rel="noopener noreferrer"`
+
+### 1.6 Performance
+
+**Bundle impact** :
+- **[MEDIUM]** Framer Motion importé (`import { motion } from 'framer-motion'`) → +50-80KB au bundle client
+- **[LOW]** 6 icônes lucide-react distinctes importées (lignes 5-6)
+
+**Rendu** :
+- Page wrapper = RSC (léger)
+- Contenu = CSR obligatoire pour animations → TTFB bon, mais FCP/LCP retardés vs full RSC
+
+**Optimisations manquantes** :
+- **[LOW]** Images articles absentes (placeholders `<BookOpen>` ligne 146) → pas d'optimisation Next.js Image
+- **[INFO]** Gradient backgrounds CSS (lignes 57-59, 185-191) → performant, OK
+
+### 1.7 Cohérence Navigation
+
+✅ **Navigation cohérente** :
+- Header absent (pas de `<Header />`) → intentionnel pour page dédiée ?
+- Footer navigation présent (ligne 214-220)
+- CTA "Trouver un professionnel" → cohérent avec funnel
+
+❌ **Incohérences** :
+- **[LOW]** Pas de Header global → utilisateur ne peut pas accéder à login/dashboard depuis `/blog` sans revenir à `/`
+
+---
+
+### 📊 SCORING /BLOG
+
+| Axe | Note | Commentaire |
+|-----|------|-------------|
+| **1. Fonctionnel** | 2/5 | 3 articles affichés, mais non cliquables. Search décoratif. Pas de CMS. |
+| **2. Sécurité & accès** | 5/5 | Contenu statique, aucun risque XSS. Pas de backend concerné. |
+| **3. Intégration & cohérence data** | 2/5 | Données hardcodées, aucune API. Pas de routing individuel. |
+| **4. UX & accessibilité** | 3/5 | ARIA correct, mais animations sans motion-safe + affordance trompeuse (cursor-pointer). |
+| **5. Performance & robustesse** | 3/5 | RSC wrapper OK, mais CSR Framer Motion alourdit bundle. Pas d'images. |
+
+**Score global /blog** : **3.0/5**
+
+---
+
+## 📄 2. PAGE /HELP
+
+### 2.1 Structure & Architecture
+
+**Fichier** : `apps/web/src/app/help/page.tsx` (63 lignes)
+- **Type** : RSC (React Server Component)
+- **Sections** :
+  1. Header + navigation retour
+  2. Titre "Centre d'aide"
+  3. Card email contact (`support@khadamat.ma`)
+  4. Section FAQ (placeholder "Bientôt disponible")
+
+### 2.2 Fonctionnel
+
+✅ **Ce qui fonctionne** :
+- Navigation "Retour à l'accueil" (ligne 14-19)
+- Lien email `mailto:support@khadamat.ma` fonctionnel (ligne 28-30)
+
+❌ **Ce qui ne fonctionne pas** :
+- **[MEDIUM]** FAQ placeholder (ligne 43-46) → "Bientôt disponible. Les réponses aux questions fréquentes seront ajoutées prochainement."
+
+**Données** : Email contact hardcodé, aucun appel API.
+
+### 2.3 SEO
+
+✅ **Métadonnées présentes** :
+```typescript
+title: 'Centre d\'aide — Khadamat'
+description: 'Besoin d\'aide ? Contactez notre équipe ou consultez notre FAQ.'
+```
+
+❌ **Manquant** :
+- **[HIGH]** OpenGraph tags
+- **[HIGH]** Twitter Card
+- **[MEDIUM]** Canonical URL
+- **[CRITICAL]** Sitemap.xml (page non listée)
+- **[LOW]** Structured data (FAQPage schema quand FAQ sera implémentée)
+
+### 2.4 Accessibilité
+
+✅ **Conforme** :
+- `aria-hidden="true"` sur icônes (lignes 18, 37, 49)
+- Contraste OK (tokens Tailwind)
+- Navigation clavier fonctionnelle
+
+❌ **Problèmes** : Aucun
+
+### 2.5 Sécurité
+
+✅ **Aucun risque** : Contenu statique, lien email sécurisé.
+
+### 2.6 Performance
+
+✅ **Excellent** :
+- RSC pur (pas de `'use client'`)
+- Aucune dépendance JS lourde
+- Pas d'images
+- Bundle minimal
+
+### 2.7 Cohérence Navigation
+
+❌ **Incohérences** :
+- **[LOW]** Pas de Header global (comme `/blog`) → utilisateur isolé
+
+---
+
+### 📊 SCORING /HELP
+
+| Axe | Note | Commentaire |
+|-----|------|-------------|
+| **1. Fonctionnel** | 3/5 | Email contact OK, FAQ placeholder non implémentée. |
+| **2. Sécurité & accès** | 5/5 | RSC statique, aucun risque. |
+| **3. Intégration & cohérence data** | 4/5 | Email hardcodé OK, FAQ manquante. |
+| **4. UX & accessibilité** | 5/5 | ARIA parfait, contraste OK, navigation claire. |
+| **5. Performance & robustesse** | 5/5 | RSC pur, bundle minimal, TTFB/FCP excellent. |
+
+**Score global /help** : **4.4/5**
+
+---
+
+## 📄 3. PAGE /LEGAL/CGU
+
+### 3.1 Structure & Architecture
+
+**Fichier** : `apps/web/src/app/legal/cgu/page.tsx` (48 lignes)
+- **Type** : RSC
+- **Contenu** : Titre + paragraphe d'intro + **placeholder "en cours de rédaction"** (ligne 33-35)
+
+### 3.2 Fonctionnel
+
+❌ **Contenu manquant** :
+- **[CRITICAL]** CGU non rédigées → "Cette page est en cours de rédaction. Les conditions générales d'utilisation seront publiées prochainement."
+- **Impact** : Non-conformité légale RGPD/Loi 09-08 (plateforme de mise en relation = obligation CGU)
+
+✅ **Navigation** : Retour accueil fonctionnel (ligne 14-19)
+
+### 3.3 SEO
+
+✅ **Métadonnées présentes** :
+```typescript
+title: 'Conditions Générales d\'Utilisation — Khadamat'
+description: 'Conditions générales d\'utilisation de la plateforme Khadamat.'
+```
+
+❌ **Manquant** : OpenGraph, Twitter, canonical, sitemap (identique autres pages)
+
+### 3.4 Accessibilité
+
+✅ **Conforme** : ARIA OK (ligne 18 `aria-hidden="true"`)
+
+### 3.5 Sécurité
+
+✅ **Aucun risque** : Contenu statique
+
+### 3.6 Performance
+
+✅ **Excellent** : RSC pur
+
+### 3.7 Cohérence Navigation
+
+❌ **[LOW]** Pas de Header global
+
+---
+
+### 📊 SCORING /LEGAL/CGU
+
+| Axe | Note | Commentaire |
+|-----|------|-------------|
+| **1. Fonctionnel** | 1/5 | Page placeholder, aucun contenu légal réel. |
+| **2. Sécurité & accès** | 5/5 | RSC statique, aucun risque technique. |
+| **3. Intégration & cohérence data** | 1/5 | Contenu manquant = non-conformité légale. |
+| **4. UX & accessibilité** | 5/5 | ARIA OK, navigation claire. |
+| **5. Performance & robustesse** | 5/5 | RSC pur, performant. |
+
+**Score global /legal/cgu** : **3.4/5** (pénalisé par absence contenu légal)
+
+---
+
+## 📄 4. PAGE /LEGAL/MENTIONS
+
+### 4.1 Structure & Architecture
+
+**Fichier** : `apps/web/src/app/legal/mentions/page.tsx` (48 lignes)
+- **Type** : RSC
+- **Contenu** : Titre + paragraphe d'intro + **placeholder "en cours de rédaction"** (ligne 32-35)
+
+### 4.2 Fonctionnel
+
+❌ **Contenu manquant** :
+- **[CRITICAL]** Mentions légales non rédigées → "Cette page est en cours de rédaction. Les mentions légales complètes seront publiées prochainement."
+- **Impact** : Non-conformité légale (obligation mentions légales = art. 6 LCEN transposé au Maroc)
+
+✅ **Navigation** : Retour accueil fonctionnel (ligne 14-19)
+
+### 4.3 SEO
+
+✅ **Métadonnées présentes** :
+```typescript
+title: 'Mentions Légales — Khadamat'
+description: 'Mentions légales de la plateforme Khadamat.'
+```
+
+❌ **Manquant** : OpenGraph, Twitter, canonical, sitemap
+
+### 4.4 Accessibilité
+
+✅ **Conforme** : ARIA OK (ligne 18)
+
+### 4.5 Sécurité
+
+✅ **Aucun risque** : Contenu statique
+
+### 4.6 Performance
+
+✅ **Excellent** : RSC pur
+
+### 4.7 Cohérence Navigation
+
+❌ **[LOW]** Pas de Header global
+
+---
+
+### 📊 SCORING /LEGAL/MENTIONS
+
+| Axe | Note | Commentaire |
+|-----|------|-------------|
+| **1. Fonctionnel** | 1/5 | Page placeholder, aucun contenu légal réel. |
+| **2. Sécurité & accès** | 5/5 | RSC statique, aucun risque technique. |
+| **3. Intégration & cohérence data** | 1/5 | Contenu manquant = non-conformité légale. |
+| **4. UX & accessibilité** | 5/5 | ARIA OK, navigation claire. |
+| **5. Performance & robustesse** | 5/5 | RSC pur, performant. |
+
+**Score global /legal/mentions** : **3.4/5**
+
+---
+
+## 📄 5. PAGE /LEGAL/PRIVACY
+
+### 5.1 Structure & Architecture
+
+**Fichier** : `apps/web/src/app/legal/privacy/page.tsx` (48 lignes)
+- **Type** : RSC
+- **Contenu** : Titre + paragraphe d'intro mentionnant Loi 09-08 + **placeholder "en cours de rédaction"** (ligne 32-35)
+
+### 5.2 Fonctionnel
+
+❌ **Contenu manquant** :
+- **[CRITICAL]** Politique de confidentialité non rédigée → "Cette page est en cours de rédaction. La politique de confidentialité complète sera publiée prochainement."
+- **Impact** : Non-conformité RGPD + Loi 09-08 (traitement données personnelles = obligation privacy policy)
+- **Aggravation** : KYC CIN stockées sans politique explicite = risque CNDP (Commission Nationale de Contrôle de la Protection des Données)
+
+✅ **Navigation** : Retour accueil fonctionnel (ligne 14-19)
+
+### 5.3 SEO
+
+✅ **Métadonnées présentes** :
+```typescript
+title: 'Politique de Confidentialité — Khadamat'
+description: 'Politique de confidentialité et protection des données personnelles de Khadamat.'
+```
+
+❌ **Manquant** : OpenGraph, Twitter, canonical, sitemap
+
+### 5.4 Accessibilité
+
+✅ **Conforme** : ARIA OK (ligne 18)
+
+### 5.5 Sécurité
+
+✅ **Aucun risque technique** : Contenu statique
+
+❌ **Risque réglementaire** :
+- **[CRITICAL]** Absence privacy policy + KYC CIN stockées = exposition CNDP sanctions
+
+### 5.6 Performance
+
+✅ **Excellent** : RSC pur
+
+### 5.7 Cohérence Navigation
+
+❌ **[LOW]** Pas de Header global
+
+---
+
+### 📊 SCORING /LEGAL/PRIVACY
+
+| Axe | Note | Commentaire |
+|-----|------|-------------|
+| **1. Fonctionnel** | 1/5 | Page placeholder, aucun contenu légal réel. |
+| **2. Sécurité & accès** | 2/5 | RSC statique OK, mais risque CNDP (privacy manquante + KYC). |
+| **3. Intégration & cohérence data** | 1/5 | Contenu manquant = non-conformité Loi 09-08. |
+| **4. UX & accessibilité** | 5/5 | ARIA OK, navigation claire. |
+| **5. Performance & robustesse** | 5/5 | RSC pur, performant. |
+
+**Score global /legal/privacy** : **2.8/5**
+
+---
+
+## 🎯 SYNTHÈSE PHASE 5
+
+### ✅ Points forts
+
+1. **Performance technique** : 4/5 pages en RSC pur → TTFB/FCP excellent, bundle minimal
+2. **Accessibilité ARIA** : `aria-hidden="true"` systématique sur icônes décoratives
+3. **Sécurité XSS** : Contenu 100% statique, aucun risque injection
+4. **Métadonnées de base** : Toutes pages ont `title` + `description`
+
+### ❌ Problèmes critiques
+
+#### 1. **[CRITICAL] Non-conformité légale — 3 pages légales**
+
+**Pages concernées** : `/legal/cgu`, `/legal/mentions`, `/legal/privacy`
+
+**Constat** :
+- Les 3 pages affichent un placeholder "en cours de rédaction"
+- Aucun contenu légal réel publié
+- Privacy policy manquante alors que KYC CIN stockées (Loi 09-08 art. 4 + RGPD art. 13)
+
+**Impact** :
+- **Risque CNDP** : Sanctions administratives (10 000 à 100 000 MAD, Loi 09-08 art. 53)
+- **Risque contractuel** : CGU absentes → nullité contrats PRO/CLIENT en cas litige
+- **Risque réputation** : Plateforme perçue comme non-professionnelle
+
+**Action requise** : Rédiger et publier les 3 documents légaux AVANT mise en production.
+
+#### 2. **[CRITICAL] SEO — Absence sitemap.xml & robots.txt**
+
+**Constat** :
+- `Glob "**/sitemap.xml"` → aucun fichier trouvé
+- `Glob "**/sitemap.ts"` → aucun fichier trouvé (Next.js 14 Dynamic Sitemap)
+- `Glob "**/robots.txt"` → aucun fichier trouvé
+
+**Impact** :
+- Google ne peut pas découvrir les pages efficacement
+- Aucun contrôle crawl (pages sensibles potentiellement indexées, pages publiques ignorées)
+- Perte SEO sur toutes pages statiques (blog, help, legal)
+
+**Action requise** :
+```typescript
+// apps/web/src/app/sitemap.ts
+export default function sitemap() {
+  return [
+    { url: 'https://khadamat.ma', lastModified: new Date(), changeFrequency: 'daily', priority: 1 },
+    { url: 'https://khadamat.ma/blog', lastModified: new Date(), changeFrequency: 'weekly', priority: 0.8 },
+    { url: 'https://khadamat.ma/help', lastModified: new Date(), changeFrequency: 'monthly', priority: 0.6 },
+    { url: 'https://khadamat.ma/legal/cgu', lastModified: new Date(), changeFrequency: 'monthly', priority: 0.4 },
+    { url: 'https://khadamat.ma/legal/mentions', lastModified: new Date(), changeFrequency: 'monthly', priority: 0.4 },
+    { url: 'https://khadamat.ma/legal/privacy', lastModified: new Date(), changeFrequency: 'monthly', priority: 0.4 },
+    // + pages dynamiques /pro/[publicId], /pros, etc.
+  ];
+}
+```
+
+```
+// apps/web/public/robots.txt
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /api
+Sitemap: https://khadamat.ma/sitemap.xml
+```
+
+#### 3. **[HIGH] SEO — OpenGraph & Twitter Card absents**
+
+**Pages concernées** : Toutes (5/5)
+
+**Constat** : Métadonnées `title` + `description` présentes, mais aucun `openGraph`, `twitter`, `canonical`.
+
+**Impact** :
+- Partage social (Facebook, Twitter, LinkedIn) → aperçu générique sans image
+- Perte trafic social media
+- Pas de contrôle URL canonique (risque duplicate content si plusieurs domaines)
+
+**Action requise** : Ajouter à chaque page :
+```typescript
+export const metadata: Metadata = {
+  title: '...',
+  description: '...',
+  openGraph: {
+    title: '...',
+    description: '...',
+    url: 'https://khadamat.ma/...',
+    siteName: 'Khadamat',
+    images: [{ url: 'https://khadamat.ma/og-image.jpg', width: 1200, height: 630 }],
+    locale: 'fr_MA',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: '...',
+    description: '...',
+    images: ['https://khadamat.ma/og-image.jpg'],
+  },
+  alternates: {
+    canonical: 'https://khadamat.ma/...',
+  },
+};
+```
+
+### ⚠️ Problèmes moyens
+
+#### 4. **[MEDIUM] Blog — Articles non cliquables**
+
+**Fichier** : `apps/web/src/components/blog/BlogContent.tsx:143`
+
+**Constat** :
+```tsx
+<motion.article
+  className="... cursor-pointer"
+>
+  {/* Contenu article, mais aucun <Link> */}
+</motion.article>
+```
+
+**Impact** :
+- Affordance trompeuse (cursor-pointer mais non-interactive)
+- Utilisateur clique → rien ne se passe → frustration
+- SEO : articles non-indexables individuellement (pas de `/blog/[slug]`)
+
+**Action requise** :
+1. Court terme : Retirer `cursor-pointer` si articles restent statiques
+2. Long terme : Implémenter routing `/blog/[slug]` + CMS (Contentful, Sanity, ou Markdown local)
+
+#### 5. **[MEDIUM] Blog — Search bar décorative**
+
+**Fichier** : `apps/web/src/components/blog/BlogContent.tsx:100-105`
+
+**Constat** :
+```tsx
+<input
+  type="text"
+  placeholder="Rechercher un conseil (ex: plomberie, prix)..."
+  readOnly
+/>
+```
+
+**Impact** :
+- Illusion d'interactivité (placeholder invite à taper, mais readOnly)
+- Confusion utilisateur + lecteurs d'écran
+
+**Action requise** :
+1. Court terme : Retirer search bar OU ajouter message "Prochainement"
+2. Long terme : Implémenter recherche client-side (Fuse.js) ou Algolia
+
+#### 6. **[MEDIUM] Animations Framer Motion sans motion-safe**
+
+**Fichier** : `apps/web/src/components/blog/BlogContent.tsx:35-49`
+
+**Constat** :
+```tsx
+const itemVariants = {
+  hidden: { y: 20, opacity: 0 },
+  visible: { y: 0, opacity: 1, transition: { duration: 0.5 } },
+};
+```
+
+Aucun contrôle `prefers-reduced-motion`.
+
+**Impact** : Utilisateurs sensibles au mouvement (vestibular disorders) peuvent ressentir nausée/malaise.
+
+**Action requise** :
+```tsx
+const shouldReduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const itemVariants = shouldReduceMotion
+  ? { hidden: { opacity: 0 }, visible: { opacity: 1 } }
+  : { hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1, transition: { duration: 0.5 } } };
+```
+
+OU utiliser Tailwind `motion-safe:` classes :
+```tsx
+<div className="motion-safe:animate-fadeIn">...</div>
+```
+
+#### 7. **[MEDIUM] Performance — Framer Motion bundle weight**
+
+**Fichier** : `apps/web/src/components/blog/BlogContent.tsx:4`
+
+**Constat** :
+```tsx
+import { motion } from 'framer-motion';
+```
+
+**Impact** : +50-80KB au bundle client pour animer 3 articles statiques.
+
+**Alternative** :
+- CSS animations (`@keyframes` + Tailwind `animate-*`)
+- IntersectionObserver + Tailwind transitions (plus léger)
+
+**Action requise** : Si animations essentielles → OK. Sinon, migrer vers CSS pur.
+
+### 🔍 Problèmes mineurs
+
+#### 8. **[LOW] Header global absent sur pages statiques**
+
+**Pages concernées** : `/blog`, `/help`, toutes `/legal/*`
+
+**Constat** : Aucune page n'importe `<Header />` → utilisateur ne peut pas accéder login/dashboard depuis ces pages sans revenir à `/`.
+
+**Impact** : Navigation dégradée, mais lien "Retour à l'accueil" présent → impact UX limité.
+
+**Action requise** (optionnelle) : Ajouter `<Header />` si cohérence navigation souhaitée.
+
+#### 9. **[LOW] FAQ placeholder sur /help**
+
+**Fichier** : `apps/web/src/app/help/page.tsx:43-46`
+
+**Constat** : Section FAQ affichée avec message "Bientôt disponible".
+
+**Impact** : Utilisateur cherchant réponse rapide → déçu. Mais email contact fonctionnel → alternative existante.
+
+**Action requise** : Implémenter FAQ réelle (5-10 questions fréquentes avec accordéon).
+
+#### 10. **[INFO] Structured Data absent**
+
+**Pages concernées** : Toutes
+
+**Constat** : Aucun `<script type="application/ld+json">` avec Schema.org (BlogPosting, FAQPage, Organization).
+
+**Impact** : Perte rich snippets Google (FAQ déroulante, fil d'Ariane, logo organisation).
+
+**Action requise** (long terme) :
+```tsx
+<script type="application/ld+json">
+{JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Comment choisir un bon plombier ?",
+  "author": { "@type": "Organization", "name": "Khadamat" },
+  "datePublished": "2026-02-01",
+  ...
+})}
+</script>
+```
+
+---
+
+## 📈 SCORING GLOBAL PHASE 5
+
+| Page | Fonctionnel | Sécurité | Intégration | UX/A11y | Perf | Moyenne |
+|------|-------------|----------|-------------|---------|------|---------|
+| `/blog` | 2/5 | 5/5 | 2/5 | 3/5 | 3/5 | **3.0/5** |
+| `/help` | 3/5 | 5/5 | 4/5 | 5/5 | 5/5 | **4.4/5** |
+| `/legal/cgu` | 1/5 | 5/5 | 1/5 | 5/5 | 5/5 | **3.4/5** |
+| `/legal/mentions` | 1/5 | 5/5 | 1/5 | 5/5 | 5/5 | **3.4/5** |
+| `/legal/privacy` | 1/5 | 2/5 | 1/5 | 5/5 | 5/5 | **2.8/5** |
+
+**Score moyen Phase 5** : **3.4/5**
+
+**Interprétation** :
+- ✅ **Sécurité technique** excellente (RSC statique, aucun XSS)
+- ✅ **Performance** excellente (4/5 pages RSC pur)
+- ✅ **Accessibilité ARIA** conforme WCAG AA
+- ⚠️ **SEO** critique (pas de sitemap/robots, pas d'OpenGraph)
+- ❌ **Fonctionnel & légal** bloquant (3 pages légales vides, blog non-interactif)
+
+---
+
+## 🚨 ACTIONS PRIORITAIRES
+
+### 🔴 P0 — Bloquant mise en production
+
+1. **Rédiger les 3 pages légales** (CGU, Mentions, Privacy) → conformité Loi 09-08
+2. **Créer sitemap.ts** → découvrabilité Google
+3. **Créer robots.txt** → contrôle crawl
+
+### 🟠 P1 — Critique SEO/UX
+
+4. **Ajouter OpenGraph/Twitter Card** sur toutes pages
+5. **Retirer cursor-pointer** sur articles blog OU implémenter `/blog/[slug]`
+6. **Retirer search bar** blog OU implémenter recherche
+7. **Ajouter prefers-reduced-motion** sur animations Framer Motion
+
+### 🟡 P2 — Améliorations
+
+8. **Implémenter FAQ** sur /help
+9. **Ajouter Header global** sur pages statiques
+10. **Optimiser bundle** : remplacer Framer Motion par CSS animations
+11. **Structured Data** : Schema.org BlogPosting/Organization
+
+---
+
+## 📁 ANNEXE — FICHIERS AUDITÉES PHASE 5
+
+**Frontend (6 fichiers)** :
+```
+apps/web/src/app/blog/page.tsx (12 lignes)
+apps/web/src/components/blog/BlogContent.tsx (225 lignes)
+apps/web/src/app/help/page.tsx (63 lignes)
+apps/web/src/app/legal/cgu/page.tsx (48 lignes)
+apps/web/src/app/legal/mentions/page.tsx (48 lignes)
+apps/web/src/app/legal/privacy/page.tsx (48 lignes)
+```
+
+**Backend** : N/A (aucune API spécifique, contenu statique)
+
+**Database** : N/A
+
+**SEO/Infrastructure** :
+- ❌ `apps/web/src/app/sitemap.ts` → **NON TROUVÉ**
+- ❌ `apps/web/src/app/robots.ts` → **NON TROUVÉ**
+- ❌ `apps/web/public/sitemap.xml` → **NON TROUVÉ**
+- ❌ `apps/web/public/robots.txt` → **NON TROUVÉ**
+
+**Total lignes lues** : 444 lignes frontend
+
+---
+
+**FIN PHASE 5 — AUDIT PAGES STATIQUES & CONTENU**

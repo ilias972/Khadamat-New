@@ -128,7 +128,22 @@ export type AvailabilitySlotInput = z.infer<typeof AvailabilitySlotSchema>;
  * UpdateAvailabilitySchema
  *
  * Array de créneaux pour mise à jour (stratégie REPLACE ALL)
+ * ⚠️ DA-07: Validation unicité dayOfWeek pour éviter erreur 500 Prisma
  */
-export const UpdateAvailabilitySchema = z.array(AvailabilitySlotSchema);
+export const UpdateAvailabilitySchema = z
+  .array(AvailabilitySlotSchema)
+  .superRefine((slots, ctx) => {
+    const dayOfWeekSet = new Set<number>();
+    slots.forEach((slot, index) => {
+      if (dayOfWeekSet.has(slot.dayOfWeek)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate dayOfWeek: ${slot.dayOfWeek}`,
+          path: [index, 'dayOfWeek'],
+        });
+      }
+      dayOfWeekSet.add(slot.dayOfWeek);
+    });
+  });
 
 export type UpdateAvailabilityInput = z.infer<typeof UpdateAvailabilitySchema>;

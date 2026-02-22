@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
 import Header from '@/components/Header';
 import { getJSON, patchJSON } from '@/lib/api';
+import { toast } from '@/store/toastStore';
 
 /**
  * Profile Page
@@ -128,7 +129,7 @@ export default function ProfilePage() {
       // Effacer le message après 3 secondes
       setTimeout(() => setSuccessMessage(''), 3000);
     } catch (error: any) {
-      alert(error.message || 'Erreur lors de la mise à jour du profil');
+      toast.error(error.message || 'Erreur lors de la mise à jour du profil');
     } finally {
       setIsSaving(false);
     }
@@ -159,10 +160,10 @@ export default function ProfilePage() {
   // Loader pendant redirection
   if (!isAuthenticated || user?.role === 'PRO') {
     return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-4"></div>
-          <p className="text-zinc-600 dark:text-zinc-400">Redirection...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+          <p className="text-text-secondary">Redirection...</p>
         </div>
       </div>
     );
@@ -171,73 +172,73 @@ export default function ProfilePage() {
   const currentAvatarUrl = (user as any)?.avatarUrl || '';
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
+    <div className="min-h-screen bg-background">
       <Header />
 
       <main className="container mx-auto px-6 py-16 max-w-4xl">
         {/* Header avec Avatar */}
         <div className="text-center mb-8">
           {/* Avatar */}
-          <div className="w-24 h-24 bg-zinc-200 dark:bg-zinc-700 rounded-full flex items-center justify-center mx-auto mb-4 overflow-hidden">
+          <div className="w-24 h-24 bg-border rounded-full flex items-center justify-center mx-auto mb-4 overflow-hidden">
             {currentAvatarUrl ? (
               <img src={currentAvatarUrl} alt={user?.firstName || ''} className="w-full h-full object-cover" />
             ) : (
-              <span className="text-4xl font-bold text-zinc-600 dark:text-zinc-400">
+              <span className="text-4xl font-bold text-text-secondary">
                 {user?.firstName?.charAt(0).toUpperCase()}
                 {user?.lastName?.charAt(0).toUpperCase()}
               </span>
             )}
           </div>
 
-          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+          <h1 className="text-3xl font-bold text-text-primary mb-2">
             Mon Profil
           </h1>
-          <p className="text-zinc-600 dark:text-zinc-400">
+          <p className="text-text-secondary">
             Gérez vos informations personnelles
           </p>
         </div>
 
         <div className="space-y-6">
           {/* Stats client */}
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+          <div className="bg-surface rounded-lg border border-border p-6">
             <div className="flex items-center gap-6">
               <div className="text-center flex-1">
-                <p className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">{bookingsCount}</p>
-                <p className="text-sm text-zinc-600 dark:text-zinc-400">Missions terminées</p>
+                <p className="text-3xl font-bold text-text-primary">{bookingsCount}</p>
+                <p className="text-sm text-text-secondary">Missions terminées</p>
               </div>
             </div>
           </div>
 
           {/* Lien Mes Réservations */}
-          <div className="bg-gradient-to-r from-green-600 to-teal-600 dark:from-green-700 dark:to-teal-700 rounded-lg p-6 text-center">
+          <div className="bg-gradient-to-r from-success-600 to-success-700 rounded-lg p-6 text-center">
             <div className="flex items-center justify-center gap-3 mb-4">
               <span className="text-3xl">📅</span>
-              <h2 className="text-xl font-bold text-white">
+              <h2 className="text-xl font-bold text-inverse-text">
                 Mes Réservations
               </h2>
             </div>
-            <p className="text-green-100 mb-4">
+            <p className="text-success-100 mb-4">
               Consultez et gérez toutes vos réservations
             </p>
             <Link
               href="/client/bookings"
-              className="inline-block px-6 py-3 bg-white text-green-600 rounded-lg hover:bg-green-50 transition font-medium"
+              className="inline-block px-6 py-3 bg-surface text-success-600 rounded-lg hover:bg-success-50 transition font-medium"
             >
               Voir mes réservations
             </Link>
           </div>
 
           {/* Carte Informations Personnelles */}
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+          <div className="bg-surface rounded-lg border border-border p-6">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
+              <h2 className="text-xl font-bold text-text-primary flex items-center gap-2">
                 <span className="text-2xl">👤</span>
                 Informations personnelles
               </h2>
               {!isEditing && (
                 <button
                   onClick={() => setIsEditing(true)}
-                  className="px-4 py-2 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium"
+                  className="px-4 py-2 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium"
                   aria-label="Modifier les informations personnelles"
                 >
                   Modifier
@@ -247,8 +248,8 @@ export default function ProfilePage() {
 
             {/* Message de succès */}
             {successMessage && (
-              <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-                <p className="text-green-800 dark:text-green-200 text-sm font-medium">
+              <div className="mb-4 p-4 bg-success-50 border border-success-200 rounded-lg">
+                <p className="text-success-800 text-sm font-medium">
                   {successMessage}
                 </p>
               </div>
@@ -257,57 +258,57 @@ export default function ProfilePage() {
             {!isEditing ? (
               <div className="space-y-4">
                 {/* Photo */}
-                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                <div className="flex items-center justify-between py-3 border-b border-border">
+                  <span className="text-sm text-text-secondary">
                     Photo de profil
                   </span>
-                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                  <span className="font-medium text-text-primary">
                     {currentAvatarUrl ? (
-                      <span className="text-green-600 dark:text-green-400">Définie</span>
+                      <span className="text-success-600">Définie</span>
                     ) : (
-                      <span className="text-zinc-500 dark:text-zinc-400 italic">Non renseignée</span>
+                      <span className="text-text-muted italic">Non renseignée</span>
                     )}
                   </span>
                 </div>
 
                 {/* Prénom */}
-                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Prénom</span>
-                  <span className="font-medium text-zinc-900 dark:text-zinc-50">{user?.firstName}</span>
+                <div className="flex items-center justify-between py-3 border-b border-border">
+                  <span className="text-sm text-text-secondary">Prénom</span>
+                  <span className="font-medium text-text-primary">{user?.firstName}</span>
                 </div>
 
                 {/* Nom */}
-                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Nom</span>
-                  <span className="font-medium text-zinc-900 dark:text-zinc-50">{user?.lastName}</span>
+                <div className="flex items-center justify-between py-3 border-b border-border">
+                  <span className="text-sm text-text-secondary">Nom</span>
+                  <span className="font-medium text-text-primary">{user?.lastName}</span>
                 </div>
 
                 {/* Ville */}
-                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Ville</span>
-                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                <div className="flex items-center justify-between py-3 border-b border-border">
+                  <span className="text-sm text-text-secondary">Ville</span>
+                  <span className="font-medium text-text-primary">
                     {user?.cityId ? (
                       cities.find((c) => c.id === user.cityId)?.name || 'Chargement...'
                     ) : (
-                      <span className="text-zinc-500 dark:text-zinc-400 italic">Non renseigné</span>
+                      <span className="text-text-muted italic">Non renseigné</span>
                     )}
                   </span>
                 </div>
 
                 {/* Adresse */}
-                <div className="flex items-center justify-between py-3 border-b border-zinc-200 dark:border-zinc-700">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Adresse précise</span>
-                  <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                <div className="flex items-center justify-between py-3 border-b border-border">
+                  <span className="text-sm text-text-secondary">Adresse précise</span>
+                  <span className="font-medium text-text-primary">
                     {user?.addressLine || (
-                      <span className="text-zinc-500 dark:text-zinc-400 italic">Non renseigné</span>
+                      <span className="text-text-muted italic">Non renseigné</span>
                     )}
                   </span>
                 </div>
 
                 {/* Rôle */}
                 <div className="flex items-center justify-between py-3">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Rôle</span>
-                  <span className="px-3 py-1 rounded-full text-sm font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-100">
+                  <span className="text-sm text-text-secondary">Rôle</span>
+                  <span className="px-3 py-1 rounded-full text-sm font-medium bg-surface-active text-text-label">
                     Client
                   </span>
                 </div>
@@ -322,7 +323,7 @@ export default function ProfilePage() {
               >
                 {/* Photo de profil URL */}
                 <div>
-                  <label htmlFor="profile-avatar" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-avatar" className="block text-sm font-medium text-text-primary mb-2">
                     Photo de profil (URL, optionnelle)
                   </label>
                   <input
@@ -330,7 +331,7 @@ export default function ProfilePage() {
                     type="url"
                     value={avatarUrl}
                     onChange={(e) => setAvatarUrl(e.target.value)}
-                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+                    className="w-full px-4 py-2 border border-border-strong rounded-lg bg-surface text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent"
                     placeholder="https://exemple.com/ma-photo.jpg"
                   />
                   {avatarUrl && (
@@ -338,7 +339,7 @@ export default function ProfilePage() {
                       <img
                         src={avatarUrl}
                         alt="Aperçu"
-                        className="w-16 h-16 rounded-full object-cover border border-zinc-300 dark:border-zinc-700"
+                        className="w-16 h-16 rounded-full object-cover border border-border-strong"
                         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                       />
                     </div>
@@ -347,7 +348,7 @@ export default function ProfilePage() {
 
                 {/* Prénom */}
                 <div>
-                  <label htmlFor="profile-firstname" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-firstname" className="block text-sm font-medium text-text-primary mb-2">
                     Prénom
                   </label>
                   <input
@@ -356,13 +357,13 @@ export default function ProfilePage() {
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
                     required
-                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+                    className="w-full px-4 py-2 border border-border-strong rounded-lg bg-surface text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent"
                   />
                 </div>
 
                 {/* Nom */}
                 <div>
-                  <label htmlFor="profile-lastname" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-lastname" className="block text-sm font-medium text-text-primary mb-2">
                     Nom
                   </label>
                   <input
@@ -371,13 +372,13 @@ export default function ProfilePage() {
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
                     required
-                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+                    className="w-full px-4 py-2 border border-border-strong rounded-lg bg-surface text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent"
                   />
                 </div>
 
                 {/* Ville */}
                 <div>
-                  <label htmlFor="profile-city" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-city" className="block text-sm font-medium text-text-primary mb-2">
                     Ville
                   </label>
                   <select
@@ -386,7 +387,7 @@ export default function ProfilePage() {
                     onChange={(e) => setCityId(e.target.value)}
                     required
                     disabled={loadingCities}
-                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent disabled:opacity-50"
+                    className="w-full px-4 py-2 border border-border-strong rounded-lg bg-surface text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent disabled:opacity-50"
                   >
                     <option value="">Sélectionnez votre ville</option>
                     {cities.map((city) => (
@@ -399,7 +400,7 @@ export default function ProfilePage() {
 
                 {/* Adresse précise */}
                 <div>
-                  <label htmlFor="profile-address" className="block text-sm font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                  <label htmlFor="profile-address" className="block text-sm font-medium text-text-primary mb-2">
                     Adresse précise
                   </label>
                   <input
@@ -408,7 +409,7 @@ export default function ProfilePage() {
                     value={addressLine}
                     onChange={(e) => setAddressLine(e.target.value)}
                     required
-                    className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-50 focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 focus:border-transparent"
+                    className="w-full px-4 py-2 border border-border-strong rounded-lg bg-surface text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent"
                     placeholder="Rue, Numéro..."
                   />
                 </div>
@@ -418,7 +419,7 @@ export default function ProfilePage() {
                   <button
                     type="submit"
                     disabled={isSaving}
-                    className="flex-1 px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 px-6 py-3 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isSaving ? 'Enregistrement...' : 'Enregistrer'}
                   </button>
@@ -426,7 +427,7 @@ export default function ProfilePage() {
                     type="button"
                     onClick={handleCancel}
                     disabled={isSaving}
-                    className="flex-1 px-6 py-3 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 px-6 py-3 border border-border-strong text-text-primary rounded-lg hover:bg-surface-active transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Annuler
                   </button>
@@ -436,24 +437,24 @@ export default function ProfilePage() {
           </div>
 
           {/* Zone Danger */}
-          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
-            <h2 className="text-xl font-bold text-red-900 dark:text-red-100 mb-4 flex items-center gap-2">
+          <div className="bg-error-50 border border-error-200 rounded-lg p-6">
+            <h2 className="text-xl font-bold text-error-900 mb-4 flex items-center gap-2">
               <span className="text-2xl">⚠️</span>
               Zone de danger
             </h2>
 
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-red-900 dark:text-red-100">
+                <p className="font-medium text-error-900">
                   Déconnexion
                 </p>
-                <p className="text-sm text-red-700 dark:text-red-300">
+                <p className="text-sm text-error-700">
                   Vous serez redirigé vers la page d&apos;accueil
                 </p>
               </div>
               <button
                 onClick={handleLogout}
-                className="px-6 py-2 bg-red-600 dark:bg-red-500 text-white rounded-lg hover:bg-red-700 dark:hover:bg-red-600 transition font-medium"
+                className="px-6 py-2 bg-error-600 text-inverse-text rounded-lg hover:bg-error-700 transition font-medium"
                 aria-label="Se déconnecter"
               >
                 Se déconnecter

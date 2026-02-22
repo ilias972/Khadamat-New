@@ -35,7 +35,7 @@ export default function KycPendingState() {
           <div className="mb-6 flex justify-center">
             <div className="relative">
               <div className="w-24 h-24 rounded-full bg-primary-100 flex items-center justify-center">
-                <Clock className="w-12 h-12 text-primary-500 animate-pulse" />
+                <Clock className="w-12 h-12 text-primary-500 motion-safe:animate-pulse" />
               </div>
               {/* Badge notification */}
               <div className="absolute -top-1 -right-1 w-8 h-8 rounded-full bg-warning-500 flex items-center justify-center">
@@ -67,7 +67,7 @@ export default function KycPendingState() {
             </div>
             <div className="h-2 bg-primary-100 rounded-full overflow-hidden">
               <div
-                className="h-full bg-gradient-to-r from-primary-400 to-primary-500 rounded-full animate-pulse"
+                className="h-full bg-gradient-to-r from-primary-400 to-primary-500 rounded-full motion-safe:animate-pulse"
                 style={{ width: '60%' }}
               />
             </div>
@@ -92,14 +92,14 @@ export default function KycPendingState() {
               <span className="text-sm text-text-secondary">Documents envoyés</span>
             </div>
             <div className="flex items-center gap-3">
-              <div className="w-6 h-6 rounded-full bg-primary-500 flex items-center justify-center animate-pulse">
+              <div className="w-6 h-6 rounded-full bg-primary-500 flex items-center justify-center motion-safe:animate-pulse">
                 <Clock className="w-3 h-3 text-white" />
               </div>
               <span className="text-sm font-medium text-primary-600">Vérification en cours...</span>
             </div>
             <div className="flex items-center gap-3">
-              <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center">
-                <span className="text-xs text-gray-400">4</span>
+              <div className="w-6 h-6 rounded-full bg-border flex items-center justify-center">
+                <span className="text-xs text-text-muted">4</span>
               </div>
               <span className="text-sm text-text-muted">Compte activé</span>
             </div>
@@ -124,7 +124,7 @@ export default function KycPendingState() {
 
             <button
               onClick={handleLogout}
-              className="w-full flex items-center justify-center gap-2 px-6 py-3 border border-gray-200 text-text-secondary rounded-xl hover:bg-surface-hover transition-colors font-medium"
+              className="w-full flex items-center justify-center gap-2 px-6 py-3 border border-border text-text-secondary rounded-xl hover:bg-surface-hover transition-colors font-medium"
             >
               <LogOut className="w-5 h-5" />
               Se déconnecter

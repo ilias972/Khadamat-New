@@ -122,19 +122,19 @@ export default function DashboardOverviewPage() {
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">
+          <h1 className="text-3xl font-bold text-text-primary">
             Vue d&apos;ensemble
           </h1>
-          <p className="text-zinc-600 dark:text-zinc-400 mt-2">
+          <p className="text-text-secondary mt-2">
             Tableau de bord Premium - Statistiques et KPIs
           </p>
         </div>
 
         {/* Loading */}
         {loading && (
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-8 text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto mb-4"></div>
-            <p className="text-zinc-600 dark:text-zinc-400">
+          <div className="bg-surface rounded-lg border border-border p-8 text-center">
+            <div className="motion-safe:animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+            <p className="text-text-secondary">
               Chargement de vos données...
             </p>
           </div>
@@ -142,8 +142,8 @@ export default function DashboardOverviewPage() {
 
         {/* Error */}
         {error && (
-          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-            <p className="text-red-800 dark:text-red-200">{error}</p>
+          <div role="alert" className="bg-error-50 border border-error-200 rounded-lg p-4">
+            <p className="text-error-800">{error}</p>
           </div>
         )}
 
@@ -153,40 +153,40 @@ export default function DashboardOverviewPage() {
             {/* Cartes KPIs */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {/* Demandes en attente */}
-              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+              <div className="bg-surface rounded-lg border border-border p-6">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  <p className="text-sm text-text-secondary">
                     Demandes en attente
                   </p>
                   <span className="text-2xl">⏳</span>
                 </div>
-                <p className="text-4xl font-bold text-zinc-900 dark:text-zinc-50">
+                <p className="text-4xl font-bold text-text-primary">
                   {loadingStats ? '...' : stats?.pendingCount || 0}
                 </p>
               </div>
 
               {/* Confirmés */}
-              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+              <div className="bg-surface rounded-lg border border-border p-6">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  <p className="text-sm text-text-secondary">
                     Réservations confirmées
                   </p>
                   <span className="text-2xl">✅</span>
                 </div>
-                <p className="text-4xl font-bold text-green-600 dark:text-green-400">
+                <p className="text-4xl font-bold text-success-600">
                   {loadingStats ? '...' : stats?.conversionRate.confirmed || 0}
                 </p>
               </div>
 
               {/* Refusés */}
-              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+              <div className="bg-surface rounded-lg border border-border p-6">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  <p className="text-sm text-text-secondary">
                     Réservations refusées
                   </p>
                   <span className="text-2xl">❌</span>
                 </div>
-                <p className="text-4xl font-bold text-red-600 dark:text-red-400">
+                <p className="text-4xl font-bold text-error-600">
                   {loadingStats ? '...' : stats?.conversionRate.declined || 0}
                 </p>
               </div>
@@ -195,13 +195,13 @@ export default function DashboardOverviewPage() {
             {/* Graphiques */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Ligne : Demandes par jour (7 derniers jours) */}
-              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
+              <div className="bg-surface rounded-lg border border-border p-6">
+                <h2 className="text-lg font-semibold text-text-primary mb-4">
                   📈 Demandes par jour (7 derniers jours)
                 </h2>
                 {loadingStats ? (
                   <div className="flex items-center justify-center h-64">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50"></div>
+                    <div className="motion-safe:animate-spin rounded-full h-8 w-8 border-b-2 border-inverse-bg"></div>
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height={250}>
@@ -218,13 +218,13 @@ export default function DashboardOverviewPage() {
               </div>
 
               {/* Donut : Taux de conversion */}
-              <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
+              <div className="bg-surface rounded-lg border border-border p-6">
+                <h2 className="text-lg font-semibold text-text-primary mb-4">
                   🎯 Taux de conversion
                 </h2>
                 {loadingStats ? (
                   <div className="flex items-center justify-center h-64">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50"></div>
+                    <div className="motion-safe:animate-spin rounded-full h-8 w-8 border-b-2 border-inverse-bg"></div>
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height={250}>
@@ -252,30 +252,30 @@ export default function DashboardOverviewPage() {
             </div>
 
             {/* Prochaine réservation */}
-            <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-4">
+            <div className="bg-surface rounded-lg border border-border p-6">
+              <h2 className="text-lg font-semibold text-text-primary mb-4">
                 📅 Prochaine réservation
               </h2>
               {loadingStats ? (
                 <div className="text-center py-8">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-900 dark:border-zinc-50 mx-auto"></div>
+                  <div className="motion-safe:animate-spin rounded-full h-8 w-8 border-b-2 border-inverse-bg mx-auto"></div>
                 </div>
               ) : stats?.nextBooking ? (
                 <div className="flex items-center gap-4">
-                  <div className="bg-blue-100 dark:bg-blue-900/20 rounded-full p-4">
+                  <div className="bg-info-100 rounded-full p-4">
                     <span className="text-3xl">👤</span>
                   </div>
                   <div>
-                    <p className="font-semibold text-zinc-900 dark:text-zinc-50">
+                    <p className="font-semibold text-text-primary">
                       {stats.nextBooking.client.firstName} {stats.nextBooking.client.lastName}
                     </p>
-                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                    <p className="text-sm text-text-secondary">
                       {stats.nextBooking.category.name}
                     </p>
-                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                    <p className="text-sm text-text-secondary">
                       📞 {stats.nextBooking.client.phone}
                     </p>
-                    <p className="text-sm text-blue-600 dark:text-blue-400 mt-1">
+                    <p className="text-sm text-info-600 mt-1">
                       📅 {new Date(stats.nextBooking.timeSlot).toLocaleDateString('fr-FR', {
                         weekday: 'long',
                         year: 'numeric',
@@ -289,7 +289,7 @@ export default function DashboardOverviewPage() {
                   </div>
                 </div>
               ) : (
-                <p className="text-center text-zinc-600 dark:text-zinc-400 py-8">
+                <p className="text-center text-text-secondary py-8">
                   Aucune réservation confirmée à venir
                 </p>
               )}

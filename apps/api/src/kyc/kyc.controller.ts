@@ -21,9 +21,8 @@ import { KycService } from './kyc.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { multerConfig } from './multer.config';
-import { SubmitKycSchema, type SubmitKycDto, type UploadResponseDto } from './kyc.dto';
+import type { UploadResponseDto } from './kyc.dto';
 
 @Controller('kyc')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -54,13 +53,63 @@ export class KycController {
 
   /**
    * POST /api/kyc/submit
+   *
+   * Soumission initiale du dossier KYC (multipart/form-data).
+   * Accepte : cinNumber (string), cinFront (File), cinBack (File).
    */
   @Post('submit')
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'cinFront', maxCount: 1 },
+        { name: 'cinBack', maxCount: 1 },
+      ],
+      multerConfig,
+    ),
+  )
+  @ApiConsumes('multipart/form-data')
   async submitKyc(
     @Request() req,
-    @Body(new ZodValidationPipe(SubmitKycSchema)) dto: SubmitKycDto,
+    @Body('cinNumber') cinNumber: string,
+    @UploadedFiles()
+    files: {
+      cinFront?: Express.Multer.File[];
+      cinBack?: Express.Multer.File[];
+    },
   ) {
-    return this.kycService.submitKyc(req.user.id, dto);
+    // Input validation with stable error codes
+    if (!cinNumber || !cinNumber.trim()) {
+      throw new BadRequestException({
+        message: 'Le numéro CIN est requis',
+        code: 'CIN_REQUIRED',
+      });
+    }
+
+    const cinFrontFile = files?.cinFront?.[0];
+    if (!cinFrontFile) {
+      throw new BadRequestException({
+        message: 'La photo CIN recto est requise',
+        code: 'CIN_FRONT_REQUIRED',
+      });
+    }
+
+    const cinBackFile = files?.cinBack?.[0];
+    if (!cinBackFile) {
+      throw new BadRequestException({
+        message: 'La photo CIN verso est requise',
+        code: 'CIN_BACK_REQUIRED',
+      });
+    }
+
+    // Validate magic bytes (real file content, not just MIME)
+    this.kycService.validateMagicBytes(cinFrontFile);
+    this.kycService.validateMagicBytes(cinBackFile);
+
+    return this.kycService.submitKyc(req.user.id, {
+      cinNumber: cinNumber.trim().toUpperCase(),
+      frontKey: cinFrontFile.filename,
+      backKey: cinBackFile.filename,
+    });
   }
 
   /**

@@ -134,46 +134,46 @@ export function PaymentButton({
       {/* Modal Instructions de Paiement */}
       {showModal && paymentData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-surface rounded-2xl shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
             {/* Header */}
-            <div className="bg-gradient-to-r from-[#F08C1B] to-[#D97213] p-6 rounded-t-2xl text-white text-center">
+            <div className="bg-gradient-to-r from-primary-500 to-primary-600 p-6 rounded-t-2xl text-text-inverse text-center">
               <CheckCircle className="w-16 h-16 mx-auto mb-3" />
               <h2 className="text-2xl font-bold">Demande enregistrée !</h2>
-              <p className="text-white/90 mt-1">Référence: {paymentData.order.reference}</p>
+              <p className="text-text-inverse/90 mt-1">Référence: {paymentData.order.reference}</p>
             </div>
 
             {/* Content */}
             <div className="p-6 space-y-6">
               {/* Montant */}
               <div className="text-center">
-                <p className="text-sm text-slate-500">Montant à régler</p>
-                <p className="text-4xl font-bold text-slate-900">
+                <p className="text-sm text-text-muted">Montant à régler</p>
+                <p className="text-4xl font-bold text-text-primary">
                   {paymentData.paymentInstructions.amount}
                 </p>
               </div>
 
               {/* Référence à copier */}
-              <div className="bg-slate-100 rounded-xl p-4">
-                <p className="text-sm text-slate-500 mb-2">Référence à mentionner lors du paiement :</p>
-                <div className="flex items-center justify-between bg-white rounded-lg px-4 py-3 border-2 border-dashed border-[#F08C1B]">
+              <div className="bg-surface-active rounded-xl p-4">
+                <p className="text-sm text-text-muted mb-2">Référence à mentionner lors du paiement :</p>
+                <div className="flex items-center justify-between bg-surface rounded-lg px-4 py-3 border-2 border-dashed border-primary-500">
                   <span className="font-mono font-bold text-lg">{paymentData.paymentInstructions.reference}</span>
                   <button
                     onClick={() => copyToClipboard(paymentData.paymentInstructions.reference)}
-                    className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                    className="p-2 hover:bg-surface-active rounded-lg transition-colors"
                     title="Copier"
                   >
-                    <Copy className="w-5 h-5 text-[#F08C1B]" />
+                    <Copy className="w-5 h-5 text-primary-500" />
                   </button>
                 </div>
               </div>
 
               {/* Méthodes de paiement */}
               <div>
-                <p className="text-sm font-semibold text-slate-700 mb-3">Modes de paiement acceptés :</p>
+                <p className="text-sm font-semibold text-text-label mb-3">Modes de paiement acceptés :</p>
                 <ul className="space-y-2">
                   {paymentData.paymentInstructions.methods.map((method, index) => (
-                    <li key={index} className="flex items-center gap-2 text-slate-600">
-                      <span className="w-2 h-2 bg-[#F08C1B] rounded-full"></span>
+                    <li key={index} className="flex items-center gap-2 text-text-secondary">
+                      <span className="w-2 h-2 bg-primary-500 rounded-full"></span>
                       {method}
                     </li>
                   ))}
@@ -181,22 +181,22 @@ export function PaymentButton({
               </div>
 
               {/* Contact */}
-              <div className="bg-blue-50 rounded-xl p-4 space-y-3">
-                <p className="text-sm font-semibold text-blue-900">Contactez-nous pour le règlement :</p>
+              <div className="bg-info-50 rounded-xl p-4 space-y-3">
+                <p className="text-sm font-semibold text-info-900">Contactez-nous pour le règlement :</p>
                 <div className="flex items-center gap-3">
-                  <Phone className="w-5 h-5 text-blue-600" />
+                  <Phone className="w-5 h-5 text-info-600" />
                   <a
                     href={`tel:${paymentData.paymentInstructions.contact.phone.replace(/\s/g, '')}`}
-                    className="text-blue-600 hover:underline"
+                    className="text-info-600 hover:underline"
                   >
                     {paymentData.paymentInstructions.contact.phone}
                   </a>
                 </div>
                 <div className="flex items-center gap-3">
-                  <Mail className="w-5 h-5 text-blue-600" />
+                  <Mail className="w-5 h-5 text-info-600" />
                   <a
                     href={`mailto:${paymentData.paymentInstructions.contact.email}`}
-                    className="text-blue-600 hover:underline"
+                    className="text-info-600 hover:underline"
                   >
                     {paymentData.paymentInstructions.contact.email}
                   </a>
@@ -204,7 +204,7 @@ export function PaymentButton({
               </div>
 
               {/* Note */}
-              <p className="text-sm text-slate-500 text-center italic">
+              <p className="text-sm text-text-muted text-center italic">
                 {paymentData.paymentInstructions.note}
               </p>
             </div>
@@ -213,7 +213,7 @@ export function PaymentButton({
             <div className="p-6 pt-0">
               <button
                 onClick={() => setShowModal(false)}
-                className="w-full py-3 bg-slate-900 text-white font-semibold rounded-xl hover:bg-slate-800 transition-colors"
+                className="w-full py-3 bg-inverse-bg text-text-inverse font-semibold rounded-xl hover:bg-inverse-hover transition-colors"
               >
                 Fermer
               </button>

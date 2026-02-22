@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CatalogResolverService } from '../catalog/catalog-resolver.service';
+import { validateUrl } from '../common/utils/url-validation';
 import type {
   UpdateProProfileInput,
   UpdateServicesInput,
@@ -202,7 +203,7 @@ export class ProService {
       const userUpdateData: { cityId?: string; phone?: string; avatarUrl?: string } = {};
       if (resolvedCityId) userUpdateData.cityId = resolvedCityId;
       if (dto.phone) userUpdateData.phone = dto.phone;
-      if (dto.avatarUrl !== undefined) userUpdateData.avatarUrl = dto.avatarUrl;
+      if (dto.avatarUrl !== undefined) userUpdateData.avatarUrl = validateUrl(dto.avatarUrl);
 
       const updatedUser = await tx.user.update({
         where: { id: userId },
@@ -353,6 +354,15 @@ export class ProService {
 
     if (!existingProfile) {
       throw new NotFoundException('Profil Pro non trouvé');
+    }
+
+    // DA-07: Guard défensif contre doublons dayOfWeek (defense-in-depth)
+    const dayOfWeekSet = new Set<number>();
+    for (const slot of dto) {
+      if (dayOfWeekSet.has(slot.dayOfWeek)) {
+        throw new BadRequestException(`Duplicate dayOfWeek: ${slot.dayOfWeek}`);
+      }
+      dayOfWeekSet.add(slot.dayOfWeek);
     }
 
     const result = await this.prisma.$transaction(async (tx) => {

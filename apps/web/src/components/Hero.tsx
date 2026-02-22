@@ -29,27 +29,27 @@ export default function Hero({ cities, categories }: HeroProps) {
   };
 
   return (
-    <section className="bg-gradient-to-b from-zinc-50 to-white dark:from-zinc-900 dark:to-zinc-800 py-20">
+    <section className="bg-gradient-to-b from-background to-surface py-20">
       <div className="container mx-auto px-6">
         <div className="max-w-3xl mx-auto text-center space-y-8">
           {/* Titre */}
           <div className="space-y-4">
-            <h1 className="text-5xl font-bold text-zinc-900 dark:text-zinc-50">
+            <h1 className="text-5xl font-bold text-text-primary">
               Trouvez votre expert
             </h1>
-            <p className="text-xl text-zinc-600 dark:text-zinc-400">
+            <p className="text-xl text-text-secondary">
               Marketplace marocaine de services à la demande
             </p>
           </div>
 
           {/* Formulaire de recherche */}
-          <div className="bg-white dark:bg-zinc-800 rounded-xl shadow-lg p-6 space-y-4">
+          <div className="bg-surface rounded-xl shadow-lg p-6 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Select Ville */}
               <div>
                 <label
                   htmlFor="city"
-                  className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+                  className="block text-sm font-medium text-text-label mb-2"
                 >
                   Ville
                 </label>
@@ -57,7 +57,7 @@ export default function Hero({ cities, categories }: HeroProps) {
                   id="city"
                   value={selectedCity}
                   onChange={(e) => setSelectedCity(e.target.value)}
-                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
+                  className="w-full px-4 py-3 bg-input-bg border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-border-focus text-text-primary"
                 >
                   <option value="">Toutes les villes</option>
                   {cities.map((city) => (
@@ -72,7 +72,7 @@ export default function Hero({ cities, categories }: HeroProps) {
               <div>
                 <label
                   htmlFor="category"
-                  className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+                  className="block text-sm font-medium text-text-label mb-2"
                 >
                   Service
                 </label>
@@ -80,7 +80,7 @@ export default function Hero({ cities, categories }: HeroProps) {
                   id="category"
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
+                  className="w-full px-4 py-3 bg-input-bg border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-border-focus text-text-primary"
                 >
                   <option value="">Tous les services</option>
                   {categories.map((category) => (
@@ -95,7 +95,7 @@ export default function Hero({ cities, categories }: HeroProps) {
             {/* Bouton Rechercher */}
             <button
               onClick={handleSearch}
-              className="w-full px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium text-lg"
+              className="w-full px-6 py-3 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium text-lg"
             >
               Rechercher
             </button>

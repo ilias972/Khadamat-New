@@ -16,7 +16,13 @@ export class KycService {
     private prisma: PrismaService,
     private config: ConfigService,
   ) {
-    this.cinSalt = this.config.get<string>('CIN_HASH_SALT') || 'khadamat-cin-default-salt';
+    const salt = this.config.get<string>('CIN_HASH_SALT');
+    if (!salt || salt.length < 32) {
+      throw new Error(
+        'FATAL: CIN_HASH_SALT is missing or too weak (min 32 chars).',
+      );
+    }
+    this.cinSalt = salt;
   }
 
   /**
@@ -27,13 +33,70 @@ export class KycService {
     return crypto.createHash('sha256').update(normalized + this.cinSalt).digest('hex');
   }
 
+  /**
+   * Validate file content via magic bytes (not MIME type from client).
+   * Accepts: JPEG (FF D8 FF), PNG (89 50 4E 47), WebP (RIFF...WEBP).
+   */
+  validateMagicBytes(file: Express.Multer.File): void {
+    const fd = fs.openSync(file.path, 'r');
+    const header = Buffer.alloc(12);
+    fs.readSync(fd, header, 0, 12, 0);
+    fs.closeSync(fd);
+
+    const isJpeg =
+      header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+    const isPng =
+      header[0] === 0x89 &&
+      header[1] === 0x50 &&
+      header[2] === 0x4e &&
+      header[3] === 0x47;
+    const isWebp =
+      header.toString('ascii', 0, 4) === 'RIFF' &&
+      header.toString('ascii', 8, 12) === 'WEBP';
+
+    if (!isJpeg && !isPng && !isWebp) {
+      // Clean up the spoofed file
+      try {
+        fs.unlinkSync(file.path);
+      } catch {
+        /* best-effort cleanup */
+      }
+      throw new BadRequestException({
+        message:
+          'Type de fichier non autorisé. Le contenu ne correspond pas à une image valide.',
+        code: 'KYC_FILE_SPOOFED_TYPE',
+      });
+    }
+  }
+
   async submitKyc(userId: string, dto: SubmitKycDto) {
     const existingProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
+      select: { kycStatus: true },
     });
 
     if (!existingProfile) {
       throw new NotFoundException('Profil Pro non trouvé');
+    }
+
+    // Status guards
+    if (existingProfile.kycStatus === 'PENDING') {
+      throw new BadRequestException({
+        message: 'Un dossier KYC est déjà en cours de vérification.',
+        code: 'KYC_ALREADY_PENDING',
+      });
+    }
+    if (existingProfile.kycStatus === 'APPROVED') {
+      throw new BadRequestException({
+        message: 'Votre dossier KYC est déjà approuvé.',
+        code: 'KYC_ALREADY_APPROVED',
+      });
+    }
+    if (existingProfile.kycStatus === 'REJECTED') {
+      throw new BadRequestException({
+        message: 'Votre dossier a été rejeté. Utilisez la re-soumission.',
+        code: 'KYC_USE_RESUBMIT',
+      });
     }
 
     const cinHash = this.hashCin(dto.cinNumber);
@@ -43,7 +106,10 @@ export class KycService {
       where: { cinHash, userId: { not: userId } },
     });
     if (existingCin) {
-      throw new ConflictException('Données en conflit');
+      throw new ConflictException({
+        message: 'Données en conflit',
+        code: 'CIN_ALREADY_USED',
+      });
     }
 
     try {

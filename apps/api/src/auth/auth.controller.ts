@@ -26,6 +26,8 @@ import { multerConfig } from '../kyc/multer.config';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import type { PublicUser } from '@khadamat/contracts';
 
 @ApiTags('Authentication')
@@ -302,6 +304,40 @@ export class AuthController {
 
     this.clearAuthCookies(res);
     return { message: 'Déconnecté' };
+  }
+
+  /**
+   * POST /api/auth/forgot-password
+   * Demande de réinitialisation de mot de passe.
+   * Retourne toujours 200 avec un message générique (anti-enumeration).
+   */
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 3, ttl: 3_600_000 } })
+  @ApiOperation({ summary: 'Demande de réinitialisation de mot de passe' })
+  @ApiResponse({ status: 200, description: 'Message générique (anti-enumeration)' })
+  async forgotPassword(
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+    dto: ForgotPasswordDto,
+  ) {
+    return this.authService.requestPasswordReset(dto);
+  }
+
+  /**
+   * POST /api/auth/reset-password
+   * Réinitialise le mot de passe via un token valide.
+   */
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 3_600_000 } })
+  @ApiOperation({ summary: 'Réinitialisation du mot de passe avec token' })
+  @ApiResponse({ status: 200, description: 'Mot de passe mis à jour' })
+  @ApiResponse({ status: 400, description: 'Token invalide ou expiré' })
+  async resetPassword(
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+    dto: ResetPasswordDto,
+  ) {
+    return this.authService.resetPassword(dto);
   }
 
   /**

@@ -4,7 +4,23 @@ import { ArrowLeft, Mail, MessageCircle } from 'lucide-react';
 
 export const metadata: Metadata = {
   title: "Centre d'aide — Khadamat",
-  description: "Besoin d'aide ? Trouvez les réponses à vos questions sur Khadamat.",
+  description: "Besoin d'aide ? Contactez notre équipe ou consultez notre FAQ.",
+  alternates: { canonical: 'https://khadamat.ma/help' },
+  openGraph: {
+    title: "Centre d'aide — Khadamat",
+    description: "Besoin d'aide ? Contactez notre équipe ou consultez notre FAQ.",
+    url: 'https://khadamat.ma/help',
+    siteName: 'Khadamat',
+    locale: 'fr_MA',
+    type: 'website',
+    images: [{ url: 'https://khadamat.ma/og-image.jpg', width: 1200, height: 630, alt: 'Khadamat' }],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: "Centre d'aide — Khadamat",
+    description: "Besoin d'aide ? Contactez notre équipe ou consultez notre FAQ.",
+    images: ['https://khadamat.ma/og-image.jpg'],
+  },
 };
 
 export default function HelpPage() {

@@ -14,22 +14,27 @@ export function ToastContainer() {
   };
 
   const styles = {
-    success: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-800 dark:text-green-200',
-    error: 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-800 dark:text-red-200',
-    info: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200',
-    warning: 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-200',
+    success: 'bg-success-50 border-success-200 text-success-800',
+    error: 'bg-error-50 border-error-200 text-error-800',
+    info: 'bg-info-50 border-info-200 text-info-800',
+    warning: 'bg-warning-50 border-warning-200 text-warning-800',
   };
 
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-md">
+    <div
+      className="fixed top-4 right-4 z-50 space-y-2 max-w-md"
+      aria-live="polite"
+      aria-relevant="additions removals"
+    >
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`${styles[toast.type]} border rounded-lg p-4 shadow-lg flex items-start gap-3 animate-in slide-in-from-right`}
+          role={toast.type === 'error' ? 'alert' : 'status'}
+          className={`${styles[toast.type]} border rounded-lg p-4 shadow-lg flex items-start gap-3 motion-safe:animate-in motion-safe:slide-in-from-right`}
         >
-          <div className="flex-shrink-0 mt-0.5">
+          <div className="flex-shrink-0 mt-0.5" aria-hidden="true">
             {icons[toast.type]}
           </div>
           <div className="flex-1 text-sm">
@@ -38,6 +43,7 @@ export function ToastContainer() {
           <button
             onClick={() => removeToast(toast.id)}
             className="flex-shrink-0 opacity-70 hover:opacity-100 transition-opacity"
+            aria-label="Fermer la notification"
           >
             <X className="w-4 h-4" />
           </button>

@@ -135,25 +135,25 @@ export default function KycPage() {
     switch (status) {
       case 'NOT_SUBMITTED':
         return (
-          <span className="inline-flex items-center px-3 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-sm font-medium rounded-full">
+          <span className="inline-flex items-center px-3 py-1 bg-surface-active text-text-label text-sm font-medium rounded-full">
             Non soumis
           </span>
         );
       case 'PENDING':
         return (
-          <span className="inline-flex items-center px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 text-sm font-medium rounded-full">
+          <span className="inline-flex items-center px-3 py-1 bg-warning-100 text-warning-800 text-sm font-medium rounded-full">
             En cours de vérification
           </span>
         );
       case 'APPROVED':
         return (
-          <span className="inline-flex items-center px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 text-sm font-medium rounded-full">
+          <span className="inline-flex items-center px-3 py-1 bg-success-100 text-success-800 text-sm font-medium rounded-full">
             ✓ Approuvé
           </span>
         );
       case 'REJECTED':
         return (
-          <span className="inline-flex items-center px-3 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200 text-sm font-medium rounded-full">
+          <span className="inline-flex items-center px-3 py-1 bg-error-100 text-error-800 text-sm font-medium rounded-full">
             ✗ Rejeté
           </span>
         );
@@ -166,7 +166,7 @@ export default function KycPage() {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center min-h-[400px]">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-zinc-900 dark:border-zinc-50"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg"></div>
         </div>
       </DashboardLayout>
     );
@@ -181,17 +181,17 @@ export default function KycPage() {
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">
+          <h1 className="text-3xl font-bold text-text-primary">
             Vérification KYC
           </h1>
-          <p className="text-zinc-600 dark:text-zinc-400 mt-2">
+          <p className="text-text-secondary mt-2">
             Soumettez votre carte d'identité nationale pour vérification
           </p>
         </div>
 
         {/* 🚨 GROSSE ALERTE ROUGE si REJECTED */}
         {kycStatus && kycStatus.kycStatus === 'REJECTED' && (
-          <div className="bg-red-600 dark:bg-red-700 text-white rounded-lg p-6 shadow-lg">
+          <div className="bg-error-600 text-text-inverse rounded-lg p-6 shadow-lg">
             <div className="flex items-start gap-4">
               <span className="text-4xl">⚠️</span>
               <div className="flex-1">
@@ -200,7 +200,7 @@ export default function KycPage() {
                   Votre dossier de vérification d'identité a été rejeté. Vous devez le soumettre à nouveau pour accéder au dashboard.
                 </p>
                 {kycStatus.kycRejectionReason && (
-                  <div className="bg-red-800 dark:bg-red-900 rounded-lg p-4">
+                  <div className="bg-error-800 rounded-lg p-4">
                     <p className="font-semibold mb-1">Motif du rejet :</p>
                     <p className="text-base">{kycStatus.kycRejectionReason}</p>
                   </div>
@@ -212,10 +212,10 @@ export default function KycPage() {
 
         {/* Statut actuel (si pas REJECTED) */}
         {kycStatus && kycStatus.kycStatus !== 'REJECTED' && (
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
+          <div className="bg-surface rounded-lg border border-border p-6">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
+                <h2 className="text-xl font-semibold text-text-primary">
                   Statut actuel
                 </h2>
               </div>
@@ -224,8 +224,8 @@ export default function KycPage() {
 
             {/* Approved message */}
             {kycStatus.kycStatus === 'APPROVED' && (
-              <div className="mt-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-                <p className="text-sm text-green-800 dark:text-green-200">
+              <div className="mt-4 bg-success-50 border border-success-200 rounded-lg p-4">
+                <p className="text-sm text-success-800">
                   Votre identité a été vérifiée avec succès. Vous pouvez maintenant utiliser toutes les fonctionnalités de la plateforme.
                 </p>
               </div>
@@ -235,19 +235,19 @@ export default function KycPage() {
 
         {/* PENDING — dossier en cours de vérification */}
         {kycStatus && kycStatus.kycStatus === 'PENDING' && (
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-8 text-center">
+          <div className="bg-surface rounded-lg border border-border p-8 text-center">
             <div className="flex justify-center mb-4">
-              <div className="w-16 h-16 rounded-full bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center">
-                <svg className="w-8 h-8 text-yellow-600 dark:text-yellow-400 animate-spin" fill="none" viewBox="0 0 24 24">
+              <div className="w-16 h-16 rounded-full bg-warning-100 flex items-center justify-center">
+                <svg className="w-8 h-8 text-warning-600 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
               </div>
             </div>
-            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-2">
+            <h2 className="text-xl font-semibold text-text-primary mb-2">
               Dossier en cours de vérification
             </h2>
-            <p className="text-zinc-600 dark:text-zinc-400 max-w-md mx-auto">
+            <p className="text-text-secondary max-w-md mx-auto">
               Votre dossier KYC a bien été soumis. Notre équipe le vérifie sous 24 à 48 heures.
               Vous recevrez une notification dès que la vérification sera terminée.
             </p>
@@ -256,8 +256,8 @@ export default function KycPage() {
 
         {/* Formulaire de soumission (NOT_SUBMITTED ou REJECTED uniquement) */}
         {kycStatus && kycStatus.kycStatus !== 'APPROVED' && kycStatus.kycStatus !== 'PENDING' && (
-          <div className="bg-white dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700 p-6">
-            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 mb-6">
+          <div className="bg-surface rounded-lg border border-border p-6">
+            <h2 className="text-xl font-semibold text-text-primary mb-6">
               {kycStatus.kycStatus === 'REJECTED'
                 ? 'Soumettre à nouveau'
                 : 'Soumettre mon dossier KYC'}
@@ -268,7 +268,7 @@ export default function KycPage() {
               <div>
                 <label
                   htmlFor="cinNumber"
-                  className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+                  className="block text-sm font-medium text-text-label mb-2"
                 >
                   Numéro de CIN
                 </label>
@@ -277,11 +277,11 @@ export default function KycPage() {
                   id="cinNumber"
                   value={cinNumber}
                   onChange={(e) => setCinNumber(e.target.value.toUpperCase())}
-                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50"
+                  className="w-full px-4 py-3 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary"
                   placeholder="AB123456"
                   required
                 />
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                <p className="text-xs text-text-muted mt-1">
                   Format: Lettres en majuscules suivies de chiffres
                 </p>
               </div>
@@ -290,7 +290,7 @@ export default function KycPage() {
               <div>
                 <label
                   htmlFor="frontFile"
-                  className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+                  className="block text-sm font-medium text-text-label mb-2"
                 >
                   Photo CIN Recto
                 </label>
@@ -304,11 +304,11 @@ export default function KycPage() {
                       setFrontFile(file);
                     }
                   }}
-                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-zinc-900 file:text-zinc-50 dark:file:bg-zinc-50 dark:file:text-zinc-900 hover:file:bg-zinc-800 dark:hover:file:bg-zinc-200"
+                  className="w-full px-4 py-3 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-inverse-bg file:text-inverse-text hover:file:bg-inverse-hover"
                   required
                 />
                 {frontFile && (
-                  <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                  <p className="text-xs text-success-600 mt-1">
                     ✓ {frontFile.name} ({(frontFile.size / 1024 / 1024).toFixed(2)} MB)
                   </p>
                 )}
@@ -318,7 +318,7 @@ export default function KycPage() {
               <div>
                 <label
                   htmlFor="backFile"
-                  className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2"
+                  className="block text-sm font-medium text-text-label mb-2"
                 >
                   Photo CIN Verso
                 </label>
@@ -332,11 +332,11 @@ export default function KycPage() {
                       setBackFile(file);
                     }
                   }}
-                  className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-50 text-zinc-900 dark:text-zinc-50 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-zinc-900 file:text-zinc-50 dark:file:bg-zinc-50 dark:file:text-zinc-900 hover:file:bg-zinc-800 dark:hover:file:bg-zinc-200"
+                  className="w-full px-4 py-3 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-inverse-bg file:text-inverse-text hover:file:bg-inverse-hover"
                   required
                 />
                 {backFile && (
-                  <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                  <p className="text-xs text-success-600 mt-1">
                     ✓ {backFile.name} ({(backFile.size / 1024 / 1024).toFixed(2)} MB)
                   </p>
                 )}
@@ -344,14 +344,14 @@ export default function KycPage() {
 
               {/* Messages */}
               {error && (
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-                  <p className="text-red-800 dark:text-red-200 text-sm">{error}</p>
+                <div className="bg-error-50 border border-error-200 rounded-lg p-4">
+                  <p className="text-error-800 text-sm">{error}</p>
                 </div>
               )}
 
               {success && (
-                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-                  <p className="text-green-800 dark:text-green-200 text-sm">{success}</p>
+                <div className="bg-success-50 border border-success-200 rounded-lg p-4">
+                  <p className="text-success-800 text-sm">{success}</p>
                 </div>
               )}
 
@@ -359,7 +359,7 @@ export default function KycPage() {
               <button
                 type="submit"
                 disabled={submitting || !frontFile || !backFile}
-                className="w-full px-6 py-3 bg-zinc-900 dark:bg-zinc-50 text-zinc-50 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full px-6 py-3 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {submitting
                   ? 'Soumission...'
@@ -372,11 +372,11 @@ export default function KycPage() {
         )}
 
         {/* Info box */}
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-          <h3 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">
+        <div className="bg-info-50 border border-info-200 rounded-lg p-4">
+          <h3 className="font-semibold text-info-900 mb-2">
             Informations importantes
           </h3>
-          <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
+          <ul className="text-sm text-info-800 space-y-1">
             <li>• Les photos doivent être claires et lisibles</li>
             <li>• Formats acceptés : JPG, PNG, WebP (max 5MB)</li>
             <li>• Le numéro CIN doit correspondre exactement à votre carte</li>

@@ -61,8 +61,8 @@ export default function ProDetailClient({ proId }: ProDetailClientProps) {
       disabled={loading}
       className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg border transition font-medium text-sm disabled:opacity-50 ${
         isFavorite
-          ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
-          : 'bg-white dark:bg-zinc-800 border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-700'
+          ? 'bg-error-50 border-error-200 text-error-700'
+          : 'bg-surface border-border-strong text-text-label hover:bg-surface-muted'
       }`}
       aria-label={isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}
     >

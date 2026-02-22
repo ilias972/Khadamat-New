@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException, ForbiddenException, B
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../database/prisma.service';
 import { CatalogResolverService } from '../catalog/catalog-resolver.service';
+import { getPagination, getPaginationMeta } from '../common/utils/pagination';
 import type { GetSlotsInput, CreateBookingInput, UpdateBookingStatusInput, CancelBookingInput } from '@khadamat/contracts';
 import { BookingEventTypes, BookingEventPayload } from '../notifications/events/booking-events.types';
 
@@ -206,51 +207,124 @@ export class BookingService {
 
     const categoryId = await this.catalogResolver.resolveCategoryId(dto.categoryId);
 
-    // 6. DOUBLE CHECK DISPONIBILITÉ
-    const availableSlots = await this.getAvailableSlots({
-      proId: resolvedProId,
-      date: dto.date,
-      categoryId: dto.categoryId,
+    // 5b. VALIDATION SERVICE — le Pro doit avoir un service actif pour cette catégorie
+    const proService = await this.prisma.proService.findUnique({
+      where: {
+        proUserId_categoryId: { proUserId: resolvedProId, categoryId },
+      },
     });
-
-    if (!availableSlots.includes(dto.time)) {
-      throw new ConflictException('Ce créneau n\'est plus disponible');
+    if (!proService || !proService.isActive) {
+      throw new ConflictException({
+        message: 'Créneau déjà pris',
+        code: 'SLOT_TAKEN',
+      });
     }
 
-    // 7. CRÉATION BOOKING
-    // expiresAt = timeSlot + 24 heures (PRD: expiration si pas de confirmation)
-    const booking = await this.prisma.booking.create({
-      data: {
-        clientId: clientUserId,
-        proId: resolvedProId,
-        categoryId: categoryId,
-        cityId: proProfile.cityId,
-        timeSlot: timeSlot,
-        status: 'PENDING',
-        estimatedDuration: 'H1', // MVP: fixé à 1 heure
-        expiresAt: new Date(timeSlot.getTime() + 24 * 60 * 60 * 1000), // Expire dans 24h
-      },
-      select: {
-        id: true,
-        status: true,
-        timeSlot: true,
-        category: { select: { id: true, name: true } },
-        pro: {
-          select: {
-            user: { select: { firstName: true, lastName: true } },
-            city: { select: { name: true } },
+    // 6-8. TRANSACTION ATOMIQUE : vérification disponibilité + création booking
+    const booking = await this.prisma.$transaction(async (tx) => {
+      // 6. VÉRIFICATION DISPONIBILITÉ DANS LA TRANSACTION
+      // Seuls les CONFIRMED bloquent (logique métier existante)
+      const startOfDay = new Date(timeSlot);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(timeSlot);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const confirmedBookings = await tx.booking.findMany({
+        where: {
+          proId: resolvedProId,
+          status: 'CONFIRMED',
+          timeSlot: { gte: startOfDay, lte: endOfDay },
+        },
+        select: { timeSlot: true, duration: true },
+      });
+
+      // Vérifier si le créneau est bloqué par un booking CONFIRMED
+      const occupiedSlots = new Set<string>();
+      for (const b of confirmedBookings) {
+        const dur = b.duration || 1;
+        for (let h = 0; h < dur; h++) {
+          const st = new Date(b.timeSlot.getTime() + h * 60 * 60 * 1000);
+          const hh = st.getHours().toString().padStart(2, '0');
+          const mm = st.getMinutes().toString().padStart(2, '0');
+          occupiedSlots.add(`${hh}:${mm}`);
+        }
+      }
+
+      if (occupiedSlots.has(dto.time)) {
+        throw new ConflictException({
+          message: 'Créneau déjà pris',
+          code: 'SLOT_TAKEN',
+        });
+      }
+
+      // Vérifier également la disponibilité hebdomadaire et service (inchangé)
+      const dateObj2 = new Date(dto.date);
+      const dayOfWeek = dateObj2.getDay();
+      const availability = await tx.weeklyAvailability.findUnique({
+        where: {
+          proUserId_dayOfWeek: { proUserId: resolvedProId, dayOfWeek },
+        },
+      });
+      if (!availability || !availability.isActive) {
+        throw new ConflictException({
+          message: 'Créneau déjà pris',
+          code: 'SLOT_TAKEN',
+        });
+      }
+
+      const slotMinutes = hour * 60 + minute;
+      if (slotMinutes < availability.startMin || slotMinutes >= availability.endMin) {
+        throw new ConflictException({
+          message: 'Créneau déjà pris',
+          code: 'SLOT_TAKEN',
+        });
+      }
+
+      // Slot dans le passé
+      const now = new Date();
+      if (timeSlot <= now) {
+        throw new ConflictException({
+          message: 'Créneau déjà pris',
+          code: 'SLOT_TAKEN',
+        });
+      }
+
+      // 7. CRÉATION BOOKING (atomique dans la transaction)
+      const created = await tx.booking.create({
+        data: {
+          clientId: clientUserId,
+          proId: resolvedProId,
+          categoryId: categoryId,
+          cityId: proProfile.cityId,
+          timeSlot: timeSlot,
+          status: 'PENDING',
+          estimatedDuration: 'H1',
+          expiresAt: new Date(timeSlot.getTime() + 24 * 60 * 60 * 1000),
+        },
+        select: {
+          id: true,
+          status: true,
+          timeSlot: true,
+          category: { select: { id: true, name: true } },
+          pro: {
+            select: {
+              user: { select: { firstName: true, lastName: true } },
+              city: { select: { name: true } },
+            },
           },
         },
-      },
+      });
+
+      // 8. PERSISTER ÉVÉNEMENT EN DB (dans la transaction)
+      await this.createBookingEvent(
+        tx, created.id, 'CREATED', clientUserId, 'CLIENT',
+        { categoryId: dto.categoryId, timeSlot: timeSlot.toISOString() },
+      );
+
+      return created;
     });
 
-    // 8. PERSISTER ÉVÉNEMENT EN DB
-    await this.createBookingEvent(
-      this.prisma, booking.id, 'CREATED', clientUserId, 'CLIENT',
-      { categoryId: dto.categoryId, timeSlot: timeSlot.toISOString() },
-    );
-
-    // 9. ÉMETTRE ÉVÉNEMENT (aucune logique d'email/push ici)
+    // 9. ÉMETTRE ÉVÉNEMENT (hors transaction — fire-and-forget)
     const eventPayload: BookingEventPayload = {
       bookingId: booking.id,
       proId: resolvedProId,
@@ -274,74 +348,99 @@ export class BookingService {
    *
    * @param userId - ID de l'utilisateur connecté
    * @param userRole - Rôle de l'utilisateur (CLIENT ou PRO)
+   * @param page - Page number
+   * @param limit - Items per page
+   * @param scope - Optional filter: "history" for closed bookings
    * @returns Array de bookings avec relations
    */
-  async getMyBookings(userId: string, userRole: string, page: number = 1, limit: number = 20) {
+  async getMyBookings(userId: string, userRole: string, page: number = 1, limit: number = 20, scope?: string) {
     // Filtrage selon le rôle
-    const where = userRole === 'CLIENT'
+    const where: any = userRole === 'CLIENT'
       ? { clientId: userId }
       : { proId: userId };
 
-    const skip = (page - 1) * limit;
-    const bookings = await this.prisma.booking.findMany({
-      where,
-      skip,
-      take: limit,
-      orderBy: { timeSlot: 'desc' },
-      select: {
-        id: true,
-        status: true,
-        timeSlot: true,
-        estimatedDuration: true,
-        duration: true,
-        isModifiedByPro: true,
-        category: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
-        city: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
-        // Pour le CLIENT: inclure infos du PRO
-        ...(userRole === 'CLIENT' && {
-          pro: {
-            select: {
-              user: {
-                select: {
-                  firstName: true,
-                  lastName: true,
-                  phone: true,
-                },
-              },
-              city: {
-                select: {
-                  name: true,
-                },
-              },
-            },
-          },
-        }),
-        // Pour le PRO: inclure infos du CLIENT
-        ...(userRole === 'PRO' && {
-          client: {
-            select: {
-              firstName: true,
-              lastName: true,
-              phone: true,
-            },
-          },
-        }),
-      },
-    });
+    // Filtre scope=history : statuts terminés uniquement
+    if (scope === 'history') {
+      where.status = {
+        in: [
+          'COMPLETED',
+          'DECLINED',
+          'EXPIRED',
+          'CANCELLED_BY_PRO',
+          'CANCELLED_BY_CLIENT',
+          'CANCELLED_AUTO_FIRST_CONFIRMED',
+          'CANCELLED_AUTO_OVERLAP',
+        ],
+      };
+    }
 
-    return bookings;
+    const { skip, take } = getPagination(page, limit);
+
+    const [bookings, total] = await this.prisma.$transaction([
+      this.prisma.booking.findMany({
+        where,
+        skip,
+        take,
+        orderBy: { timeSlot: 'desc' },
+        select: {
+          id: true,
+          status: true,
+          timeSlot: true,
+          estimatedDuration: true,
+          duration: true,
+          isModifiedByPro: true,
+          category: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+            },
+          },
+          city: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+            },
+          },
+          // Pour le CLIENT: inclure infos du PRO
+          ...(userRole === 'CLIENT' && {
+            pro: {
+              select: {
+                user: {
+                  select: {
+                    firstName: true,
+                    lastName: true,
+                    phone: true,
+                  },
+                },
+                city: {
+                  select: {
+                    name: true,
+                  },
+                },
+              },
+            },
+          }),
+          // Pour le PRO: inclure infos du CLIENT
+          ...(userRole === 'PRO' && {
+            client: {
+              select: {
+                firstName: true,
+                lastName: true,
+                phone: true,
+              },
+            },
+          }),
+        },
+      }),
+      this.prisma.booking.count({ where }),
+    ]);
+
+    return {
+      data: bookings,
+      meta: getPaginationMeta(page, limit, total),
+    };
   }
 
   /**
@@ -370,38 +469,49 @@ export class BookingService {
       throw new ForbiddenException('Seuls les professionnels peuvent modifier le statut des réservations');
     }
 
-    // Si DECLINED, pas besoin de transaction
+    // DECLINED → Transaction atomique avec updateMany conditionnel
     if (dto.status === 'DECLINED') {
-      const booking = await this.prisma.booking.findUnique({
-        where: { id: bookingId },
-        select: { id: true, proId: true, clientId: true, status: true },
+      const result = await this.prisma.$transaction(async (tx) => {
+        // Atomic conditional update: only succeeds if status is still PENDING
+        const { count } = await tx.booking.updateMany({
+          where: { id: bookingId, proId: userId, status: 'PENDING' },
+          data: { status: 'DECLINED' },
+        });
+
+        if (count === 0) {
+          // Diagnose why it failed
+          const booking = await tx.booking.findUnique({
+            where: { id: bookingId },
+            select: { proId: true, status: true },
+          });
+          if (!booking) throw new NotFoundException('Réservation introuvable');
+          if (booking.proId !== userId) throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
+          throw new BadRequestException({
+            message: 'Statut incompatible avec cette action',
+            code: 'INVALID_STATUS_TRANSITION',
+          });
+        }
+
+        // Fetch updated booking for return value + events
+        const updatedBooking = await tx.booking.findUnique({
+          where: { id: bookingId },
+          select: { id: true, status: true, timeSlot: true, proId: true, clientId: true },
+        });
+
+        await this.createBookingEvent(tx, bookingId, 'DECLINED', userId, 'PRO');
+
+        return updatedBooking!;
       });
 
-      if (!booking) throw new NotFoundException('Réservation introuvable');
-      if (booking.proId !== userId) throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
-      if (booking.status !== 'PENDING') throw new BadRequestException('Seules les réservations en attente peuvent être modifiées');
-
-      const updatedBooking = await this.prisma.booking.update({
-        where: { id: bookingId },
-        data: { status: 'DECLINED' },
-        select: { id: true, status: true, timeSlot: true, proId: true },
-      });
-
-      // PERSISTER ÉVÉNEMENT EN DB
-      await this.createBookingEvent(
-        this.prisma, booking.id, 'DECLINED', userId, 'PRO',
-      );
-
-      // ÉMETTRE ÉVÉNEMENT ANNULATION
-      const eventPayload: BookingEventPayload = {
-        bookingId: booking.id,
-        proId: booking.proId,
-        clientId: booking.clientId,
+      // Emit event outside transaction
+      this.eventEmitter.emit(BookingEventTypes.CANCELLED, {
+        bookingId: result.id,
+        proId: result.proId,
+        clientId: result.clientId,
         reason: 'Réservation refusée par le professionnel',
-      };
-      this.eventEmitter.emit(BookingEventTypes.CANCELLED, eventPayload);
+      } as BookingEventPayload);
 
-      return updatedBooking;
+      return { id: result.id, status: result.status, timeSlot: result.timeSlot, proId: result.proId };
     }
 
     // CONFIRMED → Transaction atomique avec Winner-Takes-All
@@ -546,97 +656,109 @@ export class BookingService {
       throw new ForbiddenException('Seuls les professionnels peuvent modifier les réservations');
     }
 
-    // 2. RÉCUPÉRATION BOOKING
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      select: {
-        id: true,
-        proId: true,
-        status: true,
-        isModifiedByPro: true,
-        timeSlot: true,
-        categoryId: true,
-      },
-    });
-
-    if (!booking) {
-      throw new NotFoundException('Réservation introuvable');
-    }
-
-    // 3. VÉRIFICATION OWNERSHIP
-    if (booking.proId !== userId) {
-      throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
-    }
-
-    // 4. VÉRIFICATION STATUT
-    if (booking.status !== 'PENDING') {
-      throw new BadRequestException('Seules les réservations en attente peuvent être modifiées');
-    }
-
-    // 5. VÉRIFICATION FLAG
-    if (booking.isModifiedByPro) {
-      throw new BadRequestException('Cette réservation a déjà été modifiée');
-    }
-
-    // 6. VALIDATION DURÉE
+    // 2. VALIDATION DURÉE (before transaction)
     if (duration < 1 || duration > 8) {
       throw new BadRequestException('La durée doit être entre 1 et 8 heures');
     }
 
-    // 7. VÉRIFICATION DISPONIBILITÉ CRÉNEAUX CONSÉCUTIFS
-    if (duration > 1) {
-      // Récupérer les bookings existants pour vérifier les créneaux consécutifs
-      const startTime = new Date(booking.timeSlot);
-      const endTime = new Date(startTime.getTime() + duration * 60 * 60 * 1000);
-
-      const conflictingBookings = await this.prisma.booking.findMany({
+    // 3-8. TRANSACTION ATOMIQUE
+    const updatedBooking = await this.prisma.$transaction(async (tx) => {
+      // Atomic conditional update: PENDING + not yet modified
+      const { count } = await tx.booking.updateMany({
         where: {
+          id: bookingId,
           proId: userId,
-          id: { not: bookingId }, // Exclure le booking actuel
-          timeSlot: {
-            gte: startTime,
-            lt: endTime,
-          },
-          status: {
-            in: ['PENDING', 'CONFIRMED', 'WAITING_FOR_CLIENT'],
-          },
+          status: 'PENDING',
+          isModifiedByPro: false,
+        },
+        data: {
+          duration: duration,
+          isModifiedByPro: true,
+          status: 'WAITING_FOR_CLIENT',
         },
       });
 
-      if (conflictingBookings.length > 0) {
-        throw new ConflictException('Les créneaux consécutifs ne sont pas tous disponibles');
+      if (count === 0) {
+        // Diagnose why it failed
+        const booking = await tx.booking.findUnique({
+          where: { id: bookingId },
+          select: { proId: true, status: true, isModifiedByPro: true },
+        });
+        if (!booking) throw new NotFoundException('Réservation introuvable');
+        if (booking.proId !== userId) throw new ForbiddenException('Vous ne pouvez modifier que vos propres réservations');
+        if (booking.isModifiedByPro) {
+          throw new BadRequestException({
+            message: 'Cette réservation a déjà été modifiée',
+            code: 'ALREADY_MODIFIED',
+          });
+        }
+        throw new BadRequestException({
+          message: 'Statut incompatible avec cette action',
+          code: 'INVALID_STATUS_TRANSITION',
+        });
       }
-    }
 
-    // 8. UPDATE
-    const updatedBooking = await this.prisma.booking.update({
-      where: { id: bookingId },
-      data: {
-        duration: duration,
-        isModifiedByPro: true,
-        status: 'WAITING_FOR_CLIENT',
-      },
-      select: {
-        id: true,
-        status: true,
-        timeSlot: true,
-        duration: true,
-        isModifiedByPro: true,
-        clientId: true,
-      },
+      // Verify consecutive slot availability INSIDE the transaction
+      if (duration > 1) {
+        const booking = await tx.booking.findUnique({
+          where: { id: bookingId },
+          select: { timeSlot: true },
+        });
+
+        if (booking) {
+          const startTime = new Date(booking.timeSlot);
+          const endTime = new Date(startTime.getTime() + duration * 60 * 60 * 1000);
+
+          const conflicting = await tx.booking.findMany({
+            where: {
+              proId: userId,
+              id: { not: bookingId },
+              timeSlot: { gte: startTime, lt: endTime },
+              status: { in: ['PENDING', 'CONFIRMED', 'WAITING_FOR_CLIENT'] },
+            },
+            select: { id: true },
+          });
+
+          if (conflicting.length > 0) {
+            // Rollback: revert the update
+            await tx.booking.update({
+              where: { id: bookingId },
+              data: { duration: 1, isModifiedByPro: false, status: 'PENDING' },
+            });
+            throw new ConflictException({
+              message: 'Les créneaux consécutifs ne sont pas tous disponibles',
+              code: 'SLOT_CONFLICT',
+            });
+          }
+        }
+      }
+
+      return tx.booking.findUnique({
+        where: { id: bookingId },
+        select: {
+          id: true,
+          status: true,
+          timeSlot: true,
+          duration: true,
+          isModifiedByPro: true,
+          clientId: true,
+        },
+      });
     });
 
-    // 9. ÉMETTRE ÉVÉNEMENT MODIFICATION
-    const eventPayload: BookingEventPayload = {
-      bookingId: updatedBooking.id,
-      proId: userId,
-      clientId: updatedBooking.clientId,
-      metadata: {
-        newDuration: duration,
-        timeSlot: updatedBooking.timeSlot.toISOString(),
-      },
-    };
-    this.eventEmitter.emit(BookingEventTypes.MODIFIED, eventPayload);
+    // 9. ÉMETTRE ÉVÉNEMENT MODIFICATION (hors transaction)
+    if (updatedBooking) {
+      const eventPayload: BookingEventPayload = {
+        bookingId: updatedBooking.id,
+        proId: userId,
+        clientId: updatedBooking.clientId,
+        metadata: {
+          newDuration: duration,
+          timeSlot: updatedBooking.timeSlot.toISOString(),
+        },
+      };
+      this.eventEmitter.emit(BookingEventTypes.MODIFIED, eventPayload);
+    }
 
     return updatedBooking;
   }
@@ -843,55 +965,57 @@ export class BookingService {
       throw new ForbiddenException('Seuls les professionnels peuvent marquer une mission comme terminée');
     }
 
-    // 2. RÉCUPÉRATION BOOKING
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      select: {
-        id: true,
-        proId: true,
-        status: true,
-        timeSlot: true,
-      },
+    // 2-6. TRANSACTION ATOMIQUE
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Atomic conditional update: only succeeds if status is still CONFIRMED
+      const { count } = await tx.booking.updateMany({
+        where: { id: bookingId, proId: userId, status: 'CONFIRMED' },
+        data: { status: 'COMPLETED', completedAt: new Date() },
+      });
+
+      if (count === 0) {
+        // Diagnose why it failed
+        const booking = await tx.booking.findUnique({
+          where: { id: bookingId },
+          select: { proId: true, status: true },
+        });
+        if (!booking) throw new NotFoundException('Réservation introuvable');
+        if (booking.proId !== userId) throw new ForbiddenException('Vous ne pouvez marquer que vos propres réservations comme terminées');
+        throw new BadRequestException({
+          message: 'Statut incompatible avec cette action',
+          code: 'INVALID_STATUS_TRANSITION',
+        });
+      }
+
+      // Fetch updated booking + verify timing with duration
+      const updatedBooking = await tx.booking.findUnique({
+        where: { id: bookingId },
+        select: { id: true, status: true, timeSlot: true, completedAt: true, duration: true },
+      });
+
+      // Verify that the full duration has elapsed (timeSlot + duration*1h <= now)
+      if (updatedBooking) {
+        const endTime = this.computeEndTime(updatedBooking.timeSlot, updatedBooking.duration);
+        const now = new Date();
+        if (endTime > now) {
+          // Rollback: revert to CONFIRMED
+          await tx.booking.update({
+            where: { id: bookingId },
+            data: { status: 'CONFIRMED', completedAt: null },
+          });
+          throw new BadRequestException({
+            message: 'La mission n\'est pas encore terminée',
+            code: 'TOO_EARLY_TO_COMPLETE',
+          });
+        }
+      }
+
+      await this.createBookingEvent(tx, bookingId, 'COMPLETED', userId, 'PRO');
+
+      return updatedBooking!;
     });
 
-    if (!booking) {
-      throw new NotFoundException('Réservation introuvable');
-    }
-
-    // 3. VÉRIFICATION OWNERSHIP
-    if (booking.proId !== userId) {
-      throw new ForbiddenException('Vous ne pouvez marquer que vos propres réservations comme terminées');
-    }
-
-    // 4. VÉRIFICATION STATUT
-    if (booking.status !== 'CONFIRMED') {
-      throw new BadRequestException('Seules les réservations confirmées peuvent être marquées comme terminées');
-    }
-
-    // 5. VÉRIFICATION QUE LE CRÉNEAU EST PASSÉ
-    const now = new Date();
-    if (booking.timeSlot > now) {
-      throw new BadRequestException('Vous ne pouvez marquer comme terminée qu\'une mission passée');
-    }
-
-    // 6. UPDATE
-    const updatedBooking = await this.prisma.booking.update({
-      where: { id: bookingId },
-      data: {
-        status: 'COMPLETED',
-        completedAt: new Date(),
-      },
-      select: {
-        id: true,
-        status: true,
-        timeSlot: true,
-        completedAt: true,
-      },
-    });
-
-    await this.createBookingEvent(this.prisma, bookingId, 'COMPLETED', userId, 'PRO');
-
-    return updatedBooking;
+    return result;
   }
 
   /**
@@ -914,72 +1038,119 @@ export class BookingService {
     userRole: string,
     dto: CancelBookingInput,
   ) {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      select: { id: true, clientId: true, proId: true, status: true, timeSlot: true },
-    });
-
-    if (!booking) throw new NotFoundException('Réservation introuvable');
-
-    if (booking.status !== 'CONFIRMED') {
-      throw new BadRequestException('Seules les réservations confirmées peuvent être annulées');
-    }
-
-    const now = new Date();
-
-    if (userRole === 'CLIENT') {
-      if (booking.clientId !== userId) {
-        throw new ForbiddenException('Vous ne pouvez annuler que vos propres réservations');
-      }
-
-      const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-      const status = booking.timeSlot > twentyFourHoursFromNow
-        ? 'CANCELLED_BY_CLIENT'
-        : 'CANCELLED_BY_CLIENT_LATE';
-
-      const updated = await this.prisma.booking.update({
-        where: { id: bookingId },
-        data: { status, cancelledAt: now },
-        select: { id: true, status: true, timeSlot: true },
-      });
-
-      await this.createBookingEvent(this.prisma, bookingId, 'CANCELLED', userId, 'CLIENT', { status });
-
-      this.eventEmitter.emit(BookingEventTypes.CANCELLED, {
-        bookingId: booking.id,
-        proId: booking.proId,
-        clientId: booking.clientId,
-        reason: 'Annulation par le client',
-      } as BookingEventPayload);
-
-      return updated;
-    }
-
+    // PRO: validate reason upfront (before transaction)
     if (userRole === 'PRO') {
-      if (booking.proId !== userId) {
-        throw new ForbiddenException('Vous ne pouvez annuler que vos propres réservations');
+      // KYC gate for PRO cancellation
+      const proProfile = await this.prisma.proProfile.findUnique({
+        where: { userId },
+        select: { kycStatus: true },
+      });
+      if (!proProfile || proProfile.kycStatus !== 'APPROVED') {
+        throw new ForbiddenException({
+          message: 'KYC non approuvé',
+          code: 'KYC_NOT_APPROVED',
+        });
       }
 
       if (!dto.reason || dto.reason.trim().length < 5) {
         throw new BadRequestException('Le motif d\'annulation est obligatoire pour les professionnels (min 5 caractères)');
       }
+    }
 
-      const updated = await this.prisma.booking.update({
-        where: { id: bookingId },
-        data: { status: 'CANCELLED_BY_PRO', cancelledAt: now, cancelReason: dto.reason },
-        select: { id: true, status: true, timeSlot: true },
+    if (userRole === 'CLIENT') {
+      // CLIENT cancellation — atomic transaction
+      const result = await this.prisma.$transaction(async (tx) => {
+        const { count } = await tx.booking.updateMany({
+          where: { id: bookingId, clientId: userId, status: 'CONFIRMED' },
+          data: { status: 'CANCELLED_BY_CLIENT', cancelledAt: new Date() },
+        });
+
+        if (count === 0) {
+          const booking = await tx.booking.findUnique({
+            where: { id: bookingId },
+            select: { clientId: true, status: true },
+          });
+          if (!booking) throw new NotFoundException('Réservation introuvable');
+          if (booking.clientId !== userId) throw new ForbiddenException('Vous ne pouvez annuler que vos propres réservations');
+          throw new BadRequestException({
+            message: 'Statut incompatible avec cette action',
+            code: 'INVALID_STATUS_TRANSITION',
+          });
+        }
+
+        // Determine late vs normal based on timeSlot
+        const updated = await tx.booking.findUnique({
+          where: { id: bookingId },
+          select: { id: true, status: true, timeSlot: true, proId: true, clientId: true },
+        });
+
+        if (updated) {
+          const now = new Date();
+          const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+          if (updated.timeSlot <= twentyFourHoursFromNow) {
+            // Late cancellation — update status
+            await tx.booking.update({
+              where: { id: bookingId },
+              data: { status: 'CANCELLED_BY_CLIENT_LATE' },
+            });
+            updated.status = 'CANCELLED_BY_CLIENT_LATE' as any;
+          }
+        }
+
+        await this.createBookingEvent(tx, bookingId, 'CANCELLED', userId, 'CLIENT', { status: updated!.status });
+
+        return updated!;
       });
 
-      await this.createBookingEvent(this.prisma, bookingId, 'CANCELLED', userId, 'PRO', { reason: dto.reason });
+      this.eventEmitter.emit(BookingEventTypes.CANCELLED, {
+        bookingId: result.id,
+        proId: result.proId,
+        clientId: result.clientId,
+        reason: 'Annulation par le client',
+      } as BookingEventPayload);
+
+      return { id: result.id, status: result.status, timeSlot: result.timeSlot };
+    }
+
+    if (userRole === 'PRO') {
+      // PRO cancellation — atomic transaction
+      const result = await this.prisma.$transaction(async (tx) => {
+        const { count } = await tx.booking.updateMany({
+          where: { id: bookingId, proId: userId, status: 'CONFIRMED' },
+          data: { status: 'CANCELLED_BY_PRO', cancelledAt: new Date(), cancelReason: dto.reason },
+        });
+
+        if (count === 0) {
+          const booking = await tx.booking.findUnique({
+            where: { id: bookingId },
+            select: { proId: true, status: true },
+          });
+          if (!booking) throw new NotFoundException('Réservation introuvable');
+          if (booking.proId !== userId) throw new ForbiddenException('Vous ne pouvez annuler que vos propres réservations');
+          throw new BadRequestException({
+            message: 'Statut incompatible avec cette action',
+            code: 'INVALID_STATUS_TRANSITION',
+          });
+        }
+
+        const updated = await tx.booking.findUnique({
+          where: { id: bookingId },
+          select: { id: true, status: true, timeSlot: true, proId: true, clientId: true },
+        });
+
+        await this.createBookingEvent(tx, bookingId, 'CANCELLED', userId, 'PRO', { reason: dto.reason });
+
+        return updated!;
+      });
 
       this.eventEmitter.emit(BookingEventTypes.CANCELLED, {
-        bookingId: booking.id,
-        proId: booking.proId,
-        clientId: booking.clientId,
+        bookingId: result.id,
+        proId: result.proId,
+        clientId: result.clientId,
         reason: dto.reason,
       } as BookingEventPayload);
 
-      return updated;
+      return { id: result.id, status: result.status, timeSlot: result.timeSlot };
     }
 
     throw new ForbiddenException('Rôle non autorisé pour cette action');
