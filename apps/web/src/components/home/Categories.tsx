@@ -1,6 +1,5 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -18,7 +17,6 @@ import {
   Layers,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { getJSON } from '@/lib/api';
 import type { PublicCategory } from '@khadamat/contracts';
 import SectionHeader from './SectionHeader';
 import EmptyState from './EmptyState';
@@ -50,24 +48,28 @@ function CategorySkeleton() {
   );
 }
 
-export default function Categories() {
-  const [categories, setCategories] = useState<PublicCategory[]>([]);
-  const [state, setState] = useState<SectionState>('loading');
+interface CategoriesProps {
+  categories: PublicCategory[];
+  state: SectionState;
+  onRetry: () => void | Promise<void>;
+  selectedCityId?: string | null;
+}
 
-  const fetchCategories = useCallback(async () => {
-    setState('loading');
-    try {
-      const data = await getJSON<PublicCategory[]>('/public/categories');
-      setCategories(data);
-      setState(data.length > 0 ? 'ready' : 'empty');
-    } catch {
-      setState('error');
-    }
-  }, []);
+function getCategoryHref(categoryId: string, selectedCityId?: string | null): string {
+  const params = new URLSearchParams();
+  if (selectedCityId) {
+    params.set('cityId', selectedCityId);
+  }
+  params.set('categoryId', categoryId);
+  return `/pros?${params.toString()}`;
+}
 
-  useEffect(() => {
-    fetchCategories();
-  }, [fetchCategories]);
+export default function Categories({
+  categories,
+  state,
+  onRetry,
+  selectedCityId,
+}: CategoriesProps) {
 
   return (
     <section aria-labelledby="categories-title" className="py-24 bg-background">
@@ -105,7 +107,7 @@ export default function Categories() {
             </div>
             <button
               type="button"
-              onClick={fetchCategories}
+              onClick={onRetry}
               className="inline-flex items-center gap-2 px-6 py-3 bg-primary-500 hover:bg-primary-600 text-white rounded-xl font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-primary-500 focus-visible:outline-offset-2"
             >
               <RefreshCw className="w-4 h-4" aria-hidden="true" />
@@ -132,7 +134,7 @@ export default function Categories() {
                 <Link
                   key={cat.id}
                   role="listitem"
-                  href={`/pros?categoryId=${cat.id}`}
+                  href={getCategoryHref(cat.id, selectedCityId)}
                   className="group bg-surface rounded-2xl p-6 shadow-sm hover:shadow-card-hover hover:-translate-y-1 transition-all duration-300 border border-transparent hover:border-primary-200 flex flex-col items-center text-center md:items-start md:text-left focus-visible:outline-2 focus-visible:outline-primary-500 focus-visible:outline-offset-2"
                 >
                   <div className="w-14 h-14 rounded-xl bg-primary-50 group-hover:bg-primary-500 transition-colors duration-300 flex items-center justify-center mb-4">

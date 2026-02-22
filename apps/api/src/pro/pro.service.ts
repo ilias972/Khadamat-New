@@ -164,13 +164,28 @@ export class ProService {
     };
   }
 
-  async updateProfile(userId: string, dto: UpdateProProfileInput & { bio?: string; avatarUrl?: string }) {
+  async updateProfile(
+    userId: string,
+    dto: UpdateProProfileInput & { bio?: string; avatarUrl?: string | null },
+  ) {
     const existingProfile = await this.prisma.proProfile.findUnique({
       where: { userId },
     });
 
     if (!existingProfile) {
       throw new NotFoundException('Profil Pro non trouvé');
+    }
+
+    if (existingProfile.kycStatus !== 'APPROVED') {
+      const hasRestrictedFields =
+        dto.phone !== undefined ||
+        dto.cityId !== undefined ||
+        dto.whatsapp !== undefined ||
+        dto.bio !== undefined;
+
+      if (hasRestrictedFields) {
+        throw new ForbiddenException('KYC_NOT_APPROVED');
+      }
     }
 
     // Bio validation
@@ -199,11 +214,18 @@ export class ProService {
       }
     }
 
+    const normalizedAvatarUrl =
+      dto.avatarUrl === undefined
+        ? undefined
+        : dto.avatarUrl === null || dto.avatarUrl.trim() === ''
+          ? null
+          : validateUrl(dto.avatarUrl);
+
     const result = await this.prisma.$transaction(async (tx) => {
-      const userUpdateData: { cityId?: string; phone?: string; avatarUrl?: string } = {};
+      const userUpdateData: { cityId?: string; phone?: string; avatarUrl?: string | null } = {};
       if (resolvedCityId) userUpdateData.cityId = resolvedCityId;
       if (dto.phone) userUpdateData.phone = dto.phone;
-      if (dto.avatarUrl !== undefined) userUpdateData.avatarUrl = validateUrl(dto.avatarUrl);
+      if (normalizedAvatarUrl !== undefined) userUpdateData.avatarUrl = normalizedAvatarUrl;
 
       const updatedUser = await tx.user.update({
         where: { id: userId },

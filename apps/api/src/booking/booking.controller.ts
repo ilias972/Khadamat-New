@@ -14,7 +14,9 @@ import {
 import { IsInt, Min, Max, IsBoolean } from 'class-validator';
 import { BookingService } from './booking.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
 import { KycApprovedGuard } from '../auth/guards/kyc-approved.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 
 export class UpdateDurationDto {
@@ -86,9 +88,10 @@ export class BookingController {
    * - time : Heure au format HH:MM
    *
    * @returns Booking créé avec les relations (category, pro, city)
-   */
+  */
   @Post('bookings')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('CLIENT')
   async createBooking(
     @Request() req,
     @Body(new ZodValidationPipe(CreateBookingSchema)) dto: CreateBookingInput,

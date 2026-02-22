@@ -29,6 +29,7 @@ export default function ProBookingCTA({ proId, services }: ProBookingCTAProps) {
 
   // Récupérer le categoryId du premier service
   const categoryId = services?.[0]?.categoryId;
+  const nextPath = encodeURIComponent(`/pro/${proId}`);
 
   // Cas A : Non connecté
   if (!isAuthenticated) {
@@ -41,7 +42,7 @@ export default function ProBookingCTA({ proId, services }: ProBookingCTAProps) {
           Connectez-vous pour prendre rendez-vous
         </p>
         <Link
-          href="/auth/login"
+          href={`/auth/login?next=${nextPath}`}
           className="inline-block px-8 py-3 bg-surface text-text-primary rounded-lg hover:bg-surface-active transition font-medium"
         >
           Se connecter

@@ -23,9 +23,14 @@ interface FeaturedPro {
 
 interface ProsV2Response {
   data: FeaturedPro[];
-  total: number;
-  page: number;
-  limit: number;
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
 }
 
 type SectionState = 'loading' | 'ready' | 'empty' | 'error';
@@ -47,24 +52,17 @@ function ProCardSkeleton() {
   );
 }
 
-export default function FeaturedPros() {
+interface FeaturedProsProps {
+  selectedCityId?: string | null;
+}
+
+export default function FeaturedPros({ selectedCityId = null }: FeaturedProsProps) {
   const [data, setData] = useState<{ pros: FeaturedPro[]; total: number }>({
     pros: [],
     total: 0,
   });
   const [state, setState] = useState<SectionState>('loading');
-  const [cityId, setCityId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  // Listen for Hero city selection
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<string | null>).detail;
-      setCityId(detail || null);
-    };
-    window.addEventListener('hero-city-change', handler);
-    return () => window.removeEventListener('hero-city-change', handler);
-  }, []);
 
   const fetchPros = useCallback(async (city: string | null) => {
     abortRef.current?.abort();
@@ -81,7 +79,7 @@ export default function FeaturedPros() {
       const res = await getJSON<ProsV2Response>(`/public/pros/v2?${params.toString()}`);
 
       if (!controller.signal.aborted) {
-        setData({ pros: res.data, total: res.total });
+        setData({ pros: res.data, total: res.meta.total });
         setState(res.data.length > 0 ? 'ready' : 'empty');
       }
     } catch {
@@ -93,9 +91,9 @@ export default function FeaturedPros() {
   }, []);
 
   useEffect(() => {
-    fetchPros(cityId);
+    fetchPros(selectedCityId);
     return () => abortRef.current?.abort();
-  }, [cityId, fetchPros]);
+  }, [selectedCityId, fetchPros]);
 
   return (
     <section aria-labelledby="featured-pros-title" className="py-24 bg-surface">
@@ -125,7 +123,7 @@ export default function FeaturedPros() {
             </div>
             <button
               type="button"
-              onClick={() => fetchPros(cityId)}
+              onClick={() => fetchPros(selectedCityId)}
               className="inline-flex items-center gap-2 px-6 py-3 bg-primary-500 hover:bg-primary-600 text-white rounded-xl font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-primary-500 focus-visible:outline-offset-2"
             >
               <RefreshCw className="w-4 h-4" aria-hidden="true" />

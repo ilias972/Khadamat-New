@@ -5,6 +5,38 @@ interface LoginAttempt {
   lockedUntil: number | null;
 }
 
+/**
+ * Extension point for production deployments.
+ * TODO(prod): replace in-memory store with a distributed backend (Redis/DB)
+ * so lockouts survive restarts and work across multiple API instances.
+ */
+interface FailedLoginStore {
+  get(key: string): LoginAttempt | undefined;
+  set(key: string, value: LoginAttempt): void;
+  delete(key: string): void;
+  entries(): IterableIterator<[string, LoginAttempt]>;
+}
+
+class InMemoryFailedLoginStore implements FailedLoginStore {
+  private readonly attempts = new Map<string, LoginAttempt>();
+
+  get(key: string): LoginAttempt | undefined {
+    return this.attempts.get(key);
+  }
+
+  set(key: string, value: LoginAttempt): void {
+    this.attempts.set(key, value);
+  }
+
+  delete(key: string): void {
+    this.attempts.delete(key);
+  }
+
+  entries(): IterableIterator<[string, LoginAttempt]> {
+    return this.attempts.entries();
+  }
+}
+
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 const CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
@@ -12,7 +44,7 @@ const CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 @Injectable()
 export class FailedLoginService {
   private readonly logger = new Logger(FailedLoginService.name);
-  private readonly attempts = new Map<string, LoginAttempt>();
+  private readonly store: FailedLoginStore = new InMemoryFailedLoginStore();
 
   constructor() {
     // Periodic cleanup of stale entries
@@ -25,12 +57,12 @@ export class FailedLoginService {
    */
   isLocked(identifier: string): number {
     const key = identifier.toLowerCase().trim();
-    const entry = this.attempts.get(key);
+    const entry = this.store.get(key);
     if (!entry?.lockedUntil) return 0;
 
     const remaining = entry.lockedUntil - Date.now();
     if (remaining <= 0) {
-      this.attempts.delete(key);
+      this.store.delete(key);
       return 0;
     }
 
@@ -42,20 +74,20 @@ export class FailedLoginService {
    */
   recordFailure(identifier: string): boolean {
     const key = identifier.toLowerCase().trim();
-    const entry = this.attempts.get(key) || { count: 0, lockedUntil: null };
+    const entry = this.store.get(key) || { count: 0, lockedUntil: null };
 
     entry.count += 1;
 
     if (entry.count >= MAX_ATTEMPTS) {
       entry.lockedUntil = Date.now() + LOCKOUT_MS;
-      this.attempts.set(key, entry);
+      this.store.set(key, entry);
       this.logger.warn(
         `Login lockout activated: ${MAX_ATTEMPTS} failed attempts (identifier hash: ${this.hash(key)})`,
       );
       return true;
     }
 
-    this.attempts.set(key, entry);
+    this.store.set(key, entry);
     return false;
   }
 
@@ -64,14 +96,14 @@ export class FailedLoginService {
    */
   resetAttempts(identifier: string): void {
     const key = identifier.toLowerCase().trim();
-    this.attempts.delete(key);
+    this.store.delete(key);
   }
 
   private cleanup(): void {
     const now = Date.now();
-    for (const [key, entry] of this.attempts) {
+    for (const [key, entry] of this.store.entries()) {
       if (entry.lockedUntil && entry.lockedUntil < now) {
-        this.attempts.delete(key);
+        this.store.delete(key);
       }
     }
   }

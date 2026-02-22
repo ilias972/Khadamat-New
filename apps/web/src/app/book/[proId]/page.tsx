@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter, useSearchParams, useParams } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
+import { useRouter, useSearchParams, useParams, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
 import Header from '@/components/Header';
-import { getJSON, postJSON, APIError } from '@/lib/api';
+import { getJSON, postJSON, APIError, getApiBaseUrl } from '@/lib/api';
 import { toast } from '@/store/toastStore';
 
 /**
@@ -21,12 +21,13 @@ interface ProData {
   id: string;
   firstName: string;
   lastName: string;
-  phone: string;
+  phone?: string;
   city: { name: string };
 }
 
 export default function BookingPage() {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const params = useParams();
 
@@ -35,7 +36,7 @@ export default function BookingPage() {
   const proId = Array.isArray(proIdRaw) ? proIdRaw[0] : proIdRaw;
 
   const categoryId = searchParams.get('categoryId');
-  const { user, isAuthenticated, logout } = useAuthStore();
+  const { user, isAuthenticated, loading: authLoading, logout } = useAuthStore();
 
   const [mounted, setMounted] = useState(false);
   const [pro, setPro] = useState<ProData | null>(null);
@@ -58,6 +59,9 @@ export default function BookingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [bookingError, setBookingError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const searchString = searchParams.toString();
+  const currentPathWithSearch = `${pathname}${searchString ? `?${searchString}` : ''}`;
+  const loginRedirectHref = `/auth/login?next=${encodeURIComponent(currentPathWithSearch)}`;
 
   // Anti-glitch Hydratation
   useEffect(() => {
@@ -66,10 +70,10 @@ export default function BookingPage() {
 
   // Auth Guard
   useEffect(() => {
-    if (mounted && !isAuthenticated) {
-      router.push('/auth/login');
+    if (mounted && !authLoading && !isAuthenticated) {
+      router.replace(loginRedirectHref);
     }
-  }, [mounted, isAuthenticated, router]);
+  }, [mounted, authLoading, isAuthenticated, router, loginRedirectHref]);
 
   // Vérifier que categoryId est présent
   useEffect(() => {
@@ -78,6 +82,27 @@ export default function BookingPage() {
     }
   }, [mounted, categoryId]);
 
+  const fetchProWithCredentials = useCallback(async (targetProId: string): Promise<ProData> => {
+    const response = await fetch(`${getApiBaseUrl()}/public/pros/${targetProId}`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      const message =
+        (payload && typeof payload.message === 'string' ? payload.message : undefined) ||
+        `Erreur ${response.status}`;
+      throw new APIError(message, response.status, payload);
+    }
+
+    return payload as ProData;
+  }, []);
+
   // Fetch Pro data
   useEffect(() => {
     if (!mounted || !proId) return;
@@ -85,7 +110,7 @@ export default function BookingPage() {
     const fetchPro = async () => {
       try {
         setLoadingPro(true);
-        const data = await getJSON<ProData>(`/public/pros/${proId}`);
+        const data = await fetchProWithCredentials(proId);
         setPro(data);
         setErrorPro(null);
       } catch (error) {
@@ -97,7 +122,7 @@ export default function BookingPage() {
     };
 
     fetchPro();
-  }, [mounted, proId]);
+  }, [mounted, proId, fetchProWithCredentials]);
 
   // Fetch Slots when date or categoryId changes
   useEffect(() => {
@@ -145,12 +170,23 @@ export default function BookingPage() {
         },
       );
 
+      if (proId) {
+        try {
+          const refreshedPro = await fetchProWithCredentials(proId);
+          setPro(refreshedPro);
+        } catch (refreshError) {
+          console.error('Error refreshing pro after booking:', refreshError);
+        }
+      }
+
       setSuccessMessage('Réservation envoyée !');
       // NE PAS rediriger automatiquement - afficher l'écran de succès
     } catch (error) {
       if (error instanceof APIError) {
         if (error.statusCode === 409) {
-          setBookingError('Créneau déjà pris, merci d\'en choisir un autre');
+          setBookingError(
+            'Ce créneau n’est plus disponible ou ne correspond pas aux disponibilités du professionnel. Merci d’en choisir un autre.',
+          );
         } else if (error.statusCode === 400 && error.message === 'CITY_REQUIRED') {
           toast.warning('Veuillez sélectionner votre ville dans votre profil');
           router.push('/profile');
@@ -184,17 +220,28 @@ export default function BookingPage() {
     router.push('/');
   };
 
-  // Ne rien afficher avant hydratation
-  if (!mounted) {
-    return null;
+  // Loader hydratation + auth init
+  if (!mounted || authLoading) {
+    return (
+      <div
+        className="min-h-screen bg-background flex items-center justify-center"
+        aria-busy="true"
+        aria-live="polite"
+      >
+        <div className="text-center" role="status">
+          <div className="motion-safe:animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+          <p className="text-text-secondary">Chargement...</p>
+        </div>
+      </div>
+    );
   }
 
   // Loader pendant redirection
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+      <div className="min-h-screen bg-background flex items-center justify-center" aria-busy="true" aria-live="polite">
+        <div className="text-center" role="status">
+          <div className="motion-safe:animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
           <p className="text-text-secondary">Redirection...</p>
         </div>
       </div>
@@ -283,7 +330,7 @@ export default function BookingPage() {
         <Header />
         <main className="container mx-auto px-6 py-16 max-w-2xl">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+            <div className="motion-safe:animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
             <p className="text-text-secondary">
               Chargement des informations...
             </p>
@@ -351,13 +398,10 @@ export default function BookingPage() {
                 );
               } else {
                 return (
-                  <button
-                    disabled
-                    className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-border-strong text-text-muted rounded-lg cursor-not-allowed font-medium mb-3"
-                  >
-                    <span className="text-xl">💬</span>
-                    Numéro indisponible
-                  </button>
+                  <div className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-border-strong text-text-muted rounded-lg font-medium mb-3">
+                    <span className="text-xl" aria-hidden="true">💬</span>
+                    Numéro disponible après confirmation
+                  </div>
                 );
               }
             })()}
@@ -384,16 +428,17 @@ export default function BookingPage() {
 
         {/* Date Selection */}
         <div className="bg-surface rounded-lg border border-border p-6 mb-6">
-          <label className="block text-sm font-medium text-text-primary mb-2">
+          <label htmlFor="booking-date" className="block text-sm font-medium text-text-primary mb-2">
             Choisir une date
           </label>
           <input
+            id="booking-date"
             type="date"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
             min={today}
             max={maxDate}
-            className="w-full px-4 py-3 border border-border-strong rounded-lg bg-input-bg text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent"
+            className="w-full px-4 py-3 border border-border-strong rounded-lg bg-input-bg text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent focus-visible:outline-none"
           />
         </div>
 
@@ -405,7 +450,7 @@ export default function BookingPage() {
 
           {loadingSlots && (
             <div className="text-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-inverse-bg mx-auto mb-2"></div>
+              <div className="motion-safe:animate-spin rounded-full h-8 w-8 border-b-2 border-inverse-bg mx-auto mb-2"></div>
               <p className="text-text-secondary text-sm">
                 Chargement des créneaux...
               </p>
@@ -421,12 +466,21 @@ export default function BookingPage() {
           )}
 
           {!loadingSlots && slots.length > 0 && (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+            <div
+              className="grid grid-cols-3 sm:grid-cols-4 gap-3"
+              role="listbox"
+              aria-label="Créneaux disponibles"
+            >
               {slots.map((slot) => (
                 <button
                   key={slot}
                   onClick={() => setSelectedSlot(slot)}
-                  className={`px-4 py-3 rounded-lg font-medium transition ${
+                  role="option"
+                  aria-selected={selectedSlot === slot}
+                  aria-pressed={selectedSlot === slot}
+                  data-state={selectedSlot === slot ? 'selected' : 'unselected'}
+                  aria-label={`Choisir le créneau ${slot}`}
+                  className={`px-4 py-3 rounded-lg font-medium motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inverse-bg ${
                     selectedSlot === slot
                       ? 'bg-inverse-bg text-inverse-text'
                       : 'bg-surface-active text-text-primary hover:bg-border'
@@ -450,18 +504,20 @@ export default function BookingPage() {
               {pro?.lastName}
             </p>
 
-            {bookingError && (
-              <div className="mb-4 bg-error-50 border border-error-200 rounded-lg p-3">
-                <p className="text-error-800 text-sm">
-                  {bookingError}
-                </p>
-              </div>
-            )}
+            <div aria-live="polite" aria-atomic="true">
+              {bookingError && (
+                <div className="mb-4 bg-error-50 border border-error-200 rounded-lg p-3" role="alert">
+                  <p className="text-error-800 text-sm">
+                    {bookingError}
+                  </p>
+                </div>
+              )}
+            </div>
 
             <button
               onClick={handleBooking}
               disabled={submitting}
-              className="w-full px-6 py-3 bg-info-600 text-text-inverse rounded-lg hover:bg-info-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-6 py-3 bg-info-600 text-text-inverse rounded-lg hover:bg-info-700 motion-safe:transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? 'Envoi en cours...' : 'Valider la réservation'}
             </button>

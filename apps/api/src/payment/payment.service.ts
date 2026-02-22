@@ -33,11 +33,29 @@ import {
 @Injectable()
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
+  private missingContactEnvWarned = false;
 
   constructor(
     private prisma: PrismaService,
     private catalogResolver: CatalogResolverService,
   ) {}
+
+  private getPaymentContact() {
+    const email = process.env.PAYMENT_CONTACT_EMAIL?.trim();
+    const phone = process.env.PAYMENT_CONTACT_PHONE?.trim();
+
+    if ((!email || !phone) && !this.missingContactEnvWarned) {
+      this.logger.warn(
+        'PAYMENT_CONTACT_EMAIL and/or PAYMENT_CONTACT_PHONE missing. Using fallback payment contact values.',
+      );
+      this.missingContactEnvWarned = true;
+    }
+
+    return {
+      email: email || 'paiement@khadamat.ma',
+      phone: phone || '+212 6XX XXX XXX',
+    };
+  }
 
   /**
    * Crée une demande de paiement (PENDING).
@@ -119,6 +137,7 @@ export class PaymentService {
     });
 
     this.logger.log(`📝 Demande de paiement créée: ${oid} | ${dto.planType} | ${plan.priceMad} MAD`);
+    const paymentContact = this.getPaymentContact();
 
     // 5. Retour au Frontend
     return {
@@ -140,10 +159,7 @@ export class PaymentService {
           'Cash en agence',
           'Mobile Money (Orange Money, inwi money)',
         ],
-        contact: {
-          phone: '+212 6XX XXX XXX',
-          email: 'paiement@khadamat.ma',
-        },
+        contact: paymentContact,
         note: 'Mentionnez votre référence lors du paiement.',
       },
     };

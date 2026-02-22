@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const PROTECTED_PREFIXES = ['/dashboard'];
-const PROTECTED_EXACT = ['/client/bookings', '/profile'];
+const PROTECTED_PREFIXES = ['/dashboard', '/book'];
+const PROTECTED_EXACT = ['/client/bookings', '/profile', '/plans'];
 
 const AUTH_PAGES = [
   '/auth/login',
@@ -34,7 +34,7 @@ export function middleware(req: NextRequest) {
     loginUrl.pathname = '/auth/login';
     loginUrl.search = '';
     const destination = pathname + search;
-    loginUrl.searchParams.set('returnTo', destination);
+    loginUrl.searchParams.set('next', destination);
     return NextResponse.redirect(loginUrl);
   }
 
@@ -52,8 +52,10 @@ export const config = {
   matcher: [
     '/dashboard',
     '/dashboard/:path*',
+    '/book/:path*',
     '/client/bookings',
     '/profile',
+    '/plans',
     '/auth/login',
     '/auth/register',
     '/auth/forgot-password',

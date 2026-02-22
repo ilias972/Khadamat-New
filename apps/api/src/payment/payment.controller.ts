@@ -14,6 +14,7 @@ import {
 import { PaymentService } from './payment.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { KycApprovedGuard } from '../auth/guards/kyc-approved.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
 
@@ -40,9 +41,9 @@ export class PaymentController {
    * Retourne une référence et les instructions de paiement.
    *
    * @Guard PRO uniquement
-   */
+  */
   @Post('checkout')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, KycApprovedGuard)
   @Roles('PRO')
   async initiatePayment(
     @Request() req: any,

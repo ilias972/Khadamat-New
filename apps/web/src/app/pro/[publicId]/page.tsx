@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import Header from '../../../components/Header';
 import ProBookingCTA from '../../../components/ProBookingCTA';
@@ -16,20 +17,63 @@ export default async function ProDetailPage({ params }: ProDetailPageProps) {
   const apiUrl = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
 
   let pro: PublicProProfile | null = null;
+  let hasLoadError = false;
 
   try {
     const response = await fetch(`${apiUrl}/public/pros/${publicId}`, {
       cache: 'no-store',
     });
 
-    if (response.ok) {
-      pro = await response.json();
-    } else if (response.status === 404) {
+    if (response.status === 404) {
       notFound();
     }
+    if (!response.ok) {
+      throw new Error(`PRO_FETCH_FAILED_${response.status}`);
+    }
+
+    pro = await response.json();
   } catch (error) {
     console.error('Failed to fetch pro profile:', error);
-    notFound();
+    hasLoadError = true;
+  }
+
+  if (hasLoadError) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+
+        <main className="container mx-auto px-6 py-16">
+          <div className="max-w-3xl mx-auto">
+            <div
+              className="bg-surface rounded-lg border border-error-200 p-8"
+              role="alert"
+              aria-live="polite"
+            >
+              <h1 className="text-2xl font-bold text-text-primary mb-3">
+                Impossible de charger ce profil
+              </h1>
+              <p className="text-text-secondary mb-6">
+                Vérifiez votre connexion ou réessayez.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <a
+                  href={`/pro/${publicId}`}
+                  className="inline-flex items-center px-5 py-2.5 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition"
+                >
+                  Réessayer
+                </a>
+                <Link
+                  href="/pros"
+                  className="inline-flex items-center px-5 py-2.5 border border-border-strong text-text-primary rounded-lg hover:bg-surface-active transition"
+                >
+                  Retour aux pros
+                </Link>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
   }
 
   if (!pro) {

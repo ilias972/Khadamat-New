@@ -9,6 +9,7 @@ import {
   Param,
   Request,
   UseGuards,
+  ValidationPipe,
 } from '@nestjs/common';
 import { ProService } from './pro.service';
 import { validateUrl } from '../common/utils/url-validation';
@@ -18,13 +19,12 @@ import { KycApprovedGuard } from '../auth/guards/kyc-approved.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import {
-  UpdateProProfileSchema,
   UpdateServicesSchema,
   UpdateAvailabilitySchema,
-  type UpdateProProfileInput,
   type UpdateServicesInput,
   type UpdateAvailabilityInput,
 } from '@khadamat/contracts';
+import { UpdateProProfileDto } from './dto/update-pro-profile.dto';
 
 @Controller('pro')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -38,28 +38,18 @@ export class ProController {
   }
 
   @Patch('profile')
-  @UseGuards(KycApprovedGuard)
   async updateProfile(
     @Request() req,
-    @Body() dto: any,
+    @Body(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    )
+    dto: UpdateProProfileDto,
   ) {
-    // Validate base fields via Zod
-    const baseFields: any = {};
-    if (dto.phone !== undefined) baseFields.phone = dto.phone;
-    if (dto.cityId !== undefined) baseFields.cityId = dto.cityId;
-    if (dto.whatsapp !== undefined) baseFields.whatsapp = dto.whatsapp;
-
-    // Only validate base fields if any are present
-    if (Object.keys(baseFields).length > 0) {
-      UpdateProProfileSchema.parse(baseFields);
-    }
-
-    // Pass all fields including bio and avatarUrl
-    return this.proService.updateProfile(req.user.id, {
-      ...baseFields,
-      bio: dto.bio,
-      avatarUrl: dto.avatarUrl,
-    });
+    return this.proService.updateProfile(req.user.id, dto);
   }
 
   @Put('services')

@@ -86,7 +86,7 @@ function ResetPasswordForm() {
         </p>
         <Link
           href="/auth/forgot-password"
-          className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary-500 text-white font-semibold rounded-xl hover:bg-primary-600 transition-colors"
+          className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary-500 text-white font-semibold rounded-xl hover:bg-primary-600 motion-safe:transition-colors"
         >
           Nouvelle demande
         </Link>
@@ -110,7 +110,7 @@ function ResetPasswordForm() {
         </p>
         <Link
           href="/auth/login"
-          className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary-500 text-white font-semibold rounded-xl hover:bg-primary-600 transition-colors"
+          className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary-500 text-white font-semibold rounded-xl hover:bg-primary-600 motion-safe:transition-colors"
         >
           Se connecter
         </Link>
@@ -124,7 +124,7 @@ function ResetPasswordForm() {
       {/* Back link */}
       <Link
         href="/auth/login"
-        className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-primary-600 transition-colors mb-8"
+        className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-primary-600 motion-safe:transition-colors mb-8"
       >
         <ArrowLeft className="w-4 h-4" aria-hidden="true" />
         Retour à la connexion
@@ -162,17 +162,19 @@ function ResetPasswordForm() {
                 setNewPassword(e.target.value);
                 if (error) setError('');
               }}
-              className="w-full px-4 py-3 pr-12 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 transition-all"
+              aria-describedby={error ? 'reset-password-rules reset-password-error' : 'reset-password-rules'}
+              aria-invalid={error ? 'true' : undefined}
+              className="w-full px-4 py-3 pr-12 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
               placeholder="Minimum 10 caractères"
               autoComplete="new-password"
               autoFocus
             />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-secondary transition-colors"
-              aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
-            >
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-secondary motion-safe:transition-colors"
+                aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+              >
               {showPassword ? (
                 <EyeOff className="w-5 h-5" aria-hidden="true" />
               ) : (
@@ -181,7 +183,7 @@ function ResetPasswordForm() {
             </button>
           </div>
           {/* Password requirements */}
-          <ul className="mt-2 space-y-1 text-xs text-text-muted">
+          <ul id="reset-password-rules" className="mt-2 space-y-1 text-xs text-text-muted">
             <li className={newPassword.length >= 10 ? 'text-success-600' : ''}>
               10 caractères minimum
             </li>
@@ -214,14 +216,16 @@ function ResetPasswordForm() {
                 setConfirmPassword(e.target.value);
                 if (error) setError('');
               }}
-              className="w-full px-4 py-3 pr-12 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 transition-all"
+              aria-describedby={error ? 'reset-password-error' : undefined}
+              aria-invalid={error ? 'true' : undefined}
+              className="w-full px-4 py-3 pr-12 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
               placeholder="Retapez votre mot de passe"
               autoComplete="new-password"
             />
             <button
               type="button"
               onClick={() => setShowConfirm(!showConfirm)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-secondary transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-secondary motion-safe:transition-colors"
               aria-label={showConfirm ? 'Masquer la confirmation' : 'Afficher la confirmation'}
             >
               {showConfirm ? (
@@ -236,6 +240,7 @@ function ResetPasswordForm() {
         {/* Error message */}
         {error && (
           <div
+            id="reset-password-error"
             role="alert"
             aria-live="assertive"
             className="flex items-start gap-3 bg-error-50 border border-error-200 rounded-xl p-4"
@@ -249,11 +254,11 @@ function ResetPasswordForm() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full px-6 py-4 bg-primary-500 text-white font-bold rounded-xl hover:bg-primary-600 active:bg-primary-700 transition-all duration-200 shadow-lg shadow-primary-500/25 hover:shadow-xl hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full px-6 py-4 bg-primary-500 text-white font-bold rounded-xl hover:bg-primary-600 active:bg-primary-700 motion-safe:transition-all motion-safe:duration-200 shadow-lg shadow-primary-500/25 hover:shadow-xl hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? (
             <span className="flex items-center justify-center gap-2">
-              <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
+              <Loader2 className="w-5 h-5 motion-safe:animate-spin" aria-hidden="true" />
               Réinitialisation...
             </span>
           ) : (
@@ -271,7 +276,7 @@ export default function ResetPasswordPage() {
       <Suspense
         fallback={
           <div className="flex items-center justify-center">
-            <Loader2 className="w-8 h-8 animate-spin text-primary-500" aria-label="Chargement" />
+            <Loader2 className="w-8 h-8 motion-safe:animate-spin text-primary-500" aria-label="Chargement" />
           </div>
         }
       >

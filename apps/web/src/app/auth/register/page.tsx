@@ -3,9 +3,23 @@
 import { Suspense, useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { User, Briefcase, Upload, ArrowLeft, Check, AlertCircle, Shield, Zap, Users, MessageCircle } from 'lucide-react';
+import {
+  User,
+  Briefcase,
+  Upload,
+  ArrowLeft,
+  Check,
+  AlertCircle,
+  Shield,
+  Zap,
+  Users,
+  MessageCircle,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import CitySelect from '@/components/shared/CitySelect';
+import { postFormData, APIError } from '@/lib/api';
 import type { AuthResponse } from '@khadamat/contracts';
 
 type Role = 'CLIENT' | 'PRO';
@@ -53,11 +67,15 @@ function RegisterPageInner() {
   const [cinBackFile, setCinBackFile] = useState<File | null>(null);
 
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [acceptedCgu, setAcceptedCgu] = useState(false);
 
   // UI
   const [error, setError] = useState('');
+  const [cguError, setCguError] = useState('');
   const [loading, setLoading] = useState(false);
   const [passwordErrors, setPasswordErrors] = useState<string[]>([]);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [phoneError, setPhoneError] = useState('');
   const [emailError, setEmailError] = useState('');
   const [cinNumberError, setCinNumberError] = useState('');
@@ -68,6 +86,7 @@ function RegisterPageInner() {
   const phoneInputRef = useRef<HTMLInputElement>(null);
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const cinInputRef = useRef<HTMLInputElement>(null);
+  const cguCheckboxRef = useRef<HTMLInputElement>(null);
 
   // ── Error mapping ──
   const mapBackendError = (msg: string): string => {
@@ -171,9 +190,18 @@ function RegisterPageInner() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setCguError('');
     setLoading(true);
 
     try {
+      if (!acceptedCgu) {
+        setCguError('Vous devez accepter les CGU pour continuer.');
+        setError('Vous devez accepter les CGU pour continuer.');
+        setLoading(false);
+        requestAnimationFrame(() => cguCheckboxRef.current?.focus());
+        return;
+      }
+
       // Validation e-mail
       if (!EMAIL_REGEX.test(formData.email)) {
         setEmailError('Adresse e-mail invalide');
@@ -252,29 +280,20 @@ function RegisterPageInner() {
         if (cinBackFile) fd.append('cinBack', cinBackFile);
       }
 
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
-      const response = await fetch(`${apiUrl}/auth/register`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'X-CSRF-PROTECTION': '1' },
-        body: fd,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        const raw = Array.isArray(errorData.message)
-          ? errorData.message[0]
-          : errorData.message || '';
-        throw new Error(mapBackendError(raw));
-      }
-
-      const data: AuthResponse = await response.json();
+      const data = await postFormData<AuthResponse>('/auth/register', fd);
       setAuth(data.user);
 
       // Redirect selon rôle
       router.push(role === 'PRO' ? '/dashboard/kyc' : '/');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Une erreur est survenue');
+      if (err instanceof APIError) {
+        const rawMessage = Array.isArray(err.response?.message)
+          ? err.response.message[0]
+          : err.response?.message || err.message;
+        setError(mapBackendError(rawMessage));
+      } else {
+        setError(err instanceof Error ? err.message : 'Une erreur est survenue');
+      }
       requestAnimationFrame(() => errorRef.current?.focus());
     } finally {
       setLoading(false);
@@ -294,9 +313,9 @@ function RegisterPageInner() {
           <div className="absolute top-1/4 -right-16 w-64 h-64 border-[3px] border-white/10 rounded-full" />
           <div className="absolute -bottom-10 left-1/4 w-48 h-48 border-[3px] border-white/10 rounded-full" />
           {/* Small accent circles */}
-          <div className="absolute top-20 right-20 w-6 h-6 bg-white/20 rounded-full animate-float" />
-          <div className="absolute top-1/3 left-16 w-4 h-4 bg-white/15 rounded-full animate-float" style={{ animationDelay: '1s' }} />
-          <div className="absolute bottom-1/4 right-1/4 w-5 h-5 bg-white/20 rounded-full animate-float" style={{ animationDelay: '0.5s' }} />
+          <div className="absolute top-20 right-20 w-6 h-6 bg-white/20 rounded-full motion-safe:animate-float" />
+          <div className="absolute top-1/3 left-16 w-4 h-4 bg-white/15 rounded-full motion-safe:animate-float" style={{ animationDelay: '1s' }} />
+          <div className="absolute bottom-1/4 right-1/4 w-5 h-5 bg-white/20 rounded-full motion-safe:animate-float" style={{ animationDelay: '0.5s' }} />
           {/* Gradient overlay for depth */}
           <div className="absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-black/10" />
         </div>
@@ -304,9 +323,9 @@ function RegisterPageInner() {
         {/* Content */}
         <div className="relative z-10 flex flex-col justify-between p-12 w-full">
           {/* Logo */}
-          <div className="animate-fade-in">
+          <div className="motion-safe:animate-fade-in">
             <Link href="/" className="inline-flex items-center gap-3 group">
-              <div className="w-10 h-10 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center group-hover:bg-white/30 transition-colors">
+              <div className="w-10 h-10 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center group-hover:bg-white/30 motion-safe:transition-colors">
                 <span className="text-white font-bold text-xl">K</span>
               </div>
               <span className="text-white text-2xl font-bold tracking-tight">Khadamat</span>
@@ -316,7 +335,7 @@ function RegisterPageInner() {
           {/* Main Content - Centered */}
           <div className="flex-1 flex flex-col justify-center items-center text-center px-4">
             {/* Tagline */}
-            <div className="mb-10 animate-fade-in" style={{ animationDelay: '0.2s' }}>
+            <div className="mb-10 motion-safe:animate-fade-in" style={{ animationDelay: '0.2s' }}>
               <p className="text-white text-4xl sm:text-5xl font-extrabold mb-3 drop-shadow-lg leading-tight">
                 Trouvez le bon pro,<br />près de chez vous
               </p>
@@ -327,7 +346,7 @@ function RegisterPageInner() {
 
             {/* Features */}
             <div className="space-y-3 text-left w-full max-w-sm">
-              <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/10 hover:bg-white/15 transition-all duration-300 animate-fade-in stagger-1">
+              <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/10 hover:bg-white/15 motion-safe:transition-all motion-safe:duration-300 motion-safe:animate-fade-in stagger-1">
                 <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center shadow-lg">
                   <Zap className="w-6 h-6 text-white" />
                 </div>
@@ -336,7 +355,7 @@ function RegisterPageInner() {
                   <span className="text-white/70 text-sm">En moins de 2 minutes</span>
                 </div>
               </div>
-              <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/10 hover:bg-white/15 transition-all duration-300 animate-fade-in stagger-2">
+              <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/10 hover:bg-white/15 motion-safe:transition-all motion-safe:duration-300 motion-safe:animate-fade-in stagger-2">
                 <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center shadow-lg">
                   <Shield className="w-6 h-6 text-white" />
                 </div>
@@ -345,7 +364,7 @@ function RegisterPageInner() {
                   <span className="text-white/70 text-sm">Vérification d&apos;identité rigoureuse</span>
                 </div>
               </div>
-              <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/10 hover:bg-white/15 transition-all duration-300 animate-fade-in stagger-3">
+              <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/10 hover:bg-white/15 motion-safe:transition-all motion-safe:duration-300 motion-safe:animate-fade-in stagger-3">
                 <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center shadow-lg">
                   <MessageCircle className="w-6 h-6 text-white" />
                 </div>
@@ -358,7 +377,7 @@ function RegisterPageInner() {
           </div>
 
           {/* Bottom - Social Proof */}
-          <div className="animate-fade-in" style={{ animationDelay: '0.6s' }}>
+          <div className="motion-safe:animate-fade-in" style={{ animationDelay: '0.6s' }}>
             <div className="flex items-center justify-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/10">
               <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
                 <Users className="w-5 h-5 text-white" />
@@ -381,7 +400,7 @@ function RegisterPageInner() {
           {step === 2 && (
             <button
               onClick={() => { setStep(1); setRole(null); }}
-              className="flex items-center gap-2 text-text-muted hover:text-text-primary mb-6 transition-colors font-medium"
+              className="flex items-center gap-2 text-text-muted hover:text-text-primary mb-6 motion-safe:transition-colors font-medium"
             >
               <ArrowLeft className="w-4 h-4" />
               Retour au choix du profil
@@ -399,7 +418,7 @@ function RegisterPageInner() {
               STEP 1: Role Selection Cards
               ═══════════════════════════════════════════════════════════════ */}
           {step === 1 && (
-            <div className="animate-fade-in">
+            <div className="motion-safe:animate-fade-in">
               <h1 className="text-3xl lg:text-4xl font-bold text-text-primary mb-2">
                 Créer un compte
               </h1>
@@ -414,19 +433,19 @@ function RegisterPageInner() {
                   className="w-full p-6 bg-input-bg hover:bg-surface rounded-2xl border-2 border-transparent hover:border-primary-500 shadow-sm hover:shadow-xl motion-safe:transition-all motion-safe:duration-300 text-left group motion-safe:hover:-translate-y-1"
                 >
                   <div className="flex items-start gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center group-hover:from-primary-100 group-hover:to-primary-200 transition-all shadow-sm group-hover:shadow-md">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center group-hover:from-primary-100 group-hover:to-primary-200 motion-safe:transition-all shadow-sm group-hover:shadow-md">
                       <User className="w-7 h-7 text-primary-500" />
                     </div>
                     <div className="flex-1">
-                      <h3 className="text-lg font-bold text-text-primary mb-1 group-hover:text-primary-600 transition-colors">
+                      <h3 className="text-lg font-bold text-text-primary mb-1 group-hover:text-primary-600 motion-safe:transition-colors">
                         Je suis Client
                       </h3>
                       <p className="text-text-muted text-sm leading-relaxed">
                         Je cherche des professionnels qualifiés pour mes projets
                       </p>
                     </div>
-                    <div className="w-7 h-7 rounded-full border-2 border-border-strong group-hover:border-primary-500 group-hover:bg-primary-500 transition-all flex items-center justify-center group-hover:scale-110">
-                      <Check className="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className="w-7 h-7 rounded-full border-2 border-border-strong group-hover:border-primary-500 group-hover:bg-primary-500 motion-safe:transition-all flex items-center justify-center motion-safe:group-hover:scale-110">
+                      <Check className="w-4 h-4 text-white opacity-0 motion-safe:group-hover:opacity-100 motion-safe:transition-opacity" />
                     </div>
                   </div>
                 </button>
@@ -437,19 +456,19 @@ function RegisterPageInner() {
                   className="w-full p-6 bg-input-bg hover:bg-surface rounded-2xl border-2 border-transparent hover:border-primary-500 shadow-sm hover:shadow-xl motion-safe:transition-all motion-safe:duration-300 text-left group motion-safe:hover:-translate-y-1"
                 >
                   <div className="flex items-start gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center group-hover:from-primary-100 group-hover:to-primary-200 transition-all shadow-sm group-hover:shadow-md">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center group-hover:from-primary-100 group-hover:to-primary-200 motion-safe:transition-all shadow-sm group-hover:shadow-md">
                       <Briefcase className="w-7 h-7 text-primary-500" />
                     </div>
                     <div className="flex-1">
-                      <h3 className="text-lg font-bold text-text-primary mb-1 group-hover:text-primary-600 transition-colors">
+                      <h3 className="text-lg font-bold text-text-primary mb-1 group-hover:text-primary-600 motion-safe:transition-colors">
                         Je suis Professionnel
                       </h3>
                       <p className="text-text-muted text-sm leading-relaxed">
                         Je propose mes services et développe ma clientèle
                       </p>
                     </div>
-                    <div className="w-7 h-7 rounded-full border-2 border-border-strong group-hover:border-primary-500 group-hover:bg-primary-500 transition-all flex items-center justify-center group-hover:scale-110">
-                      <Check className="w-4 h-4 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className="w-7 h-7 rounded-full border-2 border-border-strong group-hover:border-primary-500 group-hover:bg-primary-500 motion-safe:transition-all flex items-center justify-center motion-safe:group-hover:scale-110">
+                      <Check className="w-4 h-4 text-white opacity-0 motion-safe:group-hover:opacity-100 motion-safe:transition-opacity" />
                     </div>
                   </div>
                 </button>
@@ -467,7 +486,7 @@ function RegisterPageInner() {
 
               <p className="text-center text-text-muted">
                 Déjà un compte ?{' '}
-                <Link href="/auth/login" className="text-primary-500 font-bold hover:text-primary-600 hover:underline transition-colors">
+                <Link href="/auth/login" className="text-primary-500 font-bold hover:text-primary-600 hover:underline motion-safe:transition-colors">
                   Se connecter
                 </Link>
               </p>
@@ -478,7 +497,7 @@ function RegisterPageInner() {
               STEP 2: Registration Form
               ═══════════════════════════════════════════════════════════════ */}
           {step === 2 && role && (
-            <div className="animate-fade-in">
+            <div className="motion-safe:animate-fade-in">
               {/* Role Badge */}
               <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-primary-50 to-primary-100 rounded-full mb-4 shadow-sm">
                 {role === 'PRO' ? (
@@ -510,7 +529,7 @@ function RegisterPageInner() {
                       type="text"
                       value={formData.firstName}
                       onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all"
+                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
                       placeholder="Ahmed"
                       required
                       autoComplete="given-name"
@@ -525,7 +544,7 @@ function RegisterPageInner() {
                       type="text"
                       value={formData.lastName}
                       onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all"
+                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
                       placeholder="Bennani"
                       required
                       autoComplete="family-name"
@@ -546,7 +565,7 @@ function RegisterPageInner() {
                     onChange={(e) => handleEmailChange(e.target.value)}
                     aria-describedby={emailError ? 'reg-email-error' : undefined}
                     aria-invalid={!!emailError || undefined}
-                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all ${
+                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all ${
                       emailError ? 'border-error-300' : 'border-border'
                     }`}
                     placeholder="ahmed@exemple.com"
@@ -571,7 +590,7 @@ function RegisterPageInner() {
                     onChange={(e) => handlePhoneChange(e.target.value)}
                     aria-describedby={phoneError ? 'reg-phone-error' : undefined}
                     aria-invalid={!!phoneError || undefined}
-                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all ${
+                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all ${
                       phoneError ? 'border-error-300' : 'border-border'
                     }`}
                     placeholder="0612345678"
@@ -588,22 +607,36 @@ function RegisterPageInner() {
                   <label htmlFor="reg-password" className="block text-sm font-semibold text-text-label mb-2">
                     Mot de passe <span className="text-error-500">*</span>
                   </label>
-                  <input
-                    ref={passwordInputRef}
-                    id="reg-password"
-                    type="password"
-                    value={formData.password}
-                    onChange={(e) => handlePasswordChange(e.target.value)}
-                    aria-describedby="reg-password-rules"
-                    aria-invalid={passwordErrors.length > 0 || undefined}
-                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all ${
-                      passwordErrors.length > 0 ? 'border-error-300' : 'border-border'
-                    }`}
-                    placeholder="Min. 10 caractères, 1 maj, 1 min, 1 chiffre"
-                    required
-                    minLength={10}
-                    autoComplete="new-password"
-                  />
+                  <div className="relative">
+                    <input
+                      ref={passwordInputRef}
+                      id="reg-password"
+                      type={showPassword ? 'text' : 'password'}
+                      value={formData.password}
+                      onChange={(e) => handlePasswordChange(e.target.value)}
+                      aria-describedby="reg-password-rules"
+                      aria-invalid={passwordErrors.length > 0 || undefined}
+                      className={`w-full h-12 px-4 pr-12 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all ${
+                        passwordErrors.length > 0 ? 'border-error-300' : 'border-border'
+                      }`}
+                      placeholder="Min. 10 caractères, 1 maj, 1 min, 1 chiffre"
+                      required
+                      minLength={10}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-secondary motion-safe:transition-colors"
+                      aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-5 h-5" aria-hidden="true" />
+                      ) : (
+                        <Eye className="w-5 h-5" aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
                   {formData.password && (
                     <ul id="reg-password-rules" className="mt-2 space-y-1" aria-label="Critères du mot de passe">
                       {[
@@ -630,20 +663,34 @@ function RegisterPageInner() {
                   <label htmlFor="reg-confirmPassword" className="block text-sm font-semibold text-text-label mb-2">
                     Confirmer le mot de passe <span className="text-error-500">*</span>
                   </label>
-                  <input
-                    id="reg-confirmPassword"
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    aria-describedby={confirmPassword && formData.password !== confirmPassword ? 'reg-confirm-error' : undefined}
-                    aria-invalid={!!(confirmPassword && formData.password !== confirmPassword)}
-                    className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all ${
-                      confirmPassword && formData.password !== confirmPassword ? 'border-error-300' : 'border-border'
-                    }`}
-                    placeholder="Retapez votre mot de passe"
-                    required
-                    autoComplete="new-password"
-                  />
+                  <div className="relative">
+                    <input
+                      id="reg-confirmPassword"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      aria-describedby={confirmPassword && formData.password !== confirmPassword ? 'reg-confirm-error' : undefined}
+                      aria-invalid={!!(confirmPassword && formData.password !== confirmPassword)}
+                      className={`w-full h-12 px-4 pr-12 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all ${
+                        confirmPassword && formData.password !== confirmPassword ? 'border-error-300' : 'border-border'
+                      }`}
+                      placeholder="Retapez votre mot de passe"
+                      required
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword((prev) => !prev)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-secondary motion-safe:transition-colors"
+                      aria-label={showConfirmPassword ? 'Masquer la confirmation du mot de passe' : 'Afficher la confirmation du mot de passe'}
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="w-5 h-5" aria-hidden="true" />
+                      ) : (
+                        <Eye className="w-5 h-5" aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
                   {confirmPassword && formData.password !== confirmPassword && (
                     <p id="reg-confirm-error" className="mt-1.5 text-xs text-error-600" role="alert">
                       Les mots de passe ne correspondent pas
@@ -675,7 +722,7 @@ function RegisterPageInner() {
                       type="text"
                       value={formData.addressLine}
                       onChange={(e) => setFormData({ ...formData, addressLine: e.target.value })}
-                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all"
+                      className="w-full h-12 px-4 bg-input-bg border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
                       placeholder="12 Rue Hassan II, Apt 5"
                       required
                       autoComplete="street-address"
@@ -709,7 +756,7 @@ function RegisterPageInner() {
                         onChange={(e) => handleCinNumberChange(e.target.value)}
                         aria-describedby={cinNumberError ? 'reg-cin-error' : undefined}
                         aria-invalid={!!cinNumberError || undefined}
-                        className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 transition-all font-mono tracking-wider ${
+                        className={`w-full h-12 px-4 bg-input-bg border-2 rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:bg-surface focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all font-mono tracking-wider ${
                           cinNumberError ? 'border-error-300' : 'border-border'
                         }`}
                         placeholder="BJ453975"
@@ -724,10 +771,10 @@ function RegisterPageInner() {
                     <div className="grid grid-cols-2 gap-4">
                       {/* Recto */}
                       <div>
-                        <span className="block text-sm font-semibold text-text-label mb-2">
+                        <label htmlFor="reg-cin-front" className="block text-sm font-semibold text-text-label mb-2">
                           CIN Recto <span className="text-error-500">*</span>
-                        </span>
-                        <label className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
+                        </label>
+                        <label htmlFor="reg-cin-front" className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer motion-safe:transition-all ${
                           cinFrontFile
                             ? 'border-success-500 bg-success-50'
                             : cinFrontError
@@ -750,6 +797,7 @@ function RegisterPageInner() {
                             </div>
                           )}
                           <input
+                            id="reg-cin-front"
                             type="file"
                             className="hidden"
                             accept=".jpg,.jpeg,.png,.webp"
@@ -768,10 +816,10 @@ function RegisterPageInner() {
 
                       {/* Verso */}
                       <div>
-                        <span className="block text-sm font-semibold text-text-label mb-2">
+                        <label htmlFor="reg-cin-back" className="block text-sm font-semibold text-text-label mb-2">
                           CIN Verso <span className="text-error-500">*</span>
-                        </span>
-                        <label className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
+                        </label>
+                        <label htmlFor="reg-cin-back" className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer motion-safe:transition-all ${
                           cinBackFile
                             ? 'border-success-500 bg-success-50'
                             : cinBackError
@@ -794,6 +842,7 @@ function RegisterPageInner() {
                             </div>
                           )}
                           <input
+                            id="reg-cin-back"
                             type="file"
                             className="hidden"
                             accept=".jpg,.jpeg,.png,.webp"
@@ -824,6 +873,47 @@ function RegisterPageInner() {
                   </>
                 )}
 
+                {/* CGU acceptance */}
+                <div className="rounded-xl border border-border bg-surface p-4">
+                  <div className="flex items-start gap-3">
+                    <input
+                      ref={cguCheckboxRef}
+                      id="reg-cgu-accept"
+                      type="checkbox"
+                      checked={acceptedCgu}
+                      onChange={(e) => {
+                        setAcceptedCgu(e.target.checked);
+                        if (e.target.checked) setCguError('');
+                      }}
+                      aria-describedby={cguError ? 'reg-cgu-error' : undefined}
+                      aria-invalid={!!cguError || undefined}
+                      className="mt-0.5 h-4 w-4 rounded border-border-strong text-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                    />
+                    <label htmlFor="reg-cgu-accept" className="text-sm text-text-secondary">
+                      J&apos;accepte les{' '}
+                      <Link
+                        href="/legal/cgu"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary-600 hover:text-primary-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 rounded-sm"
+                      >
+                        Conditions Générales d&apos;Utilisation
+                      </Link>
+                      .
+                    </label>
+                  </div>
+                  {cguError && (
+                    <p
+                      id="reg-cgu-error"
+                      className="mt-2 text-xs text-error-600"
+                      role="alert"
+                      aria-live="polite"
+                    >
+                      {cguError}
+                    </p>
+                  )}
+                </div>
+
                 {/* Error */}
                 <div aria-live="assertive" aria-atomic="true">
                   {error && (
@@ -843,7 +933,7 @@ function RegisterPageInner() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full h-14 px-6 bg-gradient-to-r from-primary-500 to-primary-600 text-inverse-text font-bold text-lg rounded-xl hover:from-primary-600 hover:to-primary-700 active:from-primary-700 active:to-primary-800 motion-safe:transition-all motion-safe:duration-300 shadow-lg shadow-primary-500/30 hover:shadow-xl hover:shadow-primary-500/40 motion-safe:hover:-translate-y-0.5 motion-safe:hover:scale-[1.02] active:translate-y-0 active:scale-100 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:scale-100 disabled:hover:shadow-lg"
+                  className="w-full h-14 px-6 bg-gradient-to-r from-primary-500 to-primary-600 text-inverse-text font-bold text-lg rounded-xl hover:from-primary-600 hover:to-primary-700 active:from-primary-700 active:to-primary-800 motion-safe:transition-all motion-safe:duration-300 shadow-lg shadow-primary-500/30 hover:shadow-xl hover:shadow-primary-500/40 motion-safe:hover:-translate-y-0.5 motion-safe:hover:scale-[1.02] motion-safe:active:translate-y-0 motion-safe:active:scale-100 disabled:opacity-50 disabled:cursor-not-allowed motion-safe:disabled:hover:translate-y-0 motion-safe:disabled:hover:scale-100 disabled:hover:shadow-lg"
                 >
                   {loading ? (
                     <span className="flex items-center justify-center gap-2">

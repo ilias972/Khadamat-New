@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Search, MapPin, AlertCircle, RefreshCw, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { getJSON } from '@/lib/api';
+import type { PublicCategory } from '@khadamat/contracts';
 import HeroSkeleton from './HeroSkeleton';
 import HeroMobileCTA from './HeroMobileCTA';
 
@@ -14,13 +15,14 @@ interface City {
   slug: string;
 }
 
-interface Category {
-  id: string;
-  name: string;
-  slug: string;
-}
-
 type HeroState = 'loading' | 'ready' | 'error';
+
+interface HeroProps {
+  categories: PublicCategory[];
+  categoriesState: 'loading' | 'ready' | 'empty' | 'error';
+  onRetryCategories: () => void | Promise<void>;
+  onCityChange?: (cityId: string | null) => void;
+}
 
 /** Simple fuzzy match: checks if all query chars appear in target in order */
 function fuzzyMatch(query: string, target: string): boolean {
@@ -33,7 +35,12 @@ function fuzzyMatch(query: string, target: string): boolean {
   return qi === q.length;
 }
 
-export default function Hero() {
+export default function Hero({
+  categories,
+  categoriesState,
+  onRetryCategories,
+  onCityChange,
+}: HeroProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const shouldReduceMotion = useReducedMotion();
@@ -43,7 +50,6 @@ export default function Hero() {
   const listboxRef = useRef<HTMLUListElement>(null);
 
   const [cities, setCities] = useState<City[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [heroState, setHeroState] = useState<HeroState>('loading');
 
   const [cityId, setCityId] = useState('');
@@ -56,12 +62,8 @@ export default function Hero() {
   const fetchData = useCallback(async () => {
     setHeroState('loading');
     try {
-      const [citiesData, categoriesData] = await Promise.all([
-        getJSON<City[]>('/public/cities'),
-        getJSON<Category[]>('/public/categories'),
-      ]);
+      const citiesData = await getJSON<City[]>('/public/cities');
       setCities(citiesData);
-      setCategories(categoriesData);
       setHeroState('ready');
     } catch {
       setHeroState('error');
@@ -74,7 +76,7 @@ export default function Hero() {
 
   // Deep link: read ?cityId/categoryId (preferred), fallback to ?city/q
   useEffect(() => {
-    if (heroState !== 'ready') return;
+    if (heroState !== 'ready' || categoriesState === 'loading') return;
 
     const urlCity = searchParams.get('cityId') ?? searchParams.get('city');
     const urlCategoryId = searchParams.get('categoryId');
@@ -106,14 +108,11 @@ export default function Hero() {
         setQuery(urlQuery);
       }
     }
-  }, [heroState, searchParams, cities, categories]);
+  }, [heroState, categoriesState, searchParams, cities, categories]);
 
-  // Broadcast city selection to sibling components (e.g. FeaturedPros)
   useEffect(() => {
-    window.dispatchEvent(
-      new CustomEvent('hero-city-change', { detail: cityId || null }),
-    );
-  }, [cityId]);
+    onCityChange?.(cityId || null);
+  }, [cityId, onCityChange]);
 
   // Filtered suggestions
   const suggestions = useMemo(() => {
@@ -135,7 +134,7 @@ export default function Hero() {
   const isReady = cityId !== '' && categoryId !== '';
 
   const selectCategory = useCallback(
-    (cat: Category) => {
+    (cat: PublicCategory) => {
       setCategoryId(cat.id);
       setQuery(cat.name);
       setIsOpen(false);
@@ -230,6 +229,8 @@ export default function Hero() {
       };
 
   const listboxId = 'hero-service-listbox';
+  const hasError = heroState === 'error' || categoriesState === 'error';
+  const isLoading = heroState === 'loading' || categoriesState === 'loading';
 
   return (
     <>
@@ -311,7 +312,7 @@ export default function Hero() {
             transition={{ duration: 0.5, delay: shouldReduceMotion ? 0 : 0.2 }}
             className="w-full max-w-3xl"
           >
-            {heroState === 'error' ? (
+            {hasError ? (
               <div className="bg-surface p-6 rounded-2xl shadow-xl border border-border flex flex-col items-center gap-4">
                 <div className="flex items-center gap-2 text-error-600">
                   <AlertCircle className="w-5 h-5" aria-hidden="true" />
@@ -319,7 +320,10 @@ export default function Hero() {
                 </div>
                 <button
                   type="button"
-                  onClick={fetchData}
+                  onClick={() => {
+                    fetchData();
+                    onRetryCategories();
+                  }}
                   className="inline-flex items-center gap-2 px-6 py-3 bg-primary-500 hover:bg-primary-600 text-white rounded-xl font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-primary-500 focus-visible:outline-offset-2"
                   aria-label="Réessayer le chargement des données"
                 >
@@ -327,7 +331,7 @@ export default function Hero() {
                   Réessayer
                 </button>
               </div>
-            ) : heroState === 'loading' ? (
+            ) : isLoading ? (
               <HeroSkeleton />
             ) : (
               <form

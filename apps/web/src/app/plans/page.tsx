@@ -133,6 +133,8 @@ export default function PlansPage() {
                     <button
                       type="button"
                       onClick={() => setIsAnnual(false)}
+                      aria-pressed={!isAnnual}
+                      aria-label="Choisir Premium mensuel"
                       className={`rounded-full px-4 py-2.5 text-sm font-semibold motion-safe:transition-all motion-safe:duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info-500 focus-visible:ring-offset-2 ${
                         !isAnnual
                           ? 'bg-info-600 text-text-inverse shadow-md'
@@ -140,10 +142,13 @@ export default function PlansPage() {
                       }`}
                     >
                       Mensuel
+                      {!isAnnual && <span className="sr-only"> sélectionné</span>}
                     </button>
                     <button
                       type="button"
                       onClick={() => setIsAnnual(true)}
+                      aria-pressed={isAnnual}
+                      aria-label="Choisir Premium annuel"
                       className={`rounded-full px-4 py-2.5 text-sm font-semibold motion-safe:transition-all motion-safe:duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info-500 focus-visible:ring-offset-2 ${
                         isAnnual
                           ? 'bg-info-600 text-text-inverse shadow-md'
@@ -151,6 +156,7 @@ export default function PlansPage() {
                       }`}
                     >
                       Annuel
+                      {isAnnual && <span className="sr-only"> sélectionné</span>}
                     </button>
                   </div>
                 </div>

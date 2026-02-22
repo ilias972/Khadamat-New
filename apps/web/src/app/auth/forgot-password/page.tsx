@@ -60,7 +60,7 @@ export default function ForgotPasswordPage() {
         {/* Back link */}
         <Link
           href="/auth/login"
-          className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-primary-600 transition-colors mb-8"
+          className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-primary-600 motion-safe:transition-colors mb-8"
         >
           <ArrowLeft className="w-4 h-4" aria-hidden="true" />
           Retour à la connexion
@@ -98,7 +98,9 @@ export default function ForgotPasswordPage() {
                     setIdentifier(e.target.value);
                     if (error) setError('');
                   }}
-                  className="w-full px-4 py-3 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 transition-all"
+                  aria-invalid={error ? 'true' : undefined}
+                  aria-describedby={error ? 'forgot-password-error' : undefined}
+                  className="w-full px-4 py-3 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
                   placeholder="exemple@email.com ou 0612345678"
                   autoComplete="username"
                   autoFocus
@@ -108,6 +110,7 @@ export default function ForgotPasswordPage() {
               {/* Error message */}
               {error && (
                 <div
+                  id="forgot-password-error"
                   role="alert"
                   aria-live="assertive"
                   className="flex items-start gap-3 bg-error-50 border border-error-200 rounded-xl p-4"
@@ -121,11 +124,11 @@ export default function ForgotPasswordPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full px-6 py-4 bg-primary-500 text-white font-bold rounded-xl hover:bg-primary-600 active:bg-primary-700 transition-all duration-200 shadow-lg shadow-primary-500/25 hover:shadow-xl hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full px-6 py-4 bg-primary-500 text-white font-bold rounded-xl hover:bg-primary-600 active:bg-primary-700 motion-safe:transition-all motion-safe:duration-200 shadow-lg shadow-primary-500/25 hover:shadow-xl hover:shadow-primary-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? (
                   <span className="flex items-center justify-center gap-2">
-                    <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
+                    <Loader2 className="w-5 h-5 motion-safe:animate-spin" aria-hidden="true" />
                     Envoi en cours...
                   </span>
                 ) : (
@@ -153,7 +156,7 @@ export default function ForgotPasswordPage() {
             </p>
             <Link
               href="/auth/login"
-              className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary-500 text-white font-semibold rounded-xl hover:bg-primary-600 transition-colors"
+              className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary-500 text-white font-semibold rounded-xl hover:bg-primary-600 motion-safe:transition-colors"
             >
               Retour à la connexion
             </Link>

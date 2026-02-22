@@ -35,7 +35,10 @@ export class DashboardService {
   async getStats(userId: string, userRole: string): Promise<DashboardStatsResponse> {
     // 1. VALIDATION ROLE
     if (userRole !== 'PRO') {
-      throw new ForbiddenException('Seuls les professionnels peuvent accéder aux statistiques');
+      throw new ForbiddenException({
+        message: 'Accès réservé aux professionnels',
+        code: 'PRO_ONLY',
+      });
     }
 
     // 2. PREMIUM ONLY
@@ -52,11 +55,17 @@ export class DashboardService {
     });
 
     if (!pro || pro.role !== 'PRO') {
-      throw new ForbiddenException('Seuls les professionnels peuvent accéder aux statistiques');
+      throw new ForbiddenException({
+        message: 'Accès réservé aux professionnels',
+        code: 'PRO_ONLY',
+      });
     }
 
     if (!pro.proProfile?.isPremium) {
-      throw new ForbiddenException('PREMIUM_REQUIRED');
+      throw new ForbiddenException({
+        message: 'Un abonnement Premium est requis pour accéder aux statistiques.',
+        code: 'PREMIUM_REQUIRED',
+      });
     }
 
     // 3. REQUESTS COUNT (7 derniers jours)

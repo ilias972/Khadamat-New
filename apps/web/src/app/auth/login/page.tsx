@@ -3,7 +3,15 @@
 import { Suspense, useState, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { LogIn, AlertCircle, Shield, Clock, Users } from 'lucide-react';
+import {
+  LogIn,
+  AlertCircle,
+  Shield,
+  Clock,
+  Users,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { postJSON, APIError } from '@/lib/api';
 import type { LoginInput, AuthResponse } from '@khadamat/contracts';
@@ -26,20 +34,36 @@ function LoginForm() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const errorRef = useRef<HTMLDivElement>(null);
   const loginRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    const loginValue = formData.login.trim();
+    const passwordValue = formData.password.trim();
+    if (!loginValue || !passwordValue) {
+      setError('Veuillez renseigner votre identifiant et votre mot de passe.');
+      requestAnimationFrame(() => {
+        errorRef.current?.focus();
+        loginRef.current?.focus();
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const response = await postJSON<AuthResponse>('/auth/login', formData);
+      const response = await postJSON<AuthResponse>('/auth/login', {
+        login: loginValue,
+        password: formData.password,
+      });
       setAuth(response.user);
 
-      // Redirect to ?next= destination if valid, otherwise role-based default
-      const next = searchParams.get('next');
+      // Redirect to ?next= destination (compat with legacy ?returnTo=)
+      const next = searchParams.get('next') ?? searchParams.get('returnTo');
       if (next && next.startsWith('/') && !next.startsWith('//')) {
         router.push(next);
       } else if (response.user.role === 'PRO') {
@@ -156,6 +180,7 @@ function LoginForm() {
               {error && (
                 <div
                   ref={errorRef}
+                  id="login-global-error"
                   tabIndex={-1}
                   role="alert"
                   className="flex items-start gap-3 bg-error-50 border border-error-200 rounded-xl p-4 outline-none"
@@ -191,17 +216,32 @@ function LoginForm() {
               <label htmlFor="login-password" className="block text-sm font-semibold text-text-label mb-2">
                 Mot de passe
               </label>
-              <input
-                id="login-password"
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                aria-invalid={!!error || undefined}
-                className="w-full px-4 py-3 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
-                placeholder="Votre mot de passe"
-                required
-                autoComplete="current-password"
-              />
+              <div className="relative">
+                <input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  aria-invalid={!!error || undefined}
+                  aria-describedby={error ? 'login-global-error' : undefined}
+                  className="w-full px-4 py-3 pr-12 bg-surface border-2 border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border-focus focus:ring-4 focus:ring-primary-500/10 motion-safe:transition-all"
+                  placeholder="Votre mot de passe"
+                  required
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-primary motion-safe:transition-colors"
+                  aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-5 h-5" aria-hidden="true" />
+                  ) : (
+                    <Eye className="w-5 h-5" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Forgot Password Link */}
@@ -218,7 +258,7 @@ function LoginForm() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full px-6 py-4 bg-primary-500 text-white font-bold rounded-xl hover:bg-primary-600 active:bg-primary-700 motion-safe:transition-all motion-safe:duration-200 shadow-lg shadow-primary-500/25 hover:shadow-xl hover:shadow-primary-500/30 motion-safe:hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-lg"
+              className="w-full px-6 py-4 bg-primary-500 text-white font-bold rounded-xl hover:bg-primary-600 active:bg-primary-700 motion-safe:transition-all motion-safe:duration-200 shadow-lg shadow-primary-500/25 hover:shadow-xl hover:shadow-primary-500/30 motion-safe:hover:-translate-y-0.5 motion-safe:active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed motion-safe:disabled:hover:translate-y-0 disabled:hover:shadow-lg"
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
@@ -256,7 +296,7 @@ function LoginForm() {
           <div className="mt-8 text-center">
             <Link
               href="/"
-              className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-text-primary transition-colors"
+              className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-text-primary motion-safe:transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />

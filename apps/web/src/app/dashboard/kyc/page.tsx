@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
-import { getJSON, APIError } from '@/lib/api';
+import { getJSON, postFormData, APIError } from '@/lib/api';
 import DashboardLayout from '@/components/dashboard/DashboardLayout';
 
 /**
@@ -25,6 +25,9 @@ interface KycStatus {
   kycRejectionReason: string | null;
   hasCinNumber: boolean;
 }
+
+const MAX_KYC_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const CIN_PATTERN = /^[A-Z]{1,2}\d{4,8}$/i;
 
 export default function KycPage() {
   const router = useRouter();
@@ -76,9 +79,28 @@ export default function KycPage() {
     setError('');
     setSuccess('');
 
+    const normalizedCin = cinNumber.trim().toUpperCase();
+    if (!normalizedCin) {
+      setError('Le numéro CIN est obligatoire.');
+      return;
+    }
+
+    if (!CIN_PATTERN.test(normalizedCin)) {
+      setError('Format CIN invalide. Exemple: AB123456');
+      return;
+    }
+
     // Vérifier que les fichiers sont présents
     if (!frontFile || !backFile) {
       setError('Veuillez sélectionner les deux photos de votre CIN');
+      return;
+    }
+
+    if (
+      frontFile.size > MAX_KYC_FILE_SIZE_BYTES ||
+      backFile.size > MAX_KYC_FILE_SIZE_BYTES
+    ) {
+      setError('Chaque fichier doit faire 5 MB maximum.');
       return;
     }
 
@@ -86,24 +108,13 @@ export default function KycPage() {
 
     try {
       const formData = new FormData();
-      formData.append('cinNumber', cinNumber);
+      formData.append('cinNumber', normalizedCin);
       formData.append('cinFront', frontFile);
       formData.append('cinBack', backFile);
 
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
       const endpoint = kycStatus?.kycStatus === 'REJECTED' ? '/kyc/resubmit' : '/kyc/submit';
 
-      const response = await fetch(`${apiUrl}${endpoint}`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'X-CSRF-PROTECTION': '1' },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Erreur lors de la soumission');
-      }
+      await postFormData(endpoint, formData);
 
       setSuccess(
         kycStatus?.kycStatus === 'REJECTED'
@@ -120,8 +131,10 @@ export default function KycPage() {
       setFrontFile(null);
       setBackFile(null);
     } catch (err) {
-      if (err instanceof Error) {
+      if (err instanceof APIError) {
         setError(err.message);
+      } else if (err instanceof Error) {
+        setError(err.message || 'Erreur lors de la soumission');
       } else {
         setError('Erreur lors de la soumission');
       }
@@ -166,7 +179,7 @@ export default function KycPage() {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center min-h-[400px]">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg"></div>
+          <div className="motion-safe:animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg"></div>
         </div>
       </DashboardLayout>
     );
@@ -191,7 +204,11 @@ export default function KycPage() {
 
         {/* 🚨 GROSSE ALERTE ROUGE si REJECTED */}
         {kycStatus && kycStatus.kycStatus === 'REJECTED' && (
-          <div className="bg-error-600 text-text-inverse rounded-lg p-6 shadow-lg">
+          <div
+            className="bg-error-600 text-text-inverse rounded-lg p-6 shadow-lg"
+            role="alert"
+            aria-live="polite"
+          >
             <div className="flex items-start gap-4">
               <span className="text-4xl">⚠️</span>
               <div className="flex-1">
@@ -238,7 +255,7 @@ export default function KycPage() {
           <div className="bg-surface rounded-lg border border-border p-8 text-center">
             <div className="flex justify-center mb-4">
               <div className="w-16 h-16 rounded-full bg-warning-100 flex items-center justify-center">
-                <svg className="w-8 h-8 text-warning-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                <svg className="w-8 h-8 text-warning-600 motion-safe:animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
@@ -279,6 +296,8 @@ export default function KycPage() {
                   onChange={(e) => setCinNumber(e.target.value.toUpperCase())}
                   className="w-full px-4 py-3 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary"
                   placeholder="AB123456"
+                  pattern="[A-Za-z]{1,2}[0-9]{4,8}"
+                  title="Format attendu: 1 ou 2 lettres suivies de 4 à 8 chiffres"
                   required
                 />
                 <p className="text-xs text-text-muted mt-1">
@@ -301,7 +320,13 @@ export default function KycPage() {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) {
+                      if (file.size > MAX_KYC_FILE_SIZE_BYTES) {
+                        setError('Le fichier CIN recto dépasse 5 MB.');
+                        setFrontFile(null);
+                        return;
+                      }
                       setFrontFile(file);
+                      setError('');
                     }
                   }}
                   className="w-full px-4 py-3 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-inverse-bg file:text-inverse-text hover:file:bg-inverse-hover"
@@ -329,7 +354,13 @@ export default function KycPage() {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) {
+                      if (file.size > MAX_KYC_FILE_SIZE_BYTES) {
+                        setError('Le fichier CIN verso dépasse 5 MB.');
+                        setBackFile(null);
+                        return;
+                      }
                       setBackFile(file);
+                      setError('');
                     }
                   }}
                   className="w-full px-4 py-3 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-inverse-bg text-text-primary file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-inverse-bg file:text-inverse-text hover:file:bg-inverse-hover"
@@ -344,13 +375,21 @@ export default function KycPage() {
 
               {/* Messages */}
               {error && (
-                <div className="bg-error-50 border border-error-200 rounded-lg p-4">
+                <div
+                  className="bg-error-50 border border-error-200 rounded-lg p-4"
+                  role="alert"
+                  aria-live="polite"
+                >
                   <p className="text-error-800 text-sm">{error}</p>
                 </div>
               )}
 
               {success && (
-                <div className="bg-success-50 border border-success-200 rounded-lg p-4">
+                <div
+                  className="bg-success-50 border border-success-200 rounded-lg p-4"
+                  role="alert"
+                  aria-live="polite"
+                >
                   <p className="text-success-800 text-sm">{success}</p>
                 </div>
               )}

@@ -67,6 +67,7 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [avatarPreviewFailed, setAvatarPreviewFailed] = useState(false);
 
   const isPremium = data?.profile?.isPremium ?? false;
   const bioMaxLen = isPremium ? 500 : 100;
@@ -104,6 +105,12 @@ export default function ProfilePage() {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    if (!formData.avatarUrl) {
+      setAvatarPreviewFailed(false);
+    }
+  }, [formData.avatarUrl]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -111,9 +118,23 @@ export default function ProfilePage() {
     setSaving(true);
 
     try {
+      const normalizedAvatarUrl =
+        formData.avatarUrl.trim() === '' ? null : formData.avatarUrl.trim();
+      const payload =
+        data?.profile.kycStatus === 'APPROVED'
+          ? {
+              phone: formData.phone,
+              cityId: formData.cityId,
+              bio: formData.bio,
+              avatarUrl: normalizedAvatarUrl,
+            }
+          : {
+              avatarUrl: normalizedAvatarUrl,
+            };
+
       const response = await patchJSON<{ user: any; profile: any }>(
         '/pro/profile',
-        formData,
+        payload,
       );
 
       setData((prev) =>
@@ -135,7 +156,13 @@ export default function ProfilePage() {
       setSuccess('Profil mis à jour avec succès !');
     } catch (err) {
       if (err instanceof APIError) {
-        setError(err.message === 'BIO_TOO_LONG' ? `La bio dépasse la limite (${bioMaxLen} caractères)` : err.message);
+        if (err.message === 'BIO_TOO_LONG') {
+          setError(`La bio dépasse la limite (${bioMaxLen} caractères)`);
+        } else if (err.message === 'KYC_NOT_APPROVED') {
+          setError("Votre KYC doit être approuvé pour modifier ces champs.");
+        } else {
+          setError(err.message);
+        }
       } else {
         setError('Erreur lors de la sauvegarde');
       }
@@ -182,7 +209,7 @@ export default function ProfilePage() {
 
         {loading && (
           <div className="bg-surface rounded-lg border border-border p-8 text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-text-primary mx-auto mb-4"></div>
+            <div className="motion-safe:animate-spin rounded-full h-12 w-12 border-b-2 border-text-primary mx-auto mb-4"></div>
             <p className="text-text-secondary">Chargement...</p>
           </div>
         )}
@@ -199,8 +226,13 @@ export default function ProfilePage() {
                   </label>
                   <div className="flex items-center gap-4">
                     <div className="w-16 h-16 rounded-full overflow-hidden bg-border flex-shrink-0 flex items-center justify-center">
-                      {formData.avatarUrl ? (
-                        <img src={formData.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                      {formData.avatarUrl && !avatarPreviewFailed ? (
+                        <img
+                          src={formData.avatarUrl}
+                          alt="Avatar"
+                          className="w-full h-full object-cover"
+                          onError={() => setAvatarPreviewFailed(true)}
+                        />
                       ) : (
                         <span className="text-2xl text-text-muted">
                           {data.user.firstName?.charAt(0).toUpperCase()}
@@ -211,7 +243,10 @@ export default function ProfilePage() {
                       type="url"
                       id="avatarUrl"
                       value={formData.avatarUrl}
-                      onChange={(e) => setFormData({ ...formData, avatarUrl: e.target.value })}
+                      onChange={(e) => {
+                        setAvatarPreviewFailed(false);
+                        setFormData({ ...formData, avatarUrl: e.target.value });
+                      }}
                       className="flex-1 px-4 py-3 bg-background border border-border-strong rounded-lg focus:outline-none focus:ring-2 focus:ring-text-primary text-text-primary"
                       placeholder="https://exemple.com/photo.jpg"
                     />
@@ -282,12 +317,20 @@ export default function ProfilePage() {
 
                 {/* Messages */}
                 {error && (
-                  <div className="bg-error-50 border border-error-200 rounded-lg p-4">
+                  <div
+                    className="bg-error-50 border border-error-200 rounded-lg p-4"
+                    role="alert"
+                    aria-live="polite"
+                  >
                     <p className="text-error-800">{error}</p>
                   </div>
                 )}
                 {success && (
-                  <div className="bg-success-50 border border-success-200 rounded-lg p-4">
+                  <div
+                    className="bg-success-50 border border-success-200 rounded-lg p-4"
+                    role="alert"
+                    aria-live="polite"
+                  >
                     <p className="text-success-800">{success}</p>
                   </div>
                 )}
@@ -331,8 +374,12 @@ export default function ProfilePage() {
                   {/* Add image */}
                   {data.portfolio.length < 6 && (
                     <div className="flex gap-2">
+                      <label htmlFor="portfolioUrl" className="sr-only">
+                        URL de votre réalisation
+                      </label>
                       <input
                         type="url"
+                        id="portfolioUrl"
                         value={newPortfolioUrl}
                         onChange={(e) => setNewPortfolioUrl(e.target.value)}
                         className="flex-1 px-4 py-2 bg-background border border-border-strong rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-text-primary"

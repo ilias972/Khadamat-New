@@ -13,6 +13,7 @@ import {
   UploadedFiles,
   BadRequestException,
   ForbiddenException,
+  ValidationPipe,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
@@ -23,6 +24,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { multerConfig } from './multer.config';
 import type { UploadResponseDto } from './kyc.dto';
+import { ResubmitKycDto } from './dto/resubmit-kyc.dto';
 
 @Controller('kyc')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -128,7 +130,14 @@ export class KycController {
   @ApiConsumes('multipart/form-data')
   async resubmitKyc(
     @Request() req,
-    @Body() body: any,
+    @Body(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    )
+    body: ResubmitKycDto,
     @UploadedFiles()
     files: {
       cinFront?: Express.Multer.File[];
@@ -144,6 +153,13 @@ export class KycController {
 
     const cinFrontFile = files?.cinFront?.[0];
     const cinBackFile = files?.cinBack?.[0];
+
+    if (cinFrontFile) {
+      this.kycService.validateMagicBytes(cinFrontFile);
+    }
+    if (cinBackFile) {
+      this.kycService.validateMagicBytes(cinBackFile);
+    }
 
     const frontKey = cinFrontFile ? cinFrontFile.filename : undefined;
     const backKey = cinBackFile ? cinBackFile.filename : undefined;

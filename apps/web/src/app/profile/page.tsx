@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/authStore';
@@ -29,6 +29,7 @@ export default function ProfilePage() {
   const [avatarUrl, setAvatarUrl] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [avatarError, setAvatarError] = useState('');
 
   // Stats client
   const [bookingsCount, setBookingsCount] = useState<number>(0);
@@ -36,6 +37,7 @@ export default function ProfilePage() {
   // Liste des villes
   const [cities, setCities] = useState<Array<{ id: string; name: string }>>([]);
   const [loadingCities, setLoadingCities] = useState(true);
+  const [citiesError, setCitiesError] = useState('');
 
   // Anti-glitch Hydratation
   useEffect(() => {
@@ -56,22 +58,25 @@ export default function ProfilePage() {
     }
   }, [mounted, isAuthenticated, user, router]);
 
+  const fetchCities = useCallback(async () => {
+    try {
+      setLoadingCities(true);
+      setCitiesError('');
+      const data = await getJSON<Array<{ id: string; name: string; slug: string }>>('/public/cities');
+      setCities(data);
+    } catch (error) {
+      console.error('Error fetching cities:', error);
+      setCities([]);
+      setCitiesError('Impossible de charger la liste des villes. Veuillez réessayer.');
+    } finally {
+      setLoadingCities(false);
+    }
+  }, []);
+
   // Fetch cities
   useEffect(() => {
-    const fetchCities = async () => {
-      try {
-        setLoadingCities(true);
-        const data = await getJSON<Array<{ id: string; name: string; slug: string }>>('/public/cities');
-        setCities(data);
-      } catch (error) {
-        console.error('Error fetching cities:', error);
-        setCities([]);
-      } finally {
-        setLoadingCities(false);
-      }
-    };
     fetchCities();
-  }, []);
+  }, [fetchCities]);
 
   // Fetch client bookings count
   useEffect(() => {
@@ -95,6 +100,7 @@ export default function ProfilePage() {
       setCityId(user.cityId || '');
       setAddressLine(user.addressLine || '');
       setAvatarUrl((user as any).avatarUrl || '');
+      setAvatarError('');
     }
   }, [user]);
 
@@ -103,6 +109,13 @@ export default function ProfilePage() {
     try {
       setIsSaving(true);
       setSuccessMessage('');
+      setAvatarError('');
+
+      const normalizedAvatarUrl = avatarUrl.trim();
+      if (normalizedAvatarUrl && !/^https?:\/\//i.test(normalizedAvatarUrl)) {
+        setAvatarError('L\'URL de l\'avatar doit commencer par http:// ou https://');
+        return;
+      }
 
       const data: Record<string, any> = {
         firstName: firstName.trim(),
@@ -112,8 +125,8 @@ export default function ProfilePage() {
       };
 
       // avatarUrl optionnelle (vide = supprimer)
-      if (avatarUrl.trim()) {
-        data.avatarUrl = avatarUrl.trim();
+      if (normalizedAvatarUrl) {
+        data.avatarUrl = normalizedAvatarUrl;
       } else {
         data.avatarUrl = null;
       }
@@ -144,6 +157,7 @@ export default function ProfilePage() {
       setAddressLine(user.addressLine || '');
       setAvatarUrl((user as any).avatarUrl || '');
     }
+    setAvatarError('');
     setIsEditing(false);
   };
 
@@ -162,7 +176,7 @@ export default function ProfilePage() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
+          <div className="motion-safe:animate-spin rounded-full h-12 w-12 border-b-2 border-inverse-bg mx-auto mb-4"></div>
           <p className="text-text-secondary">Redirection...</p>
         </div>
       </div>
@@ -199,6 +213,22 @@ export default function ProfilePage() {
         </div>
 
         <div className="space-y-6">
+          {citiesError && (
+            <div
+              role="alert"
+              className="bg-error-50 border border-error-200 rounded-lg p-4 flex items-start justify-between gap-4"
+            >
+              <p className="text-sm text-error-700">{citiesError}</p>
+              <button
+                type="button"
+                onClick={() => fetchCities()}
+                className="shrink-0 px-3 py-1.5 text-sm font-medium rounded-md bg-error-100 text-error-800 hover:bg-error-200 motion-safe:transition-colors"
+              >
+                Réessayer
+              </button>
+            </div>
+          )}
+
           {/* Stats client */}
           <div className="bg-surface rounded-lg border border-border p-6">
             <div className="flex items-center gap-6">
@@ -248,7 +278,12 @@ export default function ProfilePage() {
 
             {/* Message de succès */}
             {successMessage && (
-              <div className="mb-4 p-4 bg-success-50 border border-success-200 rounded-lg">
+              <div
+                className="mb-4 p-4 bg-success-50 border border-success-200 rounded-lg"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
                 <p className="text-success-800 text-sm font-medium">
                   {successMessage}
                 </p>
@@ -330,10 +365,20 @@ export default function ProfilePage() {
                     id="profile-avatar"
                     type="url"
                     value={avatarUrl}
-                    onChange={(e) => setAvatarUrl(e.target.value)}
+                    onChange={(e) => {
+                      setAvatarUrl(e.target.value);
+                      if (avatarError) setAvatarError('');
+                    }}
+                    aria-invalid={avatarError ? 'true' : undefined}
+                    aria-describedby={avatarError ? 'profile-avatar-error' : undefined}
                     className="w-full px-4 py-2 border border-border-strong rounded-lg bg-surface text-text-primary focus:ring-2 focus:ring-inverse-bg focus:border-transparent"
                     placeholder="https://exemple.com/ma-photo.jpg"
                   />
+                  {avatarError && (
+                    <p id="profile-avatar-error" className="mt-2 text-xs text-error-600" role="alert">
+                      {avatarError}
+                    </p>
+                  )}
                   {avatarUrl && (
                     <div className="mt-2">
                       <img

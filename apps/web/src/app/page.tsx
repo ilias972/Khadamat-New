@@ -1,11 +1,7 @@
-import { Suspense } from 'react';
 import type { Metadata } from 'next';
 import Navbar from '../components/Navbar';
-import Hero from '../components/home/Hero';
-import HeroSkeleton from '../components/home/HeroSkeleton';
 import TrustStrip from '../components/home/TrustStrip';
-import Categories from '../components/home/Categories';
-import FeaturedPros from '../components/home/FeaturedPros';
+import HomeClient from '../components/home/HomeClient';
 import Testimonials from '../components/home/Testimonials';
 import HowItWorks from '../components/home/HowItWorks';
 import PricingSection from '../components/home/PricingSection';
@@ -24,12 +20,8 @@ export default function Home() {
     <div className="min-h-screen bg-background font-sans text-text-primary">
       <Navbar />
       <main>
-        <Suspense fallback={<HeroSkeleton />}>
-          <Hero />
-        </Suspense>
+        <HomeClient />
         <TrustStrip />
-        <Categories />
-        <FeaturedPros />
         <Testimonials />
         <HowItWorks />
         <PricingSection />
