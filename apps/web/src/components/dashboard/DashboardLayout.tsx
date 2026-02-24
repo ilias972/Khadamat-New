@@ -22,16 +22,22 @@ export interface ProMe {
   profile: {
     isPremium: boolean;
     kycStatus: KycStatus;
+    premiumActiveUntil?: string | null;
+    boostActiveUntil?: string | null;
   };
 }
 
 interface DashboardContextValue {
   proMe: ProMe | null;
+  loading: boolean;
+  error: string;
   refresh: () => Promise<void>;
 }
 
 const defaultDashboardContext: DashboardContextValue = {
   proMe: null,
+  loading: false,
+  error: '',
   refresh: async () => {},
 };
 
@@ -230,6 +236,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         : []),
       { href: '/dashboard/bookings', label: 'Réservations', icon: '📅' },
       { href: '/dashboard/history', label: 'Historique', icon: '📋' },
+      { href: '/dashboard/subscription', label: 'Abonnement', icon: '📊' },
       { href: '/dashboard/profile', label: 'Profil', icon: '👤' },
       { href: '/dashboard/services', label: 'Services', icon: '🔧' },
       { href: '/dashboard/availability', label: 'Disponibilités', icon: '⏰' },
@@ -241,9 +248,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const contextValue = useMemo(
     () => ({
       proMe,
+      loading: profileLoading,
+      error: profileError,
       refresh: () => refreshProMe(true),
     }),
-    [proMe, refreshProMe],
+    [proMe, profileLoading, profileError, refreshProMe],
   );
 
   if (authLoading) {
@@ -262,8 +271,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     return <DashboardLoader message="Redirection vers la vérification KYC..." />;
   }
 
-  const allowedPendingPaths = ['/dashboard/profile'];
-  const showPendingState = effectiveKycStatus === 'PENDING' && !allowedPendingPaths.includes(pathname);
+  const isPendingAllowedPath =
+    pathname === '/dashboard/profile' || pathname === '/dashboard/subscription' || pathname.startsWith('/dashboard/subscription/');
+  const showPendingState = effectiveKycStatus === 'PENDING' && !isPendingAllowedPath;
 
   if (showPendingState) {
     return (

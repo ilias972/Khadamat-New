@@ -16,12 +16,7 @@ import {
   PaymentOrderStatus,
 } from './types/prisma-enums';
 import { InitiatePaymentDto } from './dto/initiate-payment.dto';
-import {
-  PAYMENT_PLANS,
-  BOOST_COOLDOWN_DAYS,
-  BOOST_ACTIVE_DAYS,
-  PlanType,
-} from './utils/payment.constants';
+import { PAYMENT_PLANS, BOOST_COOLDOWN_DAYS, BOOST_ACTIVE_DAYS, PlanType } from './utils/payment.constants';
 
 /**
  * PaymentService - Version MANUAL (MVP)
@@ -57,6 +52,42 @@ export class PaymentService {
     };
   }
 
+  private buildPendingKey(userId: string, planType: PaymentOrderPlanType): string {
+    return `${userId}:${planType}`;
+  }
+
+  private isUniqueConstraintError(error: unknown): error is { code: string } {
+    return typeof error === 'object' && error !== null && 'code' in error && (error as { code: string }).code === 'P2002';
+  }
+
+  private readonly planPresentation: Record<PaymentOrderPlanType, { label: string; description: string }> = {
+    PREMIUM_MONTHLY: {
+      label: 'Premium mensuel',
+      description: '30 jours de visibilité premium.',
+    },
+    PREMIUM_ANNUAL: {
+      label: 'Premium annuel',
+      description: '365 jours avec la meilleure valeur.',
+    },
+    BOOST: {
+      label: 'Boost 7 jours',
+      description: 'Mise en avant locale ciblée (ville + service).',
+    },
+  };
+
+  private mapPlan(planType: PaymentOrderPlanType) {
+    const plan = PAYMENT_PLANS[planType as PlanType];
+    const presentation = this.planPresentation[planType];
+    return {
+      planType,
+      label: presentation.label,
+      description: presentation.description,
+      amount: plan.priceMad,
+      currency: 'MAD',
+      durationDays: plan.durationDays,
+    };
+  }
+
   /**
    * Crée une demande de paiement (PENDING).
    * Retourne une référence que le client utilisera pour le règlement manuel.
@@ -82,6 +113,9 @@ export class PaymentService {
 
     let resolvedCityId: string | null = null;
     let resolvedCategoryId: string | null = null;
+    const hasActivePremium =
+      (Boolean(proProfile.premiumActiveUntil) && proProfile.premiumActiveUntil! > now) ||
+      (proProfile.isPremium && !proProfile.premiumActiveUntil);
 
     if (dto.planType === PaymentOrderPlanType.BOOST) {
       if (!dto.cityId || !dto.categoryId) {
@@ -89,7 +123,7 @@ export class PaymentService {
       }
       resolvedCityId = await this.catalogResolver.resolveCityId(dto.cityId);
       resolvedCategoryId = await this.catalogResolver.resolveCategoryId(dto.categoryId);
-      if (proProfile.isPremium && proProfile.premiumActiveUntil && proProfile.premiumActiveUntil > now) {
+      if (hasActivePremium) {
         throw new BadRequestException('Exclusivité: Premium déjà actif, Boost non disponible');
       }
 
@@ -110,59 +144,149 @@ export class PaymentService {
         }
       }
     } else {
+      const isPremiumCheckout =
+        dto.planType === PaymentOrderPlanType.PREMIUM_MONTHLY ||
+        dto.planType === PaymentOrderPlanType.PREMIUM_ANNUAL;
+      if (isPremiumCheckout && hasActivePremium) {
+        throw new ForbiddenException({
+          message: 'Premium déjà actif',
+          code: 'PREMIUM_ALREADY_ACTIVE',
+        });
+      }
+
       // Premium: Vérifier qu'un boost n'est pas actif
       if (proProfile.boostActiveUntil && proProfile.boostActiveUntil > now) {
         throw new BadRequestException('Exclusivité: Boost déjà actif');
       }
     }
 
-    // 3. Génération de la référence unique
-    const timestamp = Date.now();
-    const entropy = randomBytes(16).toString('hex').toUpperCase();
-    const oid = `KHD-${timestamp}-${entropy}`;
     const amountCents = Math.round(plan.priceMad * 100);
-
-    // 4. Enregistrement de la demande (PENDING)
-    const order = await this.prisma.paymentOrder.create({
-      data: {
-        oid,
-        proUserId: userId,
-        planType: dto.planType,
-        amountCents,
-        status: PaymentOrderStatus.PENDING,
-        provider: 'MANUAL',
-        cityId: resolvedCityId,
-        categoryId: resolvedCategoryId,
-      },
-    });
-
-    this.logger.log(`📝 Demande de paiement créée: ${oid} | ${dto.planType} | ${plan.priceMad} MAD`);
+    const pendingKey = this.buildPendingKey(userId, dto.planType);
     const paymentContact = this.getPaymentContact();
 
-    // 5. Retour au Frontend
-    return {
-      success: true,
-      order: {
-        id: order.id,
-        reference: order.oid,
-        planType: order.planType,
-        amount: plan.priceMad,
-        currency: 'MAD',
-        status: order.status,
-      },
-      message: `Demande enregistrée. Référence: ${order.oid}. Contactez-nous pour le règlement.`,
-      paymentInstructions: {
-        reference: order.oid,
-        amount: `${plan.priceMad} MAD`,
-        methods: [
-          'Virement bancaire',
-          'Cash en agence',
-          'Mobile Money (Orange Money, inwi money)',
-        ],
-        contact: paymentContact,
-        note: 'Mentionnez votre référence lors du paiement.',
-      },
+    const buildCheckoutResponse = (order: any, reusedPendingOrder: boolean) => {
+      const orderAmountMad = order.amountCents / 100;
+      const currency = order.currency || 'MAD';
+      const printableAmount = Number.isInteger(orderAmountMad)
+        ? `${orderAmountMad} ${currency}`
+        : `${orderAmountMad.toFixed(2)} ${currency}`;
+
+      return {
+        success: true,
+        reusedPendingOrder,
+        order: {
+          id: order.id,
+          reference: order.oid,
+          planType: order.planType,
+          amount: orderAmountMad,
+          currency,
+          status: order.status,
+        },
+        message: reusedPendingOrder
+          ? `Une demande en attente existe déjà. Référence: ${order.oid}.`
+          : `Demande enregistrée. Référence: ${order.oid}. Contactez-nous pour le règlement.`,
+        paymentInstructions: {
+          reference: order.oid,
+          amount: printableAmount,
+          methods: [
+            'Virement bancaire',
+            'Cash en agence',
+            'Mobile Money (Orange Money, inwi money)',
+          ],
+          contact: paymentContact,
+          note: 'Mentionnez votre référence lors du paiement.',
+        },
+      };
     };
+
+    // Backward compatibility: reprendre un ancien PENDING sans pendingKey si présent
+    const legacyPending = await this.prisma.paymentOrder.findFirst({
+      where: {
+        proUserId: userId,
+        planType: dto.planType,
+        status: PaymentOrderStatus.PENDING,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (legacyPending) {
+      if (!legacyPending.pendingKey) {
+        try {
+          await this.prisma.paymentOrder.updateMany({
+            where: {
+              id: legacyPending.id,
+              status: PaymentOrderStatus.PENDING,
+              pendingKey: null,
+            },
+            data: { pendingKey },
+          });
+        } catch (error) {
+          if (!this.isUniqueConstraintError(error)) {
+            throw error;
+          }
+        }
+      }
+
+      const normalizedPending =
+        (await this.prisma.paymentOrder.findFirst({
+          where: {
+            pendingKey,
+            status: PaymentOrderStatus.PENDING,
+          },
+        })) ?? legacyPending;
+
+      this.logger.log(
+        `♻️ Demande de paiement réutilisée: ${normalizedPending.oid} | ${dto.planType} | source: pending existant`,
+      );
+
+      return buildCheckoutResponse(normalizedPending, true);
+    }
+
+    // 4. Idempotency atomique via clé unique pendingKey
+    try {
+      const timestamp = Date.now();
+      const entropy = randomBytes(16).toString('hex').toUpperCase();
+      const oid = `KHD-${timestamp}-${entropy}`;
+
+      const createdOrder = await this.prisma.paymentOrder.create({
+        data: {
+          oid,
+          proUserId: userId,
+          planType: dto.planType,
+          amountCents,
+          currency: 'MAD',
+          status: PaymentOrderStatus.PENDING,
+          pendingKey,
+          provider: 'MANUAL',
+          cityId: resolvedCityId,
+          categoryId: resolvedCategoryId,
+        },
+      });
+
+      this.logger.log(`📝 Demande de paiement créée: ${oid} | ${dto.planType} | ${plan.priceMad} MAD`);
+      return buildCheckoutResponse(createdOrder, false);
+    } catch (error) {
+      if (!this.isUniqueConstraintError(error)) {
+        throw error;
+      }
+
+      const existingOrder = await this.prisma.paymentOrder.findFirst({
+        where: {
+          pendingKey,
+          status: PaymentOrderStatus.PENDING,
+        },
+      });
+
+      if (!existingOrder) {
+        throw error;
+      }
+
+      this.logger.log(
+        `♻️ Demande de paiement réutilisée après collision concurrente: ${existingOrder.oid} | ${dto.planType}`,
+      );
+
+      return buildCheckoutResponse(existingOrder, true);
+    }
   }
 
   /**
@@ -187,6 +311,7 @@ export class PaymentService {
       where: { oid },
       data: {
         status: PaymentOrderStatus.PAID,
+        pendingKey: null,
         paidAt: new Date(),
         adminNotes: adminNotes || 'Validé manuellement',
       },
@@ -223,6 +348,7 @@ export class PaymentService {
       where: { oid },
       data: {
         status: PaymentOrderStatus.FAILED,
+        pendingKey: null,
         adminNotes: reason || 'Rejeté par admin',
       },
     });
@@ -249,6 +375,54 @@ export class PaymentService {
   }
 
   /**
+   * Liste des plans de paiement (source serveur).
+   */
+  getPlans() {
+    return {
+      plans: [
+        this.mapPlan(PaymentOrderPlanType.PREMIUM_MONTHLY),
+        this.mapPlan(PaymentOrderPlanType.PREMIUM_ANNUAL),
+        this.mapPlan(PaymentOrderPlanType.BOOST),
+      ],
+    };
+  }
+
+  /**
+   * Dernière commande PENDING de l'utilisateur courant.
+   */
+  async getMyPendingOrder(userId: string) {
+    const pendingOrders = await this.prisma.paymentOrder.findMany({
+      where: {
+        proUserId: userId,
+        status: PaymentOrderStatus.PENDING,
+        planType: {
+          in: [PaymentOrderPlanType.PREMIUM_MONTHLY, PaymentOrderPlanType.PREMIUM_ANNUAL],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (pendingOrders.length === 0) {
+      return { order: null, orders: [] };
+    }
+
+    const mapPendingOrder = (order: (typeof pendingOrders)[number]) => ({
+      reference: order.oid,
+      planType: order.planType,
+      amount: order.amountCents / 100,
+      currency: order.currency,
+      createdAt: order.createdAt,
+    });
+
+    const orders = pendingOrders.map(mapPendingOrder);
+
+    return {
+      order: orders[0],
+      orders,
+    };
+  }
+
+  /**
    * Récupère le statut d'un paiement.
    */
   async getPaymentStatus(oid: string, userId: string) {
@@ -256,21 +430,18 @@ export class PaymentService {
       where: { oid },
     });
 
-    if (!order) {
+    if (!order || order.proUserId !== userId) {
+      if (order && order.proUserId !== userId) {
+        this.logger.warn(`Tentative d'accès au paiement ${oid} par un autre utilisateur.`);
+      }
       throw new NotFoundException('Commande introuvable');
     }
-
-    if (order.proUserId !== userId) {
-      throw new ForbiddenException('Accès refusé');
-    }
-
-    const plan = PAYMENT_PLANS[order.planType as PlanType];
 
     return {
       reference: order.oid,
       planType: order.planType,
       amount: order.amountCents / 100,
-      currency: 'MAD',
+      currency: order.currency,
       status: order.status,
       createdAt: order.createdAt,
       paidAt: order.paidAt,

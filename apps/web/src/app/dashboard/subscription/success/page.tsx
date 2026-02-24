@@ -1,22 +1,12 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import { useCallback, useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { CheckCircle, ArrowRight, XCircle, Clock, AlertTriangle } from 'lucide-react';
 import { getJSON } from '@/lib/api';
-import { useAuthStore } from '@/store/authStore';
-import type { PublicUser } from '@khadamat/contracts';
-
-// Types pour la réponse API
-type PaymentStatus = 'PENDING' | 'PAID' | 'FAILED';
-
-interface PaymentStatusResponse {
-  oid: string;
-  status: PaymentStatus;
-  planType: string;
-  amount: number;
-}
+import type { PaymentStatusResponse } from '@/lib/types/payment';
+import DashboardLayout, { useDashboardContext } from '@/components/dashboard/DashboardLayout';
 
 /**
  * SubscriptionSuccessContent
@@ -25,46 +15,43 @@ interface PaymentStatusResponse {
 function SubscriptionSuccessContent() {
   const searchParams = useSearchParams();
   const oid = searchParams.get('oid');
-  const { setUser } = useAuthStore();
+  const { refresh } = useDashboardContext();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatusResponse | null>(null);
 
-  // Vérification du paiement côté serveur
-  useEffect(() => {
+  const verifyPaymentStatus = useCallback(async () => {
     if (!oid) {
       setLoading(false);
       return;
     }
 
-    const verifyPayment = async () => {
-      try {
-        setLoading(true);
-        setError(false);
-        const response = await getJSON<PaymentStatusResponse>(`/payment/status/${oid}`);
-        setPaymentStatus(response);
+    try {
+      setLoading(true);
+      setError(false);
+      const response = await getJSON<PaymentStatusResponse>(`/payment/status/${encodeURIComponent(oid)}`);
+      setPaymentStatus(response);
 
-        // Si PAID, rafraîchir le store auth via GET /pro/me
-        if (response.status === 'PAID') {
-          try {
-            const updatedUser = await getJSON<PublicUser>('/pro/me');
-            setUser(updatedUser);
-          } catch (err) {
-            console.error('Failed to refresh user:', err);
-            // Non-bloquant : on continue d'afficher le succès
-          }
+      // Si PAID, forcer un refresh dashboard pour synchroniser les flags Premium/KYC.
+      if (response.status === 'PAID') {
+        try {
+          await refresh();
+        } catch {
+          // Non-bloquant : l'écran succès reste affiché
         }
-      } catch (err) {
-        console.error('Error verifying payment:', err);
-        setError(true);
-      } finally {
-        setLoading(false);
       }
-    };
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [oid, refresh]);
 
-    verifyPayment();
-  }, [oid, setUser]);
+  // Vérification du paiement côté serveur
+  useEffect(() => {
+    void verifyPaymentStatus();
+  }, [verifyPaymentStatus]);
 
   // Confetti effect (emoji animation) - uniquement si PAID et motion autorisé
   useEffect(() => {
@@ -123,10 +110,8 @@ function SubscriptionSuccessContent() {
 
   const handleRetry = () => {
     if (!oid) return;
-    setLoading(true);
-    setError(false);
     setPaymentStatus(null);
-    // Le useEffect se relancera automatiquement
+    void verifyPaymentStatus();
   };
 
   // Cas 1: OID manquant
@@ -146,12 +131,12 @@ function SubscriptionSuccessContent() {
             </h1>
 
             <div className="mt-8">
-              <Link
-                href="/plans"
-                className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium"
-              >
-                Retour aux offres
-                <ArrowRight className="w-5 h-5" />
+                <Link
+                  href="/plans"
+                  className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover motion-safe:transition font-medium"
+                >
+                  Retour aux offres
+                  <ArrowRight className="w-5 h-5" />
               </Link>
             </div>
           </div>
@@ -196,13 +181,13 @@ function SubscriptionSuccessContent() {
               <button
                 type="button"
                 onClick={handleRetry}
-                className="px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium"
+                className="px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover motion-safe:transition font-medium"
               >
                 Réessayer
               </button>
               <Link
                 href="/plans"
-                className="px-8 py-4 border-2 border-border-strong text-text-primary rounded-lg hover:bg-surface-muted transition font-medium"
+                className="px-8 py-4 border-2 border-border-strong text-text-primary rounded-lg hover:bg-surface-muted motion-safe:transition font-medium"
               >
                 Retour aux offres
               </Link>
@@ -236,14 +221,14 @@ function SubscriptionSuccessContent() {
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link
                 href="/dashboard"
-                className="px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium flex items-center justify-center gap-2"
+                className="px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover motion-safe:transition font-medium flex items-center justify-center gap-2"
               >
                 Retour au Dashboard
                 <ArrowRight className="w-5 h-5" />
               </Link>
               <Link
                 href="/plans"
-                className="px-8 py-4 border-2 border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50 transition font-medium"
+                className="px-8 py-4 border-2 border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50 motion-safe:transition font-medium"
               >
                 Voir les offres
               </Link>
@@ -281,14 +266,14 @@ function SubscriptionSuccessContent() {
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link
                 href="/plans"
-                className="px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium flex items-center justify-center gap-2"
+                className="px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover motion-safe:transition font-medium flex items-center justify-center gap-2"
               >
                 Réessayer
                 <ArrowRight className="w-5 h-5" />
               </Link>
               <Link
                 href="/dashboard"
-                className="px-8 py-4 border-2 border-error-600 text-error-600 rounded-lg hover:bg-error-50 transition font-medium"
+                className="px-8 py-4 border-2 border-error-600 text-error-600 rounded-lg hover:bg-error-50 motion-safe:transition font-medium"
               >
                 Retour au Dashboard
               </Link>
@@ -327,13 +312,13 @@ function SubscriptionSuccessContent() {
               <button
                 type="button"
                 onClick={handleRetry}
-                className="px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover transition font-medium"
+                className="px-8 py-4 bg-inverse-bg text-inverse-text rounded-lg hover:bg-inverse-hover motion-safe:transition font-medium"
               >
                 Réessayer
               </button>
               <Link
                 href="/dashboard"
-                className="px-8 py-4 border-2 border-border-strong text-text-primary rounded-lg hover:bg-surface-muted transition font-medium"
+                className="px-8 py-4 border-2 border-border-strong text-text-primary rounded-lg hover:bg-surface-muted motion-safe:transition font-medium"
               >
                 Retour au Dashboard
               </Link>
@@ -395,15 +380,15 @@ function SubscriptionSuccessContent() {
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link
               href="/dashboard"
-              className="px-8 py-4 bg-success-600 hover:bg-success-700 text-text-inverse font-bold rounded-lg transition flex items-center justify-center gap-2 group"
+              className="px-8 py-4 bg-success-600 hover:bg-success-700 text-text-inverse font-bold rounded-lg motion-safe:transition flex items-center justify-center gap-2 group"
             >
               Accéder au Dashboard
-              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+              <ArrowRight className="w-5 h-5 motion-safe:group-hover:translate-x-1 motion-safe:transition-transform" />
             </Link>
 
             <Link
               href="/plans"
-              className="px-8 py-4 border-2 border-success-600 text-success-600 font-bold rounded-lg hover:bg-success-50 transition"
+              className="px-8 py-4 border-2 border-success-600 text-success-600 font-bold rounded-lg hover:bg-success-50 motion-safe:transition"
             >
               Voir les offres
             </Link>
@@ -425,14 +410,16 @@ function SubscriptionSuccessContent() {
  */
 export default function SubscriptionSuccessPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-gradient-to-br from-background to-surface-active flex items-center justify-center">
-          <div className="motion-safe:animate-spin rounded-full h-16 w-16 border-b-4 border-inverse-bg"></div>
-        </div>
-      }
-    >
-      <SubscriptionSuccessContent />
-    </Suspense>
+    <DashboardLayout>
+      <Suspense
+        fallback={
+          <div className="min-h-[50vh] flex items-center justify-center">
+            <div className="motion-safe:animate-spin rounded-full h-16 w-16 border-b-4 border-inverse-bg"></div>
+          </div>
+        }
+      >
+        <SubscriptionSuccessContent />
+      </Suspense>
+    </DashboardLayout>
   );
 }

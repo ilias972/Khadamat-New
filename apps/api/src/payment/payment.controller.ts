@@ -24,7 +24,9 @@ import { InitiatePaymentDto } from './dto/initiate-payment.dto';
  * Gère les paiements manuels pour Premium et Boost.
  *
  * Routes :
+ * - GET  /api/payment/plans : Liste des plans/prix (public)
  * - POST /api/payment/checkout : Créer une demande de paiement (PRO)
+ * - GET  /api/payment/pending : Dernière commande en attente (PRO)
  * - GET  /api/payment/status/:oid : Vérifier le statut d'un paiement (PRO)
  * - POST /api/payment/admin/confirm/:oid : Valider un paiement (ADMIN)
  * - POST /api/payment/admin/reject/:oid : Rejeter un paiement (ADMIN)
@@ -33,6 +35,15 @@ import { InitiatePaymentDto } from './dto/initiate-payment.dto';
 @Controller('payment')
 export class PaymentController {
   constructor(private readonly paymentService: PaymentService) {}
+
+  /**
+   * GET /api/payment/plans
+   * Liste des plans disponibles et leurs prix (source serveur).
+   */
+  @Get('plans')
+  getPlans() {
+    return this.paymentService.getPlans();
+  }
 
   /**
    * POST /api/payment/checkout
@@ -54,6 +65,21 @@ export class PaymentController {
       throw new UnauthorizedException('User ID introuvable dans le token');
     }
     return this.paymentService.initiatePayment(userId, dto);
+  }
+
+  /**
+   * GET /api/payment/pending
+   * Retourne la dernière commande PENDING du PRO courant (ou null).
+   */
+  @Get('pending')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('PRO')
+  async getMyPendingOrder(@Request() req: any) {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new UnauthorizedException('User ID introuvable dans le token');
+    }
+    return this.paymentService.getMyPendingOrder(userId);
   }
 
   /**

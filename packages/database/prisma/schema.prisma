@@ -420,6 +420,7 @@ enum PaymentOrderStatus {
 model PaymentOrder {
   id  String @id @default(cuid())
   oid String @unique // Référence unique de commande
+  pendingKey String? @unique // Verrou logique: au plus un PENDING actif par (proUserId, planType)
 
   proUserId String
   pro       ProProfile @relation(fields: [proUserId], references: [userId], onDelete: Cascade)
@@ -429,6 +430,7 @@ model PaymentOrder {
 
   // Montant en CENTIMES (évite erreurs Float)
   amountCents Int
+  currency    String @default("MAD")
 
   status PaymentOrderStatus @default(PENDING)
 
@@ -443,6 +445,7 @@ model PaymentOrder {
   paidAt    DateTime?
 
   @@index([proUserId, status])
+  @@index([proUserId, planType, status])
   @@index([oid])
 }
 
